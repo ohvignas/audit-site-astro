@@ -6,6 +6,9 @@ Usage : python3 historique.py DOSSIER_SITE [--sortie FICHIER]     (défaut : DOS
         DOSSIER_SITE contient un sous-dossier AAAA-MM-JJ par audit (avec data/, RAPPORT.html, RAPPORT.pdf…).
 
 Régénérée à chaque audit (dernière étape de collect_all.sh) : elle reflète toujours l'état actuel du dossier.
+Garde-fou : refus (code 2, rien n'est écrit) si le fichier de sortie existe sans être une page de cet outil (marqueur
+<meta name="generator" content="audit-site-astro historique">), ou si le dossier n'a aucun sous-dossier AAAA-MM-JJ et pas
+encore de page historique : ce n'est alors pas un dossier de site (ex. racine d'un projet qui a son propre index.html).
 Même règles que RAPPORT.html : un seul fichier, CSS et SVG en ligne, aucun JavaScript, aucune ressource externe,
 clair/sombre, imprimable en A4, tout texte dynamique échappé. Liens relatifs vers RAPPORT.html / RAPPORT.pdf de
 chaque audit, seulement quand ces fichiers existent.
@@ -26,6 +29,7 @@ import signaux  # noqa: E402
 
 e = rh.e
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+MARQUEUR = '<meta name="generator" content="audit-site-astro historique">'
 
 CSS_HISTORIQUE = """
 .hero-histo{display:grid;grid-template-columns:auto 1fr;gap:10px 26px;align-items:center;margin-bottom:18px}
@@ -253,15 +257,40 @@ def generer(dossier_site):
     if not liste:
         corps = f'<section class="majeure">{corps}</section>'
     return (f'<!doctype html>\n<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-            f'<meta name="color-scheme" content="light dark"><title>{e(titre)}</title><style>{rh.CSS}{CSS_HISTORIQUE}</style></head><body>'
+            f'<meta name="color-scheme" content="light dark">{MARQUEUR}<title>{e(titre)}</title><style>{rh.CSS}{CSS_HISTORIQUE}</style></head><body>'
             f'<header class="bandeau"><div class="in"><p class="etiq">Suivi des audits</p><h1>{e(titre)}</h1><p>{e(sous)}</p>'
             f'<p>Page régénérée à chaque audit (audit-site-astro {e(rh.version_plugin())})</p></div></header>'
             f'<div class="page"><main>{corps}</main>'
             f'<footer>Un dossier AAAA-MM-JJ par audit ; liens relatifs, la page fonctionne hors ligne depuis ce dossier.</footer></div></body></html>\n')
 
 
+def est_page_historique(chemin):
+    """True si le fichier est une page produite par historique.py (marqueur, ou en-tête des versions sans marqueur)."""
+    try:
+        debut = Path(chemin).read_text(encoding="utf-8", errors="replace")[:20000]
+    except OSError:
+        return False
+    return MARQUEUR in debut or ('<p class="etiq">Suivi des audits</p>' in debut and "(audit-site-astro " in debut)
+
+
+def a_des_audits_dates(dossier_site):
+    try:
+        return any(p.is_dir() and _DATE.match(p.name) for p in Path(dossier_site).iterdir())
+    except OSError:
+        return False
+
+
+class Refus(Exception):
+    """Écriture refusée : la cible n'est pas une page historique, ou le dossier n'est pas un dossier de site."""
+
+
 def ecrire(dossier_site, cible=None):
     cible = Path(cible) if cible else Path(dossier_site) / "index.html"
+    if cible.exists() and not est_page_historique(cible):
+        raise Refus(f"{cible} existe et n'est pas une page historique d'audit-site-astro : il n'est pas remplacé. "
+                    "Passer le dossier du SITE (celui qui contient les dossiers d'audit AAAA-MM-JJ), ou --sortie vers un autre fichier.")
+    if not cible.exists() and not a_des_audits_dates(dossier_site):
+        raise Refus(f"{dossier_site} ne contient aucun dossier d'audit AAAA-MM-JJ : ce n'est pas un dossier de site, rien n'est écrit.")
     tmp = cible.with_name(cible.name + ".tmp")
     tmp.write_text(generer(dossier_site), encoding="utf-8")
     os.replace(tmp, cible)
@@ -276,7 +305,11 @@ def main():
     if not Path(a.site).is_dir():
         print(f"❌ Dossier de site introuvable : {a.site}", file=sys.stderr)
         sys.exit(2)
-    print(ecrire(a.site, a.sortie))
+    try:
+        print(ecrire(a.site, a.sortie))
+    except Refus as err:
+        print(f"❌ {err}", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

@@ -108,8 +108,10 @@ Ton : direct, concret, sans jargon inutile. L'utilisateur doit pouvoir confier c
 python3 "$S/corrections.py" "$AUDIT" --projet "$PROJET"
 python3 "$S/rapport_html.py" "$AUDIT"
 bash "$S/rapport_pdf.sh" "$AUDIT"          # code 2 = Chrome absent, 3 = RAM insuffisante : ⚠️ à signaler, pas bloquant
-python3 "$S/historique.py" "$(dirname "$AUDIT")"
+case "$(basename "$AUDIT")" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) python3 "$S/historique.py" "$(dirname "$AUDIT")";; *) echo "historique ignoré : dossier d'audit non daté";; esac
 ```
+
+L'historique n'est régénéré que pour un dossier d'audit daté `AAAA-MM-JJ` (comme dans `collect_all.sh`) : sinon le dossier parent n'est pas un dossier de site (par exemple la racine du projet, avec son propre `index.html`). `historique.py` refuse de toute façon (code 2) de remplacer un `index.html` qu'il n'a pas produit.
 
 À chaque passage, `CORRECTIONS/` est **régénéré**. Si l'utilisateur y a ajouté ses notes, il crée un fichier `CORRECTIONS/.garder` : le nouveau dossier s'écrit alors dans `CORRECTIONS-<horodatage>/` et l'ancien reste intact. Le nom du dossier réellement écrit est noté dans `data/corrections-dossier.txt` : `rapport_html.py` s'y réfère pour lier le rapport au bon plan, et c'est ce dossier-là (pas l'ancien) qu'il faut donner à l'agent de code.
 

@@ -139,12 +139,58 @@ class TestPage(unittest.TestCase):
 
     def test_aucun_audit_produit_quand_meme_une_page(self):
         with tempfile.TemporaryDirectory() as t:
-            site = pathlib.Path(t, "vide.exemple.fr")
-            site.mkdir()
+            site = creer_site(t, dates=("2026-09-30",))
+            self.assertEqual(lancer(site).returncode, 0)
+            shutil.rmtree(site / "2026-09-30")          # tous les audits supprimés : la page existante est régénérée
             r = lancer(site)
             self.assertEqual(r.returncode, 0, r.stderr)
             h = (site / "index.html").read_text(encoding="utf-8")
         self.assertIn("Aucun audit", h)
+
+    def test_dossier_sans_audit_date_refuse_sans_rien_ecrire(self):
+        with tempfile.TemporaryDirectory() as t:
+            site = pathlib.Path(t, "vide.exemple.fr")
+            site.mkdir()
+            r = lancer(site)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("AAAA-MM-JJ", r.stderr)
+            self.assertNotIn("Traceback", r.stderr)
+            self.assertFalse((site / "index.html").exists())
+
+    def test_index_html_du_projet_jamais_ecrase(self):
+        """Audit non daté (collect_all.sh URL . ./audit) puis « Régénérer » de SKILL.md : le parent est le projet."""
+        with tempfile.TemporaryDirectory() as t:
+            projet = pathlib.Path(t, "projet")
+            shutil.copytree(FIXTURE, projet / "audit")
+            original = "<!doctype html><title>Mon site</title><h1>Accueil du projet</h1>\n"
+            (projet / "index.html").write_text(original, encoding="utf-8")
+            r = lancer(projet)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("n'est pas une page historique", r.stderr)
+            self.assertEqual((projet / "index.html").read_text(encoding="utf-8"), original)
+            # même avec un dossier daté à côté : un index.html étranger n'est jamais remplacé
+            shutil.copytree(FIXTURE, projet / "2026-09-30")
+            self.assertEqual(lancer(projet).returncode, 2)
+            self.assertEqual((projet / "index.html").read_text(encoding="utf-8"), original)
+            self.assertFalse((projet / "index.html.tmp").exists())
+
+    def test_page_historique_marquee_et_regeneree(self):
+        import historique
+        with tempfile.TemporaryDirectory() as t:
+            site = creer_site(t)
+            self.assertEqual(lancer(site).returncode, 0)
+            h = (site / "index.html").read_text(encoding="utf-8")
+            self.assertIn(historique.MARQUEUR, h)
+            self.assertEqual(lancer(site).returncode, 0)   # deuxième passage : la page de l'outil est remplacée
+            # page d'une version précédente, sans marqueur : reconnue à son en-tête
+            (site / "index.html").write_text(h.replace(historique.MARQUEUR, ""), encoding="utf-8")
+            self.assertEqual(lancer(site).returncode, 0, "page historique sans marqueur refusée")
+
+    def test_skill_ne_regenere_l_historique_que_pour_un_dossier_date(self):
+        skill = (SCRIPTS.parent / "SKILL.md").read_text(encoding="utf-8")
+        ligne = next(l for l in skill.splitlines() if "historique.py" in l and "dirname" in l)
+        self.assertIn("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]", ligne)
+        self.assertIn('basename "$AUDIT"', ligne)
 
     def test_texte_dynamique_echappe(self):
         with tempfile.TemporaryDirectory() as t:
