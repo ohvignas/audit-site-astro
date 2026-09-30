@@ -67,6 +67,12 @@ class TestCrawlLocal(unittest.TestCase):
     def test_robots_bloque_les_assets_astro(self):
         self.assertEqual(self.issues.get("robots_blocks_assets", {}).get("examples"), ["/_astro/"])
 
+    # Tâche 2 : canonical vers une page jamais liée : la cible est vérifiée quand même (S19)
+    def test_canonical_vers_page_non_liee_en_404(self):
+        ex = self.issues.get("canonical_bad_target", {}).get("examples", [])
+        self.assertEqual([(e["url"].endswith("/canon-cassee"), e["statut_cible"]) for e in ex], [(True, 404)])
+        self.assertNotIn("/supprimee", self.exemples("http_4xx"), "la cible n'est pas une page liée : pas de http_4xx")
+
 
 if __name__ == "__main__":
     unittest.main()
