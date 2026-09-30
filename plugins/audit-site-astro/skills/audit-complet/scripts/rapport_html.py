@@ -8,7 +8,12 @@ Un seul fichier HTML : CSS en ligne, SVG en ligne, aucun JavaScript, aucune ress
 clair/sombre selon le système, imprimable en A4 (c'est aussi la source du PDF). Tout texte issu du site audité
 ou des fichiers de données passe par html.escape.
 
-API : notes_par_domaine(signaux), notes_audit(audit), note_globale(notes), markdown_vers_html(md), generer(audit) -> HTML complet.
+Si DOSSIER_AUDIT/CORRECTIONS/index.json existe (dossier remis à l'agent de code), la page ajoute : un lien « Comment corriger → NN »
+sur chaque signal associé à une fiche, une section « Plan de correction » et l'annexe « Guides de correction » (fiches rendues par
+markdown_vers_html). Sans index.json, ou s'il n'a aucune entrée utilisable, la page est identique à celle sans cette fonction.
+
+API : notes_par_domaine(signaux), notes_audit(audit), note_globale(notes), markdown_vers_html(md), charger_corrections(audit),
+generer(audit) -> HTML complet.
 """
 import argparse
 import html
@@ -480,15 +485,15 @@ def section_lighthouse(audit):
     return "".join(out)
 
 
-def _li_signal(s):
+def _li_signal(s, liens=None):
     ex = f'<ul>{"".join(f"<li><code>{e(str(x))}</code></li>" for x in s["exemples"])}</ul>' if s["exemples"] else ""
-    return f'<li>{chip(s["severite"])}<span>{e(s["texte"])}</span>{ex}</li>'
+    return f'<li>{chip(s["severite"])}<span>{e(s["texte"])}{_lien_corriger(s, liens)}</span>{ex}</li>'
 
 
-def section_signaux(sigs):
+def section_signaux(sigs, liens=None):
     if not sigs:
         return "<p>Aucun signal automatique.</p>"
-    top = "".join(f'<tr><td class="num">{i}</td><td>{chip(s["severite"])}</td><td>{e(s["domaine"])}</td><td>{e(s["texte"])}</td></tr>'
+    top = "".join(f'<tr><td class="num">{i}</td><td>{chip(s["severite"])}</td><td>{e(s["domaine"])}</td><td>{e(s["texte"])}{_lien_corriger(s, liens)}</td></tr>'
                   for i, s in enumerate(sigs[:15], 1))
     tete = "".join(f'<th scope="col">{t}</th>' for t in ["#", "Sévérité", "Domaine", "Constat"])
     out = [f'<h3>Top {min(15, len(sigs))} des signaux</h3>',
@@ -501,7 +506,7 @@ def section_signaux(sigs):
     for d in doms:
         ss = [s for s in sigs if s["domaine"] == d]
         cnt = "".join(f'{chip(k)} <span class="legende">×{sum(1 for s in ss if s["severite"] == k)}</span> ' for k in signaux.ORDRE if any(s["severite"] == k for s in ss))
-        out.append(f'<article class="carte"><h3>{e(d)} <small>{cnt}</small></h3><ul class="signaux">{"".join(_li_signal(s) for s in ss)}</ul></article>')
+        out.append(f'<article class="carte"><h3>{e(d)} <small>{cnt}</small></h3><ul class="signaux">{"".join(_li_signal(s, liens) for s in ss)}</ul></article>')
     return "".join(out) + "</div>"
 
 
@@ -513,6 +518,138 @@ def liste_fichiers(audit):
                  for p in sorted(d.rglob("*")) if p.is_file() and p.name != "COLLECTE.md")
     return ('<div class="table-wrap"><table><caption class="sr">Fichiers de données</caption><thead><tr><th scope="col">Fichier</th>'
             f'<th scope="col" class="num">Taille</th></tr></thead><tbody>{lg}</tbody></table></div>')
+
+
+# --- Dossier CORRECTIONS/ : plan de correction et guides en annexe ---------------------------------------------------
+_NUM = re.compile(r"^[0-9]{2,3}$")
+_FICHIER = re.compile(r"^[0-9]{2,3}-[a-z0-9-]+\.md$")  # nom simple : ni séparateur de chemin, ni « .. »
+_FRONTMATTER = re.compile(r"\A---[ \t]*\n.*?\n---[ \t]*(\n|\Z)", re.S)
+MENTION_CORRECTIONS = "Le dossier CORRECTIONS/ contient ces mêmes fiches, à donner à votre agent de code."
+
+# Ajouté à la feuille de style seulement quand le dossier CORRECTIONS/ est exploitable (sinon la page reste inchangée).
+CSS_CORRECTIONS = """
+.corriger{display:block;font-size:.88rem;margin-top:.15em}
+.fiche{margin-top:2em;padding-top:1em;border-top:2px solid var(--bord)}
+.fiche .fiche-num{margin:0;color:var(--doux);font-size:.85rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.fiche h3{margin-top:.3em}
+@media print{
+.fiche{break-before:page;margin-top:0;padding-top:0;border-top:0}
+.fiche pre,pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow:visible;break-inside:auto}
+.fiche .table-wrap{overflow:visible}
+}
+"""
+
+
+def _avertir(msg):
+    print(f"rapport_html : CORRECTIONS/ — {msg}", file=sys.stderr)
+
+
+def _texte(v):
+    return v if isinstance(v, str) else ("" if v is None else str(v))
+
+
+def _signaux_index(v):
+    """Couples (source, cle) valides d'une entrée d'index."""
+    return [(_texte(x.get("source")), _texte(x.get("cle"))) for x in (v if isinstance(v, list) else [])
+            if isinstance(x, dict) and _texte(x.get("source")) and _texte(x.get("cle"))]
+
+
+def charger_corrections(audit):
+    """Corrections décrites par DOSSIER_AUDIT/CORRECTIONS/index.json, ou None si la page doit rester inchangée.
+
+    Renvoie {"corrections": [{num, titre, domaine, severite, effort, cles, corps}], "sans_fiche": [texte]} trié par numéro.
+    Tout ce qui est invalide (JSON, version, entrée, nom de fichier, fiche absente ou illisible) est ignoré avec un
+    avertissement sur stderr ; sans aucune correction utilisable, renvoie None.
+    """
+    dossier = Path(audit) / "CORRECTIONS"
+    index = dossier / "index.json"
+    if not index.is_file():
+        return None
+    try:
+        data = json.loads(index.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as ex:
+        _avertir(f"index.json illisible ({ex.__class__.__name__}), section ignorée")
+        return None
+    if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("corrections"), list):
+        _avertir("index.json invalide ou de version non gérée (attendu : version 1), section ignorée")
+        return None
+    racine = dossier.resolve()
+    corrections, vus = [], set()
+    for brut in data["corrections"]:
+        if not isinstance(brut, dict):
+            _avertir("entrée de correction invalide, ignorée")
+            continue
+        num, nom = brut.get("num"), brut.get("fichier")
+        if not isinstance(num, str) or not _NUM.match(num) or num in vus:
+            _avertir(f"numéro de correction invalide ou en double ({num!r}), ignoré")
+            continue
+        if not isinstance(nom, str) or not _FICHIER.match(nom):
+            _avertir(f"correction {num} : nom de fichier refusé ({nom!r}), ignorée")
+            continue
+        chemin = dossier / nom
+        try:
+            if chemin.is_symlink() or chemin.resolve().parent != racine:
+                raise OSError("hors du dossier")
+            md = chemin.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            _avertir(f"correction {num} : fiche {nom} absente ou illisible, ignorée")
+            continue
+        vus.add(num)
+        corrections.append({"num": num, "titre": _texte(brut.get("titre")) or _texte(brut.get("id")) or f"Correction {num}",
+                            "domaine": _texte(brut.get("domaine")), "severite": _texte(brut.get("severite")),
+                            "effort": _texte(brut.get("effort")), "cles": _signaux_index(brut.get("signaux")),
+                            "corps": _FRONTMATTER.sub("", md.replace("\r\n", "\n"), count=1)})
+    if not corrections:
+        return None
+    corrections.sort(key=lambda c: (int(c["num"]), c["num"]))
+    sans = data.get("sans_fiche")
+    sans = [_texte(x.get("texte")) for x in sans if isinstance(x, dict) and _texte(x.get("texte"))] if isinstance(sans, list) else []
+    return {"corrections": corrections, "sans_fiche": sans}
+
+
+def liens_signaux(corr):
+    """{(source, cle): [numéros triés]} — un signal correspond à une correction si (source, cle) figure dans ses signaux."""
+    liens = {}
+    for c in corr["corrections"]:
+        for k in c["cles"]:
+            if c["num"] not in liens.setdefault(k, []):
+                liens[k].append(c["num"])
+    return liens
+
+
+def _lien_corriger(s, liens):
+    nums = (liens or {}).get((_texte(s.get("source")), _texte(s.get("cle"))))
+    if not nums:
+        return ""
+    return ('<span class="corriger">Comment corriger → '
+            + ", ".join(f'<a href="#correction-{e(n)}">{e(n)}</a>' for n in nums) + "</span>")
+
+
+def section_plan(corr):
+    lignes = []
+    for c in corr["corrections"]:
+        sev = c["severite"] if c["severite"] in SEV_LIBELLE else "info"
+        ancre = f"#correction-{e(c['num'])}"
+        lignes.append(f'<tr><td class="num"><a href="{ancre}">{e(c["num"])}</a></td><td>{e(c["titre"])}</td><td>{e(c["domaine"])}</td>'
+                      f'<td>{chip(sev)}</td><td class="num">{e(c["effort"]) or "—"}</td><td><a href="{ancre}">Voir le guide</a></td></tr>')
+    tete = "".join(('<th scope="col" class="num">%s</th>' if t in ("N°", "Effort") else '<th scope="col">%s</th>') % t
+                   for t in ["N°", "Correction", "Domaine", "Sévérité", "Effort", "Guide"])
+    sans = ""
+    if corr["sans_fiche"]:
+        sans = ('<h3>Constats sans guide dédié</h3><ul>' + "".join(f"<li>{e(t)}</li>" for t in corr["sans_fiche"]) + "</ul>")
+    return (f'<p>{e(MENTION_CORRECTIONS)} Chaque guide est reproduit en fin de rapport, dans l’annexe « Guides de correction ».</p>'
+            f'<div class="table-wrap"><table><caption class="sr">Plan de correction : guides, domaine, sévérité et effort</caption>'
+            f'<thead><tr>{tete}</tr></thead><tbody>{"".join(lignes)}</tbody></table></div>{sans}')
+
+
+def section_guides(corr):
+    sommaire = "".join(f'<li><a href="#correction-{e(c["num"])}">{e(c["num"])} — {e(c["titre"])}</a></li>' for c in corr["corrections"])
+    fiches = []
+    for c in corr["corrections"]:
+        titre = "" if c["corps"].lstrip().startswith("#") else f'<h3>{e(c["titre"])}</h3>'
+        fiches.append(f'<article class="fiche rapport" id="correction-{e(c["num"])}"><p class="fiche-num">Guide {e(c["num"])}</p>'
+                      f'{titre}{markdown_vers_html(c["corps"], decalage=2)}</article>')
+    return f'<p>{e(MENTION_CORRECTIONS)}</p><ol>{sommaire}</ol>{"".join(fiches)}'
 
 
 # --- Page ------------------------------------------------------------------------------------------------------------
@@ -551,6 +688,8 @@ def generer(audit):
     glob, plafonnee = note_globale(notes)
     ver = version_plugin()
     total = {k: sum(1 for s in sigs if s["severite"] == k) for k in MALUS}
+    corr = charger_corrections(audit)
+    liens = liens_signaux(corr) if corr else None
 
     if glob is None:
         hero = '<div class="carte"><p>Aucun domaine évalué automatiquement : voir le rapport priorisé.</p></div>'
@@ -575,15 +714,19 @@ def generer(audit):
         ("synthese", "Synthèse", f'{hero}<div class="kpis">{kpis}</div><h3>Note par domaine</h3><div class="carte">{barres(notes)}</div>{table_domaines(notes)}'),
         ("lighthouse", "Lighthouse", section_lighthouse(audit)),
         ("priorise", "Rapport priorisé", foi + corps),
-        ("signaux", "Signaux détectés", section_signaux(sigs)),
+        ("signaux", "Signaux détectés", section_signaux(sigs, liens)),
         ("annexes", "Annexes", f'<h3>Statut de la collecte</h3><div class="rapport">{markdown_vers_html(collecte, decalage=3) if collecte else "<p>Pas de fichier COLLECTE.md.</p>"}</div>'
                               f'<h3>Fichiers de données</h3>{liste_fichiers(audit)}'),
     ]
+    if corr:
+        sections.insert(1, ("plan-correction", "Plan de correction", section_plan(corr)))
+        sections.append(("guides", "Guides de correction", section_guides(corr)))
     nav = "".join(f'<a href="#{i}">{t}</a>' for i, t, _ in sections)
     corps_page = "".join(f'<section class="majeure" id="{i}"><h2>{t}</h2>{c}</section>' for i, t, c in sections)
+    css = CSS + (CSS_CORRECTIONS if corr else "")
     vtxt = f"v{e(ver)}" if ver != "dev" else "(version de développement)"
     return (f'<!doctype html>\n<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-            f'<meta name="color-scheme" content="light dark"><title>Audit — {e(site)}</title><style>{CSS}</style></head><body>'
+            f'<meta name="color-scheme" content="light dark"><title>Audit — {e(site)}</title><style>{css}</style></head><body>'
             f'<header class="bandeau"><div class="in"><p class="etiq">Audit de site web</p><h1>Audit du site — {e(site)}</h1>'
             f'<p>{e(date_audit(audit, collecte))}</p><p>Rapport généré par audit-site-astro {vtxt}</p></div></header><div class="page">'
             f'<nav class="sommaire" aria-label="Sommaire">{nav}</nav><main>{corps_page}</main>'
