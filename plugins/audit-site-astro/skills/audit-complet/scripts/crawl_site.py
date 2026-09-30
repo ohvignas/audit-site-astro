@@ -19,7 +19,9 @@ import argparse
 import csv
 import gzip
 import json
+import os
 import re
+import ssl
 import sys
 import time
 import zlib
@@ -53,7 +55,21 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_OPENER = urllib.request.build_opener(_NoRedirect)
+_OPENERS = {}
+
+
+def _opener():
+    """Opener sans suivi automatique des redirections ; TLS non vérifié si AUDIT_INSECURE_TLS=1 (tests)."""
+    insecure = os.environ.get("AUDIT_INSECURE_TLS") == "1"
+    if insecure not in _OPENERS:
+        handlers = [_NoRedirect()]
+        if insecure:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            handlers.append(urllib.request.HTTPSHandler(context=ctx))
+        _OPENERS[insecure] = urllib.request.build_opener(*handlers)
+    return _OPENERS[insecure]
 
 
 def _decompress(body, enc):
@@ -91,7 +107,7 @@ def fetch(url, timeout=20, method="GET", max_bytes=8_000_000, ua=UA, extra_heade
                     "headers": {}, "body": b"", "raw_bytes": 0, "ttfb": None, "time": 0}
         t_hop = time.time()
         try:
-            resp = _OPENER.open(req, timeout=timeout)
+            resp = _opener().open(req, timeout=timeout)
             status, hdrs = resp.status, resp.headers
             ttfb = time.time() - t_hop
             body = resp.read(max_bytes) if method == "GET" else b""

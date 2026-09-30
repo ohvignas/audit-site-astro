@@ -5,6 +5,7 @@
 # Usage : bash http_checks.sh https://exemple.fr [DOSSIER_SORTIE]
 # Sortie : DOSSIER_SORTIE/http-checks.md (lisible) — aucune modification du site.
 set -u
+curl() { command curl ${AUDIT_INSECURE_TLS:+-k} "$@"; }
 URL="${1:?usage: http_checks.sh https://site.tld [dossier_sortie]}"
 OUT="${2:-.}"
 mkdir -p "$OUT"
@@ -21,6 +22,7 @@ exec > >(tee "$REPORT") 2>&1
 echo "# Contrôles HTTP — $URL"
 echo
 echo "_$(date '+%Y-%m-%d %H:%M') — curl $(curl --version | head -1 | awk '{print $2}')_"
+[ "${AUDIT_INSECURE_TLS:-}" = "1" ] && echo "> ⚠️ TLS non vérifié (mode test AUDIT_INSECURE_TLS=1) : les contrôles de certificat ne sont pas significatifs." && echo
 echo
 
 echo "## 1. Variantes d'hôte → URL finale"
