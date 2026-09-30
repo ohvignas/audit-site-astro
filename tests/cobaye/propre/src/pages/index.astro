@@ -10,7 +10,9 @@ import { formations } from '../data/formations';
   <Image src={hero} alt="Atelier de formation no-code en petit groupe" layout="full-width" priority />
   <h1>Formations no-code et IA</h1>
   <h2>Pourquoi choisir nos formations ?</h2>
-  {paragraphes('no-code et IA').slice(0, 3).map((p) => <p>{p}</p>)}
+  {paragraphes('no-code et IA').map((p) => <p>{p}</p>)}
+  <h2>Un accompagnement de A à Z</h2>
+  {paragraphes('personnalisée').map((p) => <p>{p}</p>)}
   <h2>Nos formations</h2>
   <ul>{formations.map((f) => <li><a href={`/formations/${f.slug}`}>{f.titre}</a></li>)}</ul>
 </Base>

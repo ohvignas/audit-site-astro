@@ -12,11 +12,11 @@ const { Content } = await render(post);
 const jsonld = { '@context': 'https://schema.org', '@type': 'Article', headline: post.data.titre,
   author: { '@type': 'Person', name: post.data.auteur, url: new URL('/a-propos', Astro.site).href },
   datePublished: post.data.publie.toISOString(), dateModified: post.data.modifie.toISOString(),
-  image: new URL('/favicon.svg', Astro.site).href, publisher: { '@id': new URL('/#organisation', Astro.site).href } };
+  image: new URL('/og.png', Astro.site).href, publisher: { '@id': new URL('/#organisation', Astro.site).href } };
 ---
 <Base title={post.data.titre} description={post.data.description} jsonld={jsonld}>
   <h1>{post.data.titre}</h1>
   <p>Par {post.data.auteur}, mis à jour le <time datetime={post.data.modifie.toISOString()}>{post.data.modifie.toLocaleDateString('fr-FR')}</time></p>
-  <Image src={post.data.cover} alt="Illustration de l'article" />
+  <Image src={post.data.cover} alt="Illustration de l'article" priority />
   <Content />
 </Base>

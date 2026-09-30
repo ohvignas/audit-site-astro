@@ -11,6 +11,8 @@ const jsonld = { '@context': 'https://schema.org', '@type': 'Course', name: f.ti
 <Base title={f.titre} description={f.description} jsonld={jsonld}>
   <h1>{f.titre}</h1>
   {f.texte.map((p) => <p>{p}</p>)}
+  <h2>Programme et déroulé</h2>
+  {paragraphes(`détaillé (${f.slug})`).map((p) => <p>{p}</p>)}
   <h2>Comment financer cette formation ?</h2>
   <p>Le CPF, un OPCO ou France Travail peuvent financer tout ou partie de la formation.</p>
 </Base>

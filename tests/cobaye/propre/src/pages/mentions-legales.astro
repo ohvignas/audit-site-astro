@@ -3,7 +3,9 @@ export const prerender = true;
 import Base from '../layouts/Base.astro';
 import { paragraphes } from '../data/texte';
 ---
-<Base title="Mentions légales de Cobaye Formation" description="Éditeur, hébergeur et informations légales du site Cobaye Formation.">
+<Base title="Mentions légales de Cobaye Formation" description="Éditeur, hébergeur, directeur de la publication et informations légales du site de l'organisme Cobaye Formation.">
   <h1>Mentions légales</h1>
   {paragraphes('des mentions légales').map((p) => <p>{p}</p>)}
+  <h2>Hébergement et propriété intellectuelle</h2>
+  {paragraphes("de l'éditeur").map((p) => <p>{p}</p>)}
 </Base>

@@ -6,6 +6,9 @@ import { paragraphes } from '../../data/texte';
 ---
 <Base title="Nos formations professionnelles no-code et IA" description="Liste des formations professionnelles no-code et IA finançables par le CPF et les OPCO.">
   <h1>Nos formations</h1>
-  {paragraphes('professionnelle').slice(0, 2).map((p) => <p>{p}</p>)}
+  {paragraphes('professionnelle').map((p) => <p>{p}</p>)}
+  <h2>Financement et modalités</h2>
+  {paragraphes('finançable').map((p) => <p>{p}</p>)}
+  <h2>Les formations proposées</h2>
   <ul>{formations.map((f) => <li><a href={`/formations/${f.slug}`}>{f.titre}</a></li>)}</ul>
 </Base>

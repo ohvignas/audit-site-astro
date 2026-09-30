@@ -15,6 +15,6 @@ export const lister = query({
   handler: async (ctx, { limite }) => {
     const identite = await ctx.auth.getUserIdentity();
     if (!identite) return [];
-    return await ctx.db.query('leads').withIndex('par_proprietaire', (q) => q.eq('proprietaire', identite.subject)).take(limite);
+    return await ctx.db.query('leads').withIndex('par_proprietaire', (q) => q.eq('proprietaire', identite.subject)).take(Math.min(limite, 100));
   },
 });

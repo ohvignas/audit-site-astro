@@ -4,3 +4,4 @@
 ## Formations
 - [Formation no-code](https://propre.cobaye.test/formations/no-code): créer une application sans coder
 - [Formation IA générative](https://propre.cobaye.test/formations/ia): l'IA générative en entreprise
+- [Formation prompt engineering et agents IA](https://propre.cobaye.test/formations/ia-generative): concevoir des prompts fiables et des agents IA
