@@ -881,10 +881,6 @@ class TestMineurs(Base):
         self.assertIn(lire(None), ("CORRECTIONS", "CORRECTIONS-20260930-101500"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # Mention de l'humain qui accompagne une commande de production : l'agent la remet à l'humain ou attend son accord.
 HUMAIN = re.compile(r"(demander à|accord (explicite )?de|par|proposer à|remettre à|signaler à|lancée? par|faite? par) l['’]humain"
                     r"|l['’]humain(,)? (qui )?(le |la |les |lui-même )?(lance|fait|exécute|déploie|redéploie|recharge|applique|valide|définit|la lance)"
@@ -978,3 +974,7 @@ class TestCommandesDeProduction(Base):
                         "`netlify deploy --prod`", "`wrangler deploy`", "DNS", "CDN", "`rm -rf`", "migrations", "demander"):
             self.assertIn(attendu, regle)
         self.assertIn("`npx convex dev`", t)
+
+
+if __name__ == "__main__":
+    unittest.main()
