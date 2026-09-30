@@ -9,6 +9,7 @@ declencheurs:
   - "crawl:canonical_multiple"
   - "crawl:canonical_other"
   - "crawl:canonical_bad_target"
+  - "crawl:canonical_target_unreachable"
   - "code:canonical construite depuis Astro\\.url\\.href"
   - "lighthouse:rel=canonical|canonical"
 sources:
@@ -97,6 +98,7 @@ Relancer Lighthouse : l'audit « Le document n'a pas d'attribut `rel=canonical` 
 ## Pièges et retour arrière
 
 - `canonical_other` seul (canonical vers une autre URL) n'est un défaut que si ce n'est pas voulu ; vérifier page par page.
+- `canonical_target_unreachable` : la cible n'a pas répondu pendant l'audit (délai dépassé, DNS, TLS). Ce n'est pas la preuve d'une erreur : revérifiez avec `curl -sI URL_CIBLE`. Si elle répond 200 sans redirection, ne changez rien ; si elle est vraiment injoignable (domaine expiré, ancien hôte), pointez la canonical vers l'URL de production (étape 2).
 - Ne jamais mettre un `noindex` sur une page **et** une canonical vers une autre : signaux contradictoires.
 - N'utiliser ni robots.txt ni `noindex` pour « canonicaliser ».
 - Retour arrière : `git revert` du layout.

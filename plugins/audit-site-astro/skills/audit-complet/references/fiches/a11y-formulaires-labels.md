@@ -5,6 +5,7 @@ domaine: Accessibilité
 severite_type: haute
 effort: M
 declencheurs:
+  - "crawl:form_no_label"
   - "lighthouse:label(?!-content)|select-name|form-field-multiple-labels|autocomplete-valid"
   - "lighthouse:éléments de formulaire ne sont pas associés à des libellés|Certains éléments ne sont associés à aucun élément de libellé|champs de formulaire comprennent plusieurs libellés|attributs `autocomplete` ne sont pas utilisés correctement"
 sources:
@@ -31,6 +32,8 @@ Le formulaire est l'endroit où le site gagne de l'argent (contact, devis, inscr
 grep -rnE "<(input|select|textarea)\b" src | grep -vE 'type="(hidden|submit|button|image)"' | grep -vE 'aria-label|aria-labelledby' | head -30
 grep -rn "placeholder=" src | head -20     # un placeholder n'est PAS un label
 ```
+
+Le crawl de l'outil (`form_no_label`) compte, page par page, les champs visibles sans `<label>` relié, sans `aria-label`/`aria-labelledby` et sans `title` : un `placeholder` seul ne compte pas. Il ignore les champs masqués et les pièges à robots. Les exemples de `data/crawl/issues.json` donnent l'URL et le nombre de champs.
 
 Navigateur : cliquez sur le libellé : le champ doit prendre le focus. Inspecteur, Accessibilité : le champ a un nom (« Adresse e-mail »).
 

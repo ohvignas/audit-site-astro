@@ -5,7 +5,7 @@ domaine: Sécurité
 severite_type: basse
 effort: S
 declencheurs:
-  - "securite:\\| /\\.well-known/security\\.txt \\| (404|403|410) \\|"
+  - "securite:\\| /\\.well-known/security\\.txt \\| \\d{3} \\| \\d+ \\| ⚠️"
   - "http:\\| /\\.well-known/security\\.txt \\| (404|403|410) \\|"
 sources:
   - https://www.rfc-editor.org/rfc/rfc9116
@@ -28,7 +28,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://exemple.fr/.well-known/security
 curl -s https://exemple.fr/.well-known/security.txt
 ```
 
-Absent : 404. Correct : 200, `Content-Type: text/plain`, avec au minimum les lignes `Contact:` et `Expires:`.
+Absent : 404 ou 410, un autre code (403, 5xx), ou 200 **sans** ligne `Contact:` (le serveur renvoie une page générique, souvent la page d'accueil ou une route attrape-tout, à la place du fichier). Correct : 200, `Content-Type: text/plain`, avec au minimum les lignes `Contact:` et `Expires:`.
 
 ## Correction
 
@@ -47,6 +47,7 @@ Absent : 404. Correct : 200, `Content-Type: text/plain`, avec au minimum les lig
    - `Policy` et `Canonical` sont facultatifs : supprimez les lignes dont vous n'avez pas besoin (une `Policy` doit pointer vers une vraie page).
 2. Si votre règle de blocage des fichiers cachés (`location ~ /\.` dans nginx) est en place, elle doit **exclure** `/.well-known/` (voir `secu-fichiers-caches-exposes`).
 3. Pour un site en SSR sans dossier `public/` servi par le proxy, vérifiez que Node sert bien `dist/client/.well-known/security.txt` après `npm run build`.
+4. Si l'adresse répond 200 avec du HTML (page d'accueil, route `[...slug].astro`), c'est la route attrape-tout ou une règle de réécriture du serveur qui répond à la place du fichier : un fichier présent dans `public/.well-known/` est servi avant les routes ; sinon, excluez `/.well-known/` de la réécriture.
 
 ## Critères d'acceptation
 

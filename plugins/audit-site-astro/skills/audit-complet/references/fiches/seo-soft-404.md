@@ -7,6 +7,7 @@ effort: S
 declencheurs:
   - "code:Routes SSR dynamiques sans gestion explicite du 404"
   - "http:404-page-inexistante-audit \\| 200"
+  - "http:soft 404 sous /"
 sources:
   - https://docs.astro.build/en/guides/on-demand-rendering/
   - https://docs.astro.build/en/guides/routing/
@@ -34,7 +35,7 @@ done
 find src/pages -name '*\[*'
 ```
 
-Présent : un `200` sur une URL inventée. Corrigé : `404` partout.
+Présent : un `200` sur une URL inventée. Corrigé : `404` partout. Dans `http-checks.md`, la section « routes dynamiques » (§7) liste chaque route fautive sous la forme « ❌ soft 404 sous /blog/ : /blog/zz-audit-inexistant-… répond 200 ».
 
 ## Correction
 

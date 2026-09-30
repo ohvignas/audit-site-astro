@@ -5,7 +5,8 @@ domaine: Sécurité
 severite_type: moyenne
 effort: S
 declencheurs:
-  - "securite:\\| /_image\\?href=https://example\\.com/x\\.png \\| 200 \\| \\d+ \\| ⚠️"
+  - "securite:proxy d'images ouvert"
+  - "securite:/_image indéterminé"
 sources:
   - https://docs.astro.build/en/reference/configuration-reference/#imageremotepatterns
   - https://docs.astro.build/en/reference/configuration-reference/#imagedomains
@@ -23,13 +24,13 @@ Sur un site Astro rendu à la demande, l'endpoint `/_image` redimensionne des im
 ## Comment le constater soi-même
 
 ```bash
-# Domaine non autorisé : attendu 403 (ou 404 si le site est 100 % statique)
-curl -s -o /dev/null -w '%{http_code}\n' 'https://exemple.fr/_image?href=https%3A%2F%2Fexample.com%2Fx.png&w=100&f=webp'
+# Image réelle sur un domaine non autorisé : attendu 403 (ou 404 si le site est 100 % statique)
+curl -s -o /dev/null -w '%{http_code} %{content_type}\n' 'https://exemple.fr/_image?href=https%3A%2F%2Fwww.google.com%2Fimages%2Fbranding%2Fgooglelogo%2F1x%2Fgooglelogo_color_272x92dp.png&w=16&f=webp'
 # Configuration (motifs trop larges à repérer)
 grep -nE "remotePatterns|domains|hostname|pathname" astro.config.*
 ```
 
-Problème présent : 200 avec une image, ou `hostname: '**'`, motif sans `hostname`, `**.com`. Corrigé : 403 pour tout ce qui n'est pas explicitement listé. La sonde de l'outil ne signale que le cas où la réponse est un 200 inattendu ; testez aussi avec un domaine que vous contrôlez et qui n'est pas autorisé.
+Problème présent : 200 avec une image, ou `hostname: '**'`, motif sans `hostname`, `**.com`. Corrigé : 403 pour tout ce qui n'est pas explicitement listé. La sonde de l'outil demande à `/_image` de transformer une vraie image PNG d'un domaine tiers : « ❌ proxy d'images ouvert » si elle reçoit une image (200, `image/*`), « ⚠️ /_image indéterminé » sur un 5xx, une redirection ou une image distante injoignable. Un 5xx signifie souvent que le domaine est **autorisé** mais que le téléchargement a échoué : relisez `remotePatterns` dans ce cas aussi. Testez également avec un domaine que vous contrôlez et qui n'est pas autorisé.
 
 ## Correction
 

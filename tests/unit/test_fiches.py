@@ -287,10 +287,7 @@ class TestCouverture(unittest.TestCase):
     LACUNES_CONNUES = {
         "geo": [],
         "http": [],
-        # La sonde marque « ❌ EXPOSÉ (info) » un /.well-known/security.txt qui répond 200 avec « Contact: » : c'est le fichier
-        # souhaité (fiche secu-security-txt), pas une exposition. Faux positif de la sonde (à corriger dans security_probe.sh,
-        # ou à absorber par un déclencheur) : sans fiche aujourd'hui, le signal « haute » serait orphelin.
-        "securite": ["| /.well-known/security.txt | 200 | 1234 | ❌ EXPOSÉ (info) |"],
+        "securite": [],
         "astro_scan": [],
     }
     # Messages d'astro_scan.py qui signalent un problème d'entrée (projet introuvable), pas un défaut du site : pas de fiche voulue.
@@ -431,7 +428,8 @@ class TestCouverture(unittest.TestCase):
     def test_lignes_de_security_probe(self):
         src = _lire("security_probe.sh")
         checks = extraction.lignes_check(src)
-        self.assertGreaterEqual(len(checks), 30, "extraction des check(...) de security_probe.sh dégradée")
+        # 28 check(...) depuis la phase 1 : /_image et security.txt ont leur propre section (verdicts ci-dessous)
+        self.assertGreaterEqual(len(checks), 28, "extraction des check(...) de security_probe.sh dégradée")
         modeles = extraction.echantillons_shell(src, codes=("200",))
         autres = [m for m in modeles if "@PATH@" not in m]
         mod_expose = next(m for m in modeles if "@PATH@" in m and "❌" in m)
@@ -440,9 +438,20 @@ class TestCouverture(unittest.TestCase):
         for chemin, motif, gravite in checks:
             # motif attendu vide : le verdict ne peut être que « ⚠️ répond 200 » ; sinon la ligne critique est « ❌ EXPOSÉ »
             lignes.append((mod_expose if motif else mod_repond).replace("@PATH@", chemin).replace("@SEV@", gravite))
-        signales, non_signales = self._via_collecte("securite", "security-probe.md", lignes)
-        self.assertEqual(non_signales, [], "lignes ❌/⚠️ de security_probe.sh ignorées par signaux.collecter")
-        for morceau in ("→ .map HTTP", "⚠️ CORS sur la page HTML"):
+        # security.txt : le verdict est une variable ($sverdict), non extraite ; on reproduit les quatre formes de la sonde
+        lignes += [f"| /.well-known/security.txt | {code} | {taille} | {verdict} |" for code, taille, verdict in (
+            ("404", "0", "⚠️ absent (recommandé, RFC 9116)"),
+            ("410", "0", "⚠️ absent (recommandé, RFC 9116)"),
+            ("200", "5120", "⚠️ absent (recommandé, RFC 9116) — HTTP 200 sans champ Contact: (page générique servie à la place)"),
+            ("403", "153", "⚠️ HTTP 403 (security.txt recommandé, RFC 9116)"),
+            ("000", "0", "⚠️ HTTP 000 (security.txt recommandé, RFC 9116)"))]
+        present = "| /.well-known/security.txt | 200 | 120 | ✅ présent |"
+        self.assertIn('sverdict="✅ présent"', src, "verdict favorable de security.txt modifié dans la sonde")
+        self.assertIn("/_image", " ".join(l for l in lignes if "proxy d'images ouvert" in l), "verdict ❌ de /_image non extrait")
+        signales, non_signales = self._via_collecte("securite", "security-probe.md", lignes + [present])
+        self.assertEqual(non_signales, [present], "lignes ❌/⚠️ de security_probe.sh ignorées par signaux.collecter")
+        for morceau in ("→ .map HTTP", "⚠️ CORS sur la page HTML", "proxy d'images ouvert", "/_image indéterminé",
+                        "HTTP 200 sans champ Contact"):
             self.assertTrue(any(morceau in c for c in signales), f"pas de signal pour « {morceau} »")
         self._verifier("securite", "securite", signales)
         sans = self._declencheurs_sans_echantillon("securite", lignes)
