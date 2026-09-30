@@ -13,6 +13,7 @@ API : notes_par_domaine(signaux), markdown_vers_html(md), generer(audit) -> HTML
 import argparse
 import html
 import json
+import math
 import os
 import re
 import sys
@@ -194,8 +195,24 @@ def note_globale(notes):
 
 
 # --- Markdown minimal -> HTML ----------------------------------------------------------------------------------------
-def _url_sure(u):
-    return bool(re.match(r"^(https?://|mailto:|#|/|\./|\.\./)", u)) or not re.match(r"^[a-zA-Z][\w+.-]*:", u)
+def _url_propre(u):
+    """URL nettoyée des caractères de contrôle et espaces (que les navigateurs ignorent), ou None si elle n'est pas sûre.
+
+    Liste blanche : http(s), mailto, ancre, chemin absolu (pas //hôte), chemin relatif sans « : » avant le premier / ? #.
+    """
+    c = re.sub(r"[\x00-\x20\x7f]", "", u)
+    if not c or "\\" in c or "&#" in c:
+        return None
+    if re.match(r"^(https?://|mailto:|#|/(?!/)|\.{1,2}/)", c, re.I):
+        return c
+    if c.startswith("//") or re.match(r"^[^/?#]*:", c):
+        return None
+    return c
+
+
+def _lien(x):
+    url = _url_propre(html.unescape(x.group(2)))
+    return f'<a href="{e(url)}" rel="noopener">{x.group(1)}</a>' if url else x.group(1)
 
 
 def _inline(txt):
@@ -206,20 +223,39 @@ def _inline(txt):
             out.append(f"<code>{e(m)}</code>")
             continue
         m = e(m)
-        m = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)",
-                   lambda x: f'<a href="{x.group(2)}" rel="noopener">{x.group(1)}</a>' if _url_sure(html.unescape(x.group(2))) else x.group(1), m)
+        m = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", _lien, m)
         m = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", m)
         m = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<em>\1</em>", m)
         out.append(m)
     return "".join(out)
 
 
-_SEP = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
+_SEP = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
 _ITEM = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$")
 
 
 def _cellules(ligne):
-    return [c.strip() for c in ligne.strip().strip("|").split("|")]
+    """Cellules d'une ligne de tableau ; un « | » dans du code en ligne ou écrit « \\| » ne sépare pas."""
+    s = ligne.strip()
+    s = s[1:] if s.startswith("|") else s
+    s = s[:-1] if s.endswith("|") and not s.endswith("\\|") else s
+    cel, cur, code, i = [], [], False, 0
+    while i < len(s):
+        ch = s[i]
+        if ch == "\\" and s[i + 1:i + 2] == "|":
+            cur.append("|")
+            i += 2
+            continue
+        if ch == "`" and (code or "`" in s[i + 1:]):
+            code = not code
+        if ch == "|" and not code:
+            cel.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+        i += 1
+    cel.append("".join(cur).strip())
+    return cel
 
 
 def _liste(items):
@@ -259,14 +295,14 @@ def markdown_vers_html(md, decalage=0):
             i += 1
             out.append(f"<pre><code>{e(chr(10).join(bloc))}</code></pre>")
         elif re.match(r"^#{1,6}\s", l):
-            m = re.match(r"^(#{1,6})\s+(.*?)\s*#*\s*$", l)
+            m = re.match(r"^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$", l)
             n = min(6, len(m.group(1)) + decalage)
             out.append(f"<h{n}>{_inline(m.group(2))}</h{n}>")
             i += 1
         elif re.match(r"^\s*([-*_])(\s*\1){2,}\s*$", l):
             out.append("<hr>")
             i += 1
-        elif "|" in l and i + 1 < len(lignes) and _SEP.match(lignes[i + 1]) and "-" in lignes[i + 1]:
+        elif "|" in l and i + 1 < len(lignes) and _SEP.match(lignes[i + 1]) and len(_cellules(l)) == len(_cellules(lignes[i + 1])):
             tete = _cellules(l)
             i += 2
             corps = []
@@ -361,28 +397,36 @@ def table_domaines(notes):
             f'<thead><tr>{tete}</tr></thead><tbody>{"".join(lignes)}</tbody></table></div>')
 
 
+def _dict(x):
+    return x if isinstance(x, dict) else {}
+
+
+def _nombre(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
 def _score_td(v):
-    if not isinstance(v, (int, float)):
+    if not _nombre(v):
         return '<td class="num zero">—</td>'
     return f'<td class="num">{pastille(round(v), _couleur_score(v))}</td>'
 
 
 def _metrique_td(m):
-    m = m or {}
+    m = _dict(m)
     txt = e(str(m.get("affiche", "—")))
     sc = m.get("score")
-    cls = f' class="pastille c-{_couleur_score(sc * 100)}"' if isinstance(sc, (int, float)) else ""
+    cls = f' class="pastille c-{_couleur_score(sc * 100)}"' if _nombre(sc) else ""
     return f'<td class="num"><span{cls}>{txt}</span></td>' if cls else f'<td class="num">{txt}</td>'
 
 
 def section_lighthouse(audit):
-    runs = signaux.lighthouse(audit)
+    runs = [r for r in signaux.lighthouse(audit) if isinstance(r, dict)]
     if not runs:
         return '<p class="encadre">Aucune mesure Lighthouse disponible (étape « lighthouse » non exécutée ou en échec).</p>'
     mode = {"mobile": "Mobile", "desktop": "Ordinateur"}
     lignes = []
     for r in runs:
-        sc, m = r.get("scores", {}), r.get("metriques", {})
+        sc, m = _dict(r.get("scores")), _dict(r.get("metriques"))
         lignes.append(f'<tr><th scope="row" class="url">{e(str(r.get("url", "")))}</th><td>{e(mode.get(r.get("strategie"), str(r.get("strategie", "—"))))}</td>'
                       + "".join(_score_td(sc.get(k)) for k in ("performance", "accessibility", "best-practices", "seo"))
                       + "".join(_metrique_td(m.get(k)) for k in ("LCP", "CLS", "TBT")) + "</tr>")
@@ -396,7 +440,7 @@ def section_lighthouse(audit):
     for r in runs:
         for cle, port in (("terrain_page", "Page"), ("terrain_origine", "Origine")):
             fd = r.get(cle)
-            if fd:
+            if fd and isinstance(fd, dict):
                 terrain.append((r, port, fd))
     if terrain:
         cols = []
