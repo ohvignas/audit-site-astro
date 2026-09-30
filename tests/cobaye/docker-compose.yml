@@ -32,6 +32,6 @@ services:
       cobaye:
         aliases: [casse.cobaye.test, propre.cobaye.test]
     healthcheck:
-      test: ["CMD", "wget", "-q", "--no-check-certificate", "--header", "Host: propre.cobaye.test", "-O", "/dev/null", "https://127.0.0.1/"]
+      test: ["CMD-SHELL", "wget -q --no-check-certificate -O /dev/null https://127.0.0.1/ && wget -q --no-check-certificate --header 'Host: casse.cobaye.test' -O /dev/null https://127.0.0.1/robots.txt"]
       interval: 5s
       retries: 20

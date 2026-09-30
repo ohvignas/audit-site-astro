@@ -15,7 +15,9 @@ bash tests/cobaye/auditer.sh propre    # collecte -> audits-cobaye/propre/
 python3 tests/cobaye/score.py …        # verdict (arrive dans une tâche ultérieure)
 ```
 
-`auditer.sh` utilise l'image `audit-site-astro:test` (variable `IMAGE_AUDIT` pour changer) et sort toujours en code 0 : le verdict vient de `score.py`.
+`auditer.sh` utilise l'image `audit-site-astro:test` (variable `IMAGE_AUDIT` pour changer). Il sort en code 0 même si la collecte a des étapes ❌ (code 1, normal pour `casse`) ; un code >= 2 (docker ou site injoignable) est remonté. Le verdict vient de `score.py`.
+
+Le leurre `/.git/HEAD` est stocké dans `nginx/leurres/git-HEAD` (git ne peut pas suivre un dossier `.git` imbriqué) et servi par un `alias` nginx.
 
 ## Avertissement RAM
 
