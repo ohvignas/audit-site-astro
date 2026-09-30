@@ -91,6 +91,44 @@ def sans_commentaires(t):
     return "".join(out)
 
 
+def sans_texte_litteral(t):
+    """Vide le contenu des chaînes '…' et "…" et le texte des gabarits `…` en gardant leurs expressions ${…} :
+    pour chercher un identifiant (site) dans le code seulement, pas dans du texte (« plan-du-site »)."""
+    out, i, n = [], 0, len(t)
+    while i < n:
+        c = t[i]
+        if c in "'\"":
+            j = i + 1
+            while j < n and t[j] != c and t[j] != "\n":
+                j += 2 if t[j] == "\\" else 1
+            out.append(c + " " * (min(j, n) - i - 1) + (c if j < n and t[j] == c else ""))
+            i = j + 1 if j < n and t[j] == c else j
+        elif c == "`":
+            out.append(c)
+            i += 1
+            while i < n and t[i] != "`":
+                if t[i] == "\\":
+                    out.append("  ")
+                    i += 2
+                elif t.startswith("${", i):
+                    prof, j = 1, i + 2
+                    while j < n and prof:
+                        prof += {"{": 1, "}": -1}.get(t[j], 0)
+                        j += 1
+                    out.append(t[i:j])
+                    i = j
+                else:
+                    out.append("\n" if t[i] == "\n" else " ")
+                    i += 1
+            if i < n:
+                out.append("`")
+                i += 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
 # Espaces de noms XML : des identifiants, pas des URL chargées (xmlns du sitemap…)
 NAMESPACES_XML = re.compile(r"http://(www\.sitemaps\.org|www\.w3\.org|www\.google\.com/schemas|purl\.org)/")
 
@@ -367,7 +405,8 @@ def scan_src(root, report):
                 code = sans_commentaires(t)
                 par_requete = re.search(r"url\.origin|request\.url|Astro\.url\.origin|new URL\(\s*request", code)
                 # l'identifiant `site` (Astro.site, context.site, ({ site })…), pas la sous-chaîne de « sitemaps.org »
-                par_site = re.search(r"\bAstro\.site\b|\bcontext\.site\b|import\.meta\.env\.SITE\b|(?<![\w.$])site\b(?!\s*:)", code)
+                par_site = re.search(r"\bAstro\.site\b|\bcontext\.site\b|import\.meta\.env\.SITE\b|(?<![\w.$-])site\b(?!\s*:)",
+                                     sans_texte_litteral(code))
                 if par_requete and not par_site:
                     add("haute", "seo", f"{name} construit les URL depuis l'origine de la requête : derrière un proxy "
                                         f"elles sortent en http:// (constaté sur le sitemap en ligne ?)", [name],

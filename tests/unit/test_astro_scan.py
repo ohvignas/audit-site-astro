@@ -69,6 +69,12 @@ class TestSitemap(unittest.TestCase):
         self.assertIn("depuis l'origine de la requête", t)
         self.assertNotIn("http:// en dur", t, "l'espace de noms XML et un commentaire ne sont pas des URL en dur")
 
+    def test_mot_site_dans_le_texte_ne_vaut_pas_astro_site(self):  # revue finale M6
+        ep = ("export const GET = ({ request }) => {\n  const origin = new URL(request.url).origin;\n"
+              "  const titre = 'Plan du site';\n"
+              "  return new Response(`" + XMLNS + "<url><loc>${origin}/plan-du-site</loc></url></urlset>`);\n};\n")
+        self.assertIn("depuis l'origine de la requête", textes(scanner({"astro.config.mjs": self.CFG, "src/pages/sitemap.xml.ts": ep})))
+
     def test_sitemap_construit_avec_site(self):
         ep = ("export const GET = ({ site }) => new Response(`" + XMLNS +
               "<url><loc>${new URL('/', site).href}</loc></url></urlset>`);\n")
