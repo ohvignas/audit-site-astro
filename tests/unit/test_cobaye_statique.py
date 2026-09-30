@@ -23,7 +23,7 @@ class TestCobayeStatique(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t1, tempfile.TemporaryDirectory() as t2:
             casse, propre = self._scan("casse", t1), self._scan("propre", t2)
             rates = [d["id"] for d in code if not score.detecte(d["matcher"], casse)]
-            fps = [d["id"] for d in code if d.get("propre", "absent") == "absent" and score.detecte(d["matcher"], propre)]
+            fps = [d["id"] for d in code if d.get("propre", "absent") == "absent" and score.detecte(score._matcher_fp(d), propre)]
         # trous connus du scanner, corrigés en phase 1 (la liste ne doit que rétrécir)
         self.assertEqual(rates, ["C10", "C12"], f"défauts de code non détectés : {rates}")
         self.assertEqual(fps, [], f"faux positifs de code : {fps}")
