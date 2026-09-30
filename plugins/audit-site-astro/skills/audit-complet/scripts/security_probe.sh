@@ -68,8 +68,7 @@ check "/backup.zip" "" "haute"
 check "/backup.sql" "INSERT INTO|CREATE TABLE" "critique"
 check "/dump.sql" "INSERT INTO|CREATE TABLE" "critique"
 check "/db.sqlite" "SQLite format" "critique"
-# Debug / outils de dev
-check "/_image?href=https://example.com/x.png" "" "info"
+# Debug / outils de dev (le proxy /_image a sa propre section, avec une vraie image distante)
 check "/__vite_ping" "" "moyenne"
 check "/@vite/client" "import.meta.hot|vite" "haute"
 check "/phpinfo.php" "phpinfo\(\)|PHP Version" "haute"
@@ -81,10 +80,26 @@ check "/xmlrpc.php" "XML-RPC" "info"
 check "/wp-content/debug.log" "PHP (Warning|Notice|Fatal)" "haute"
 
 echo
+echo "## Proxy d'images /_image"
+echo
+# Image PNG réelle sur un domaine tiers : si /_image la transforme, n'importe qui fait travailler le serveur.
+IMG_TIERS="${AUDIT_IMAGE_DISTANTE:-https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png}"
+enc=$(printf '%s' "$IMG_TIERS" | sed -e 's/%/%25/g' -e 's/:/%3A/g' -e 's#/#%2F#g' -e 's/?/%3F/g' -e 's/&/%26/g' -e 's/=/%3D/g')
+r=$(curl -s -o /dev/null -A "$UA" --max-time 30 -w '%{http_code}|%{content_type}' "$BASE/_image?href=$enc&w=16&f=webp")
+icode=${r%%|*}; ictype=${r#*|}
+if [ "$icode" = "200" ] && printf '%s' "$ictype" | grep -qi '^image/'; then
+  echo "- ❌ proxy d'images ouvert : /_image transforme une image d'un domaine tiers ($IMG_TIERS → HTTP 200, $ictype) — n'importe qui peut consommer le CPU et la bande passante du serveur : image.remotePatterns avec un hostname explicite (jamais le protocole seul)"
+else
+  echo "- ✅ /_image refuse une image d'un domaine tiers (HTTP ${icode:-000})"
+fi
+
+echo
 echo "## Source maps JavaScript publiques"
 echo
 curl -s -A "$UA" --max-time 20 "$URL" -o "$TMP/home.html"
-js=$(grep -oE '(src|href)="[^"]+\.js"' "$TMP/home.html" | sed -E 's/^(src|href)="//; s/"$//' | awk '!s[$0]++' | head -8)
+# JS de la page, y compris ceux des îlots Astro (component-url / renderer-url), sans query string
+js=$(grep -oE '(src|href|component-url|renderer-url)="[^"]+\.m?js(\?[^"]*)?"' "$TMP/home.html" \
+  | sed -E 's/^[a-z-]+="//; s/"$//; s/\?.*$//' | awk '!s[$0]++' | head -12)
 found=0
 for j in $js; do
   case "$j" in http*) full="$j";; /*) full="$BASE$j";; *) full="$BASE/$j";; esac
