@@ -1,0 +1,9 @@
+---
+export const prerender = true;
+import Base from '../layouts/Base.astro';
+import { paragraphes } from '../data/texte';
+---
+<Base title="Politique de confidentialité et cookies" description="Données personnelles collectées, durées de conservation et gestion de vos droits.">
+  <h1>Confidentialité</h1>
+  {paragraphes('de la confidentialité').map((p) => <p>{p}</p>)}
+</Base>

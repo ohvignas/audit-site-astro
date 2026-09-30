@@ -1,0 +1,11 @@
+---
+export const prerender = true;
+import Base from '../../layouts/Base.astro';
+import { formations } from '../../data/formations';
+import { paragraphes } from '../../data/texte';
+---
+<Base title="Nos formations professionnelles no-code et IA" description="Liste des formations professionnelles no-code et IA finançables par le CPF et les OPCO.">
+  <h1>Nos formations</h1>
+  {paragraphes('professionnelle').slice(0, 2).map((p) => <p>{p}</p>)}
+  <ul>{formations.map((f) => <li><a href={`/formations/${f.slug}`}>{f.titre}</a></li>)}</ul>
+</Base>

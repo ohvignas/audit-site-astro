@@ -1,0 +1,9 @@
+---
+export const prerender = true;
+import Base from '../layouts/Base.astro';
+import { paragraphes } from '../data/texte';
+---
+<Base title="À propos de Cobaye Formation : équipe et engagements" description="L'équipe pédagogique, nos certifications et nos engagements qualité.">
+  <h1>À propos de Cobaye Formation</h1>
+  {paragraphes("de l'équipe").map((p) => <p>{p}</p>)}
+</Base>

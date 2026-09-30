@@ -1,0 +1,6 @@
+# Cobaye Formation
+> Organisme de formation fictif (no-code et IA) qui sert de jumeau « propre » au banc d'essai de l'audit.
+
+## Formations
+- [Formation no-code](https://propre.cobaye.test/formations/no-code): créer une application sans coder
+- [Formation IA générative](https://propre.cobaye.test/formations/ia): l'IA générative en entreprise

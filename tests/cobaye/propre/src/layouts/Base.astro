@@ -1,0 +1,56 @@
+---
+import { Font, Image } from 'astro:assets';
+import Chat from '../components/Chat.tsx';
+import logo from '../assets/logo.png';
+
+interface Props { title: string; description: string; jsonld?: Record<string, unknown> }
+const { title, description, jsonld } = Astro.props;
+const canonical = new URL(Astro.url.pathname, Astro.site).href;
+const organisation = {
+  '@context': 'https://schema.org', '@type': 'EducationalOrganization', '@id': new URL('/#organisation', Astro.site).href,
+  name: 'Cobaye Formation', url: Astro.site?.href, logo: new URL('/favicon.svg', Astro.site).href,
+  sameAs: ['https://www.linkedin.com/company/cobaye-formation', 'https://www.youtube.com/@cobaye-formation'],
+};
+---
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={new URL('/favicon.svg', Astro.site).href} />
+    <meta property="og:site_name" content="Cobaye Formation" />
+    <Font cssVariable="--font-inter" preload />
+    <script type="application/ld+json" set:html={JSON.stringify(organisation)}></script>
+    {jsonld && <script type="application/ld+json" set:html={JSON.stringify(jsonld)}></script>}
+    <style>
+      body { font-family: var(--font-inter), system-ui, sans-serif; color: #1a1a1a; background: #ffffff; }
+      nav a, footer a { display: inline-block; padding: 12px; }
+    </style>
+  </head>
+  <body>
+    <a href="#contenu">Aller au contenu</a>
+    <header>
+      <nav aria-label="Navigation principale">
+        <a href="/">Accueil</a>
+        <a href="/catalogue">Catalogue</a>
+        <a href="/formations">Formations</a>
+        <a href="/blog/article-ok">Blog</a>
+        <a href="/contact">Contact</a>
+      </nav>
+    </header>
+    <main id="contenu"><slot /></main>
+    <footer>
+      <Image src={logo} alt="Cobaye Formation" width={128} height={32} />
+      <a href="/a-propos">À propos</a>
+      <a href="/mentions-legales">Mentions légales</a>
+      <a href="/confidentialite">Confidentialité</a>
+    </footer>
+    <Chat client:visible />
+  </body>
+</html>
