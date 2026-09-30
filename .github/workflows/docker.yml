@@ -91,3 +91,30 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  cobaye:
+    name: Banc d'essai cobaye (rappel / faux positifs)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construire l'image d'audit
+        run: docker build -t audit-site-astro:test .
+      - name: Démarrer les cobayes
+        run: bash tests/cobaye/lancer.sh
+      - name: Auditer le cobaye cassé
+        run: bash tests/cobaye/auditer.sh casse
+      - name: Auditer le jumeau propre
+        run: bash tests/cobaye/auditer.sh propre
+      - name: Score
+        run: python3 tests/cobaye/score.py --casse audits-cobaye/casse --propre audits-cobaye/propre --phase 0 --sortie audits-cobaye --resume "$GITHUB_STEP_SUMMARY"
+      - name: Journaux des cobayes (en cas d'échec)
+        if: failure()
+        run: docker compose -f tests/cobaye/docker-compose.yml logs --tail=200
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audits-cobaye
+          path: audits-cobaye
+          retention-days: 14
