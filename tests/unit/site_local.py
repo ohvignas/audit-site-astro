@@ -15,6 +15,7 @@ class SiteLocal:
     def __init__(self, routes, prefixes=None):
         self.routes, self.prefixes = routes, prefixes or {}
         self.base = ""
+        self.requetes = []  # chemins demandés (avec la requête), pour vérifier ce que le script a réellement envoyé
 
     def _reponse(self, chemin):
         rep = self.routes.get(chemin.split("?", 1)[0])
@@ -27,6 +28,7 @@ class SiteLocal:
 
         class Gestionnaire(BaseHTTPRequestHandler):
             def _repondre(self):
+                site.requetes.append(self.path)
                 statut, entetes, corps = site._reponse(self.path)
                 if isinstance(corps, str):
                     corps = corps.replace("@@BASE@@", site.base).encode("utf-8")

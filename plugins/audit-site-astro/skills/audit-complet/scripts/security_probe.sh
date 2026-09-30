@@ -9,8 +9,10 @@ curl() { if [ "${AUDIT_INSECURE_TLS:-}" = "1" ]; then command curl -k "$@"; else
 URL="${1:?usage: security_probe.sh https://site.tld [dossier_sortie]}"
 OUT="${2:-.}"
 mkdir -p "$OUT"
-BASE=$(printf '%s' "$URL" | awk -F/ '{print $1"//"$3}')
 UA="Mozilla/5.0 (compatible; AuditSecu/1.0; audit du proprietaire)"
+# Origine réellement servie (apex → www, http → https…) : sinon chaque sonde ne reçoit qu'une redirection
+FINAL=$(curl -s -o /dev/null -L --max-redirs 10 --max-time 20 -A "$UA" -w '%{url_effective}' "$URL" 2>/dev/null)
+BASE=$(printf '%s' "${FINAL:-$URL}" | awk -F/ '{print $1"//"$3}')
 REPORT="$OUT/security-probe.md"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 exec > >(tee "$REPORT") 2>&1
@@ -87,16 +89,20 @@ IMG_TIERS="${AUDIT_IMAGE_DISTANTE:-https://www.google.com/images/branding/google
 enc=$(printf '%s' "$IMG_TIERS" | sed -e 's/%/%25/g' -e 's/:/%3A/g' -e 's#/#%2F#g' -e 's/?/%3F/g' -e 's/&/%26/g' -e 's/=/%3D/g')
 r=$(curl -s -o /dev/null -A "$UA" --max-time 30 -w '%{http_code}|%{content_type}' "$BASE/_image?href=$enc&w=16&f=webp")
 icode=${r%%|*}; ictype=${r#*|}
+icode=${icode:-000}
 if [ "$icode" = "200" ] && printf '%s' "$ictype" | grep -qi '^image/'; then
   echo "- ❌ proxy d'images ouvert : /_image transforme une image d'un domaine tiers ($IMG_TIERS → HTTP 200, $ictype) — n'importe qui peut consommer le CPU et la bande passante du serveur : image.remotePatterns avec un hostname explicite (jamais le protocole seul)"
 else
-  echo "- ✅ /_image refuse une image d'un domaine tiers (HTTP ${icode:-000})"
+  case "$icode" in
+    400|403|404) echo "- ✅ /_image refuse une image d'un domaine tiers (HTTP $icode)";;
+    *) echo "- ⚠️ /_image indéterminé (HTTP $icode) : l'image distante $IMG_TIERS est injoignable depuis le serveur, ou la sonde a reçu une redirection ou une erreur — un 5xx signifie souvent que le domaine est AUTORISÉ mais le téléchargement a échoué : vérifier image.remotePatterns (hostname explicite)";;
+  esac
 fi
 
 echo
 echo "## Source maps JavaScript publiques"
 echo
-curl -s -A "$UA" --max-time 20 "$URL" -o "$TMP/home.html"
+curl -s -A "$UA" --max-time 20 "${FINAL:-$URL}" -o "$TMP/home.html"
 # JS de la page, y compris ceux des îlots Astro (component-url / renderer-url), sans query string
 js=$(grep -oE '(src|href|component-url|renderer-url)="[^"]+\.m?js(\?[^"]*)?"' "$TMP/home.html" \
   | sed -E 's/^[a-z-]+="//; s/"$//; s/\?.*$//' | awk '!s[$0]++' | head -12)
@@ -133,7 +139,7 @@ fi
 echo
 echo "## Méthodes HTTP et CORS"
 echo
-opt=$(curl -s -o /dev/null -D - -X OPTIONS -A "$UA" --max-time 15 "$URL" | grep -iE '^(allow|access-control-allow-origin):' | tr -d '\r')
+opt=$(curl -s -o /dev/null -D - -X OPTIONS -A "$UA" --max-time 15 "${FINAL:-$URL}" | grep -iE '^(allow|access-control-allow-origin):' | tr -d '\r')
 echo "- OPTIONS : ${opt:-aucun en-tête Allow/CORS exposé}"
-cors=$(curl -s -o /dev/null -D - -H "Origin: https://evil.example" -A "$UA" --max-time 15 "$URL" | grep -i '^access-control-allow-origin:' | tr -d '\r')
+cors=$(curl -s -o /dev/null -D - -H "Origin: https://evil.example" -A "$UA" --max-time 15 "${FINAL:-$URL}" | grep -i '^access-control-allow-origin:' | tr -d '\r')
 [ -n "$cors" ] && echo "- ⚠️ CORS sur la page HTML pour une origine arbitraire : $cors" || echo "- ✅ pas de CORS ouvert sur la page HTML"
