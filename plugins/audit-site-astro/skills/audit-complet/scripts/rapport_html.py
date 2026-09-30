@@ -231,23 +231,27 @@ def _url_propre(u):
 
 
 def _lien(x):
+    if "\x00" in x.group(2):  # du code en ligne dans l'URL : ce n'est pas un lien
+        return x.group(0)
     url = _url_propre(html.unescape(x.group(2)))
     return f'<a href="{e(url)}" rel="noopener">{x.group(1)}</a>' if url else x.group(1)
 
 
 def _inline(txt):
-    morceaux = re.split(r"`([^`]+)`", txt)
-    out = []
+    """Texte en ligne -> HTML. Les codes en ligne sont mis de côté (jeton \\x00N\\x00) pour que le gras et l'italique les entourent."""
+    morceaux = re.split(r"`([^`]+)`", txt.replace("\x00", ""))
+    codes, reste = [], []
     for i, m in enumerate(morceaux):
         if i % 2:
-            out.append(f"<code>{e(m)}</code>")
-            continue
-        m = e(m)
-        m = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", _lien, m)
-        m = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", m)
-        m = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<em>\1</em>", m)
-        out.append(m)
-    return "".join(out)
+            reste.append(f"\x00{len(codes)}\x00")
+            codes.append(f"<code>{e(m)}</code>")
+        else:
+            reste.append(e(m))
+    m = "".join(reste)
+    m = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", _lien, m)
+    m = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", m)
+    m = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<em>\1</em>", m)
+    return re.sub(r"\x00(\d+)\x00", lambda x: codes[int(x.group(1))], m)
 
 
 _SEP = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
@@ -278,22 +282,44 @@ def _cellules(ligne):
     return cel
 
 
+_CASE = re.compile(r"^\[([ xX])\]\s+(.*)$", re.S)
+
+
+def _item_html(parts):
+    """Contenu d'un <li> : texte (cases à cocher en symboles), puis paragraphes et blocs de code rattachés."""
+    m = _CASE.match(parts[0][1])
+    premier = ("☑ " if m.group(1) != " " else "☐ ") + _inline(m.group(2)) if m else _inline(parts[0][1])
+    return premier + "".join(f"<p>{_inline(t)}</p>" if k == "p" else t for k, t in parts[1:])
+
+
 def _liste(items):
-    """items : [(indent, ordonne, texte)] -> HTML imbriqué."""
+    """items : [(indent, ordonne, parts, numero)] -> HTML imbriqué ; un <ol> qui ne commence pas à 1 porte `start`."""
     out, pile = [], []  # pile : [(indent, balise)]
-    for indent, ordonne, texte in items:
+    for indent, ordonne, parts, numero in items:
         balise = "ol" if ordonne else "ul"
         while pile and indent < pile[-1][0]:
             out.append(f"</li></{pile.pop()[1]}>")
         if pile and indent == pile[-1][0]:
             out.append("</li>")
         elif not pile or indent > pile[-1][0]:
-            out.append(f"<{balise}>")
+            debut = f' start="{numero}"' if ordonne and numero not in (None, 1) else ""
+            out.append(f"<{balise}{debut}>")
             pile.append((indent, balise))
-        out.append(f"<li>{_inline(texte)}")
+        out.append(f"<li>{_item_html(parts)}")
     while pile:
         out.append(f"</li></{pile.pop()[1]}>")
     return "".join(out)
+
+
+def _bloc_code(lignes, i):
+    """Bloc ``` commençant à lignes[i] (éventuellement indenté) -> (<pre><code> échappé, indice suivant). L'indentation d'ouverture est retirée."""
+    retrait = len(lignes[i]) - len(lignes[i].lstrip())
+    bloc, i = [], i + 1
+    while i < len(lignes) and not lignes[i].lstrip().startswith("```"):
+        ln = lignes[i]
+        bloc.append(ln[min(retrait, len(ln) - len(ln.lstrip())):])
+        i += 1
+    return f"<pre><code>{e(chr(10).join(bloc))}</code></pre>", i + 1
 
 
 def markdown_vers_html(md, decalage=0):
@@ -308,12 +334,8 @@ def markdown_vers_html(md, decalage=0):
         if not l.strip():
             i += 1
         elif l.lstrip().startswith("```"):
-            bloc, i = [], i + 1
-            while i < len(lignes) and not lignes[i].lstrip().startswith("```"):
-                bloc.append(lignes[i])
-                i += 1
-            i += 1
-            out.append(f"<pre><code>{e(chr(10).join(bloc))}</code></pre>")
+            bloc, i = _bloc_code(lignes, i)
+            out.append(bloc)
         elif re.match(r"^#{1,6}\s", l):
             m = re.match(r"^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$", l)
             n = min(6, len(m.group(1)) + decalage)
@@ -339,17 +361,34 @@ def markdown_vers_html(md, decalage=0):
                 i += 1
             out.append(f"<blockquote>{markdown_vers_html(chr(10).join(bloc), decalage)}</blockquote>")
         elif _ITEM.match(l):
-            items = []
+            items, sep = [], False  # item : [indent, ordonne, parts, numero] ; parts : ["t"|"p"|"h", contenu]
             while i < len(lignes):
-                m = _ITEM.match(lignes[i])
+                ln = lignes[i]
+                m = _ITEM.match(ln)
                 if m:
-                    items.append([len(m.group(1).expandtabs(4)), m.group(2)[0].isdigit(), m.group(3)])
+                    ordonne = m.group(2)[0].isdigit()
+                    items.append([len(m.group(1).expandtabs(4)), ordonne, [["t", m.group(3)]], int(m.group(2)[:-1]) if ordonne else None])
                     i += 1
-                elif lignes[i].strip() and lignes[i].startswith((" ", "\t")) and items:  # continuation
-                    items[-1][2] += " " + lignes[i].strip()
-                    i += 1
-                elif not lignes[i].strip() and i + 1 < len(lignes) and _ITEM.match(lignes[i + 1]):
-                    i += 1
+                elif ln.strip() and ln.startswith((" ", "\t")) and items:
+                    parts = items[-1][2]
+                    if ln.lstrip().startswith("```"):  # bloc de code rattaché à l'étape courante
+                        bloc, i = _bloc_code(lignes, i)
+                        parts.append(["h", bloc])
+                    else:  # continuation ; après une ligne vide ou un bloc, nouveau paragraphe
+                        if sep or parts[-1][0] == "h":
+                            parts.append(["p", ln.strip()])
+                        else:
+                            parts[-1][1] += " " + ln.strip()
+                        i += 1
+                    sep = False
+                elif not ln.strip():
+                    j = i
+                    while j < len(lignes) and not lignes[j].strip():
+                        j += 1
+                    if j < len(lignes) and (_ITEM.match(lignes[j]) or (items and lignes[j].startswith((" ", "\t")))):
+                        i, sep = j, True
+                    else:
+                        break
                 else:
                     break
             out.append(_liste(items))
@@ -521,9 +560,10 @@ def liste_fichiers(audit):
 
 
 # --- Dossier CORRECTIONS/ : plan de correction et guides en annexe ---------------------------------------------------
-_NUM = re.compile(r"^[0-9]{2,3}$")
-_FICHIER = re.compile(r"^[0-9]{2,3}-[a-z0-9-]+\.md$")  # nom simple : ni séparateur de chemin, ni « .. »
+_NUM = re.compile(r"[0-9]{2,3}")
+_FICHIER = re.compile(r"[0-9]{2,3}-[a-z0-9-]+\.md")  # nom simple : ni séparateur de chemin, ni « .. »
 _FRONTMATTER = re.compile(r"\A---[ \t]*\n.*?\n---[ \t]*(\n|\Z)", re.S)
+TAILLE_MAX_FICHE = 512 * 1024
 MENTION_CORRECTIONS = "Le dossier CORRECTIONS/ contient ces mêmes fiches, à donner à votre agent de code."
 
 # Ajouté à la feuille de style seulement quand le dossier CORRECTIONS/ est exploitable (sinon la page reste inchangée).
@@ -534,7 +574,7 @@ CSS_CORRECTIONS = """
 .fiche h3{margin-top:.3em}
 @media print{
 .fiche{break-before:page;margin-top:0;padding-top:0;border-top:0}
-.fiche pre,pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow:visible;break-inside:auto}
+.fiche pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow:visible;break-inside:auto}
 .fiche .table-wrap{overflow:visible}
 }
 """
@@ -567,7 +607,7 @@ def charger_corrections(audit):
         return None
     try:
         data = json.loads(index.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as ex:
+    except (OSError, ValueError, RecursionError) as ex:
         _avertir(f"index.json illisible ({ex.__class__.__name__}), section ignorée")
         return None
     if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("corrections"), list):
@@ -580,16 +620,19 @@ def charger_corrections(audit):
             _avertir("entrée de correction invalide, ignorée")
             continue
         num, nom = brut.get("num"), brut.get("fichier")
-        if not isinstance(num, str) or not _NUM.match(num) or num in vus:
+        if not isinstance(num, str) or not _NUM.fullmatch(num) or num in vus:
             _avertir(f"numéro de correction invalide ou en double ({num!r}), ignoré")
             continue
-        if not isinstance(nom, str) or not _FICHIER.match(nom):
+        if not isinstance(nom, str) or not _FICHIER.fullmatch(nom):
             _avertir(f"correction {num} : nom de fichier refusé ({nom!r}), ignorée")
             continue
         chemin = dossier / nom
         try:
             if chemin.is_symlink() or chemin.resolve().parent != racine:
                 raise OSError("hors du dossier")
+            if chemin.stat().st_size > TAILLE_MAX_FICHE:
+                _avertir(f"correction {num} : fiche {nom} trop volumineuse (> {TAILLE_MAX_FICHE // 1024} Ko), ignorée")
+                continue
             md = chemin.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             _avertir(f"correction {num} : fiche {nom} absente ou illisible, ignorée")

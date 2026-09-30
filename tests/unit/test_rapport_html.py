@@ -341,6 +341,16 @@ class TestRapportHtmlCorrections(unittest.TestCase):
         self.assertNotIn("Guides de correction", h)
         self.assertIn("CORRECTIONS/", err)
 
+    def test_num_et_fichier_avec_retour_a_la_ligne_refuses(self):
+        liste = self.corrections([("03", "Bonne", []), ("04", "Faux numéro", []), ("05", "Faux fichier", [])])
+        liste[1]["num"] = "03\n"
+        liste[2]["fichier"] = "05-correction-5.md\n"
+        (self.dossier / "index.json").write_text(json.dumps({"version": 1, "corrections": liste}), encoding="utf-8")
+        h, err = self.page()
+        self.assertEqual(re.findall(r'id="(correction-[^"]*)"', h), ["correction-03"])
+        self.assertNotIn("\n\"", h)
+        self.assertEqual(err.count("CORRECTIONS/"), 2)
+
     def test_fiche_illisible_ignoree(self):
         self.corrections([("01", "Binaire", []), ("02", "Bonne", [])], fiches={"01": None})
         (self.dossier / "01-correction-1.md").write_bytes(b"\xff\xfe\x00\x80 invalide")
@@ -379,6 +389,102 @@ class TestRapportHtmlCorrections(unittest.TestCase):
         r = subprocess.run([sys.executable, str(SCRIPTS / "rapport_html.py"), str(self.audit)], check=True, capture_output=True, text=True)
         self.assertEqual(r.stderr, "")
         self.assertIn('id="correction-01"', (self.audit / "RAPPORT.html").read_text(encoding="utf-8"))
+
+
+FICHES_REELLES = SCRIPTS.parent / "references/fiches"
+
+
+class TestMarkdownListes(unittest.TestCase):
+    def md(self, texte, decalage=0):
+        import rapport_html
+        return rapport_html.markdown_vers_html(texte, decalage)
+
+    def test_bloc_indente_dans_une_etape_reste_dans_le_li_sans_indentation(self):
+        h = self.md("1. Étape **un**\n\n   ```astro\n   <div a=\"1\">\n     <b>x</b>\n   </div>\n   ```\n2. Étape deux\n")
+        self.assertNotIn("```", h)
+        self.assertEqual(h.count("<ol"), 1)
+        self.assertIn("<li>Étape <strong>un</strong><pre><code>&lt;div a=&quot;1&quot;&gt;\n  &lt;b&gt;x&lt;/b&gt;\n&lt;/div&gt;</code></pre></li><li>Étape deux</li>", h)
+
+    def test_paragraphe_apres_bloc_ou_ligne_vide_reste_dans_l_etape(self):
+        h = self.md("1. Un\n\n   suite du un\n\n   ```bash\n   ls\n   ```\n\n   après le code\n2. Deux\n")
+        self.assertEqual(h.count("<ol"), 1)
+        self.assertIn("<li>Un<p>suite du un</p><pre><code>ls</code></pre><p>après le code</p></li><li>Deux</li>", h)
+
+    def test_liste_interrompue_garde_sa_numerotation(self):
+        h = self.md("1. a\n2. b\n\n```bash\nx\n```\n\n3. c\n4. d\n")
+        self.assertIn('<ol start="3"><li>c</li>', h)
+        self.assertEqual(h.count('<ol>'), 1)
+        self.assertNotIn('start="1"', h)
+
+    def test_gras_autour_du_code_en_ligne(self):
+        h = self.md("**`aria-hidden`** et **le `<body>` seul** et [`lien`](https://exemple.test/)")
+        self.assertIn("<strong><code>aria-hidden</code></strong>", h)
+        self.assertIn("<strong>le <code>&lt;body&gt;</code> seul</strong>", h)
+        self.assertIn('<a href="https://exemple.test/" rel="noopener"><code>lien</code></a>', h)
+        self.assertEqual(self.md("[x](`javascript:alert(1)`)").count("href"), 0)
+        self.assertNotIn("\x00", self.md("a \x00 `b` \x000\x00"))
+
+    def test_cases_a_cocher_en_symboles_sans_input(self):
+        h = self.md("- [ ] à faire\n- [x] fait\n- [X] fait aussi\n- [texte] normal\n")
+        self.assertIn("<li>☐ à faire</li>", h)
+        self.assertIn("<li>☑ fait</li>", h)
+        self.assertIn("<li>☑ fait aussi</li>", h)
+        self.assertIn("<li>[texte] normal</li>", h)
+        self.assertNotIn("<input", h)
+
+    def test_bloc_indente_hors_liste_perd_son_retrait(self):
+        self.assertIn("<pre><code>a\n  b</code></pre>", self.md("   ```\n   a\n     b\n   ```\n"))
+
+
+class TestFichesReelles(unittest.TestCase):
+    """Rend de vraies fiches de references/fiches/ : les blocs de code des étapes numérotées et les listes doivent tenir."""
+
+    def rendre(self, nom):
+        import rapport_html
+        brut = (FICHES_REELLES / nom).read_text(encoding="utf-8")
+        md = re.sub(r"\A---\n.*?\n---\n", "", brut, count=1, flags=re.S)
+        return md, rapport_html.markdown_vers_html(md, decalage=2)
+
+    def test_fiches_avec_blocs_sous_les_etapes(self):
+        for nom in ("a11y-aria-noms-masquage.md", "convex-collect-non-borne.md", "secu-anti-clickjacking.md", "perf-images-responsives.md"):
+            with self.subTest(nom):
+                md, h = self.rendre(nom)
+                self.assertNotIn("```", h)
+                self.assertNotIn("<script", h.lower())
+                self.assertEqual(h.count("<pre>"), h.count("</pre>"))
+                self.assertGreaterEqual(h.count("<pre>"), md.count("```") // 2)
+                self.assertNotRegex(h, r"<pre><code>[ \t]")  # pas de retrait résiduel en tête de bloc
+                self.assertNotRegex(h, r"<code>[^<]*<(?!/code)")  # le code est échappé : jamais de balise dans <code>
+                self.assertNotIn("**", re.sub(r"<pre>.*?</pre>|<code>.*?</code>", "", h, flags=re.S))
+                self.assertNotIn("[ ]", h)
+                # numérotation continue : « 1. » n'ouvre une liste que là où le Markdown recommence à 1 ; une liste
+                # interrompue par un bloc ou un paragraphe hors étape reprend avec <ol start="N">, jamais à 1
+                self.assertEqual(h.count("<ol>"), len(re.findall(r"(?m)^\s*1\. ", md)))
+                for debut in re.findall(r'<ol start="(\d+)">', h):
+                    self.assertRegex(md, rf"(?m)^\s*{debut}\. ")
+
+    def test_etapes_numerotees_et_code_rattache_a_l_etape(self):
+        _, h = self.rendre("a11y-aria-noms-masquage.md")
+        correction = h[h.index("Correction</h4>"):h.index("Critères d")]
+        self.assertEqual(correction.count("<ol"), 1)
+        self.assertEqual(correction.count("<li>"), 7)
+        self.assertNotIn("start=", correction)
+        premiere = correction[correction.index("<li>"):correction.index("</li><li>")]
+        self.assertIn("<pre><code>&lt;div role=&quot;dialog&quot;", premiere)
+        self.assertIn("&lt;button type=&quot;button&quot; role=&quot;switch&quot;", premiere)
+
+    def test_fiche_serveur_nginx_echappee(self):
+        md, h = self.rendre("secu-anti-clickjacking.md")
+        self.assertIn("nginx", md)
+        code = "".join(re.findall(r"<pre><code>(.*?)</code></pre>", h, flags=re.S))
+        self.assertIn("add_header", code)
+        self.assertIn("&quot;", code)
+        self.assertNotRegex(code, r'add_header [^\n]*"')  # guillemets échappés
+
+    def test_case_a_cocher_des_criteres_d_acceptation(self):
+        _, h = self.rendre("a11y-aria-noms-masquage.md")
+        self.assertIn("<li>☐ ", h)
+        self.assertNotIn("<input", h)
 
 
 if __name__ == "__main__":
