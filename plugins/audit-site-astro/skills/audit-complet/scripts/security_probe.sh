@@ -75,7 +75,19 @@ check "/__vite_ping" "" "moyenne"
 check "/@vite/client" "import.meta.hot|vite" "haute"
 check "/phpinfo.php" "phpinfo\(\)|PHP Version" "haute"
 check "/server-status" "Apache Server Status" "moyenne"
-check "/.well-known/security.txt" "Contact:" "info"
+# security.txt (RFC 9116) : fichier à PUBLIER, sa présence est une bonne pratique (jamais « exposé »)
+scode=$(curl -s -A "$UA" --max-time 15 -o "$TMP/sectxt" -w '%{http_code}' "$BASE/.well-known/security.txt")
+scode=${scode:-000}
+ssize=$(wc -c < "$TMP/sectxt" 2>/dev/null | tr -d ' ')
+if [ "$scode" = "200" ] && grep -qaiE '^contact:' "$TMP/sectxt"; then
+  sverdict="✅ présent"
+elif [ "$scode" = "200" ] || [ "$scode" = "404" ] || [ "$scode" = "410" ]; then
+  sverdict="⚠️ absent (recommandé, RFC 9116)"
+  [ "$scode" = "200" ] && sverdict="$sverdict — HTTP 200 sans champ Contact: (page générique servie à la place)"
+else
+  sverdict="⚠️ HTTP $scode (security.txt recommandé, RFC 9116)"
+fi
+echo "| /.well-known/security.txt | $scode | ${ssize:-0} | $sverdict |"
 # Restes WordPress (migrations)
 check "/wp-login.php" "wp-submit|user_login" "info"
 check "/xmlrpc.php" "XML-RPC" "info"

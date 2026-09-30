@@ -73,5 +73,28 @@ class TestSondeAstro(unittest.TestCase):
         self.assertIn("# Sonde d'exposition — " + final.base, md)
 
 
+class TestSecurityTxt(unittest.TestCase):
+    """security.txt (RFC 9116) est un fichier que le site DOIT publier : jamais « EXPOSÉ »."""
+
+    def ligne(self, md):
+        return next(l for l in md.splitlines() if l.startswith("| /.well-known/security.txt |"))
+
+    def test_present(self):
+        md = sonder({"/": (200, HTML, ACCUEIL),
+                     "/.well-known/security.txt": (200, {"Content-Type": "text/plain"},
+                                                   "Contact: mailto:securite@ex.fr\nExpires: 2027-01-01T00:00:00Z\n")}, {})
+        self.assertIn("✅ présent", self.ligne(md))
+        self.assertNotIn("EXPOSÉ", md)
+
+    def test_absent(self):
+        md = sonder({"/": (200, HTML, ACCUEIL)}, {})
+        self.assertIn("⚠️ absent (recommandé, RFC 9116)", self.ligne(md))
+
+    def test_page_generique_en_200_vaut_absent(self):  # SPA / soft 404 : ce n'est pas un security.txt
+        md = sonder({"/": (200, HTML, ACCUEIL)}, {"/": (200, HTML, "<html><body>accueil</body></html>")})
+        self.assertIn("⚠️ absent", self.ligne(md))
+        self.assertNotIn("✅ présent", self.ligne(md))
+
+
 if __name__ == "__main__":
     unittest.main()
