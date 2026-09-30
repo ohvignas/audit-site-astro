@@ -60,6 +60,20 @@ class TestManifestes(unittest.TestCase):
                     self.assertTrue(source.is_dir(), "source introuvable : %s" % source)
                     self.assertTrue((source / "skills").is_dir(), "pas de dossier skills/")
 
+    def test_champs_obligatoires_des_marketplaces(self):
+        def non_vide(valeur):
+            return isinstance(valeur, str) and valeur.strip() != ""
+
+        for chemin in (MARKETPLACE_CLAUDE, MARKETPLACE_CURSOR):
+            with self.subTest(chemin=str(chemin.relative_to(RACINE))):
+                owner = charger(chemin).get("owner")
+                self.assertIsInstance(owner, dict, "owner absent")
+                self.assertTrue(non_vide(owner.get("name")), "owner.name vide")
+        for plugin in charger(MARKETPLACE_CURSOR)["plugins"]:
+            for champ in ("name", "source", "description"):
+                with self.subTest(plugin=plugin.get("name"), champ=champ):
+                    self.assertTrue(non_vide(plugin.get(champ)), "plugins[].%s vide" % champ)
+
     def test_meme_nom_et_version_claude_et_cursor(self):
         pc, pu = charger(PLUGIN_CLAUDE), charger(PLUGIN_CURSOR)
         self.assertEqual(pc["name"], pu["name"])
@@ -82,6 +96,8 @@ class TestManifestes(unittest.TestCase):
                 self.assertEqual(champs.get("name"), dossier)
                 self.assertRegex(dossier, NOM_SKILL)
                 description = champs.get("description", "")
+                self.assertNotIn(description, (">", "|", ">-", "|-", ">+", "|+"),
+                                 "description multi-ligne non supportee par le parseur")
                 self.assertTrue(description.strip(), "description vide")
                 self.assertLessEqual(len(description), 1024)
 

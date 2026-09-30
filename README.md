@@ -121,13 +121,15 @@ Le même plugin s'installe dans Cursor (manifeste `.cursor-plugin/`).
 
 **a. Depuis le dépôt GitHub** : dans Cursor, *Customize* → *Plugins* → *From GitHub repository*, puis `https://github.com/ohvignas/audit-site-astro`.
 
-**b. Ou par copie des skills** (à jour à chaque `git pull`, sans passer par le marketplace) :
+**b. Ou par copie des skills** (sans passer par le marketplace) :
 
 ```bash
 git clone https://github.com/ohvignas/audit-site-astro ~/.audit-site-astro
 mkdir -p ~/.cursor/skills
 cp -R ~/.audit-site-astro/plugins/audit-site-astro/skills/* ~/.cursor/skills/
 ```
+
+Pour mettre à jour : `git -C ~/.audit-site-astro pull` puis relancer la commande `cp -R`.
 
 Puis, dans le chat de Cursor, tapez `/audit-complet` ou demandez en langage naturel : « Fais un audit complet de https://votre-site.fr, le code est dans ce dossier. »
 
