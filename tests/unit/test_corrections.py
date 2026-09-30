@@ -1,4 +1,5 @@
 import ast
+import html as html_mod
 import json
 import os
 import pathlib
@@ -541,7 +542,8 @@ class TestEchappement(Base):
         # crawl : 5 premiers exemples seulement
         self.assertIn("  - `# titre`", md)
         self.assertIn("  - `- [ ] x`", md)
-        self.assertIn("  - ```a`b``c```", md)  # clôture plus longue que toute suite de backticks du texte
+        # un exemple qui contient un accent grave n'est pas mis en code en ligne mais en bloc, clôture plus longue que ses suites
+        self.assertIn("  - Exemple (en bloc : contient des accents graves) :\n\n    ```text\n    a`b``c\n    ```\n", md)
         self.assertIn("  - `[31mrouge[0m`", md)  # ESC retiré, le reste est une donnée inerte
 
     def test_aucun_caractere_de_controle_dans_les_fichiers(self):
@@ -553,6 +555,17 @@ class TestEchappement(Base):
             self.assertIsNone(interdit.search(texte), nom)
         idx = json.loads((cible / "index.json").read_text(encoding="utf-8"))
         self.assertIsNone(interdit.search(json.dumps(idx, ensure_ascii=False)))
+
+    def test_exemple_avec_accent_grave_en_bloc_jamais_en_lien(self):
+        import rapport_html
+        for brut in ("a`[b](https://evil.example/x)", "```[b](https://evil.example/x)", "a````b", "`"):
+            lignes = corrections._lignes_exemples({"source": "crawl", "exemples": [brut, "https://exemple.test/ok"]}, "  ")
+            md = "\n".join(["- constat"] + lignes)
+            h = rapport_html.markdown_vers_html(md)
+            self.assertNotIn("<a", h, md)
+            self.assertIn(f"<pre><code>{html_mod.escape(brut)}</code></pre>", h, md)
+            self.assertIn("<code>https://exemple.test/ok</code>", h)  # sans accent grave : code en ligne, comme avant
+            self.assertEqual(h.count("<ul>"), 2, h)  # le bloc reste dans la liste des exemples
 
     def test_prose_et_code_unitaires(self):
         self.assertEqual(corrections.prose("# x"), "\\# x")

@@ -240,28 +240,60 @@ def _lien(x, echappes):
     return f'<a href="{e(url)}" rel="noopener">{x.group(1)}</a>' if url else x.group(1)
 
 
-# Échappement Markdown (CommonMark) : « \\ » suivi d'une ponctuation ASCII donne ce caractère, littéral ; ou code en ligne.
-_ECHAP_OU_CODE = re.compile(r"\\([!-/:-@\[-`{-~])|`([^`]+)`")
+# Échappement Markdown (CommonMark) : « \\ » suivi d'une ponctuation ASCII donne ce caractère, littéral.
+_ECHAPPEMENT = re.compile(r"\\([!-/:-@\[-`{-~])")
+_SUITE_GRAVES = re.compile(r"`+")
+# Ouverture de bloc de code (CommonMark) : au moins 3 accents graves, puis une info sans accent grave (sinon : code en ligne)
+_OUVERTURE_BLOC = re.compile(r"^\s*`{3,}[^`]*$")
+
+
+def _code_en_ligne(txt, i):
+    """Code en ligne CommonMark qui commence à txt[i] (suite de N accents graves) : (contenu, fin) si une suite d'exactement N
+    le ferme plus loin, sinon None. Contenu littéral ; un espace retiré à chaque bord s'il y en a aux deux et pas que des espaces."""
+    n = _SUITE_GRAVES.match(txt, i).end() - i
+    for m in _SUITE_GRAVES.finditer(txt, i + n):
+        if m.end() - m.start() == n:
+            contenu = txt[i + n:m.start()]
+            if len(contenu) >= 2 and contenu[0] == " " and contenu[-1] == " " and contenu.strip(" "):
+                contenu = contenu[1:-1]
+            return contenu, m.end()
+    return None
 
 
 def _inline(txt):
     """Texte en ligne -> HTML.
 
-    Les codes en ligne (jeton \\x00N\\x00) et les caractères échappés « \\X » (jeton \\x01N\\x01) sont mis de côté avant les
-    liens, le gras et l'italique : un caractère échappé est rendu littéralement et ne forme jamais de syntaxe ; une barre
-    oblique inverse dans un code en ligne reste telle quelle (CommonMark)."""
+    Les codes en ligne (jeton \\x00N\\x00, suites de 1 à N accents graves, CommonMark) et les caractères échappés « \\X » (jeton
+    \\x01N\\x01) sont mis de côté avant les liens, le gras et l'italique : leur contenu est rendu littéralement et ne forme jamais
+    de syntaxe ; une barre oblique inverse dans un code en ligne reste telle quelle ; une suite d'accents graves sans fermeture
+    de même longueur reste du texte."""
     txt = txt.replace("\x00", "").replace("\x01", "")
-    codes, echappes, reste, pos = [], [], [], 0
-    for x in _ECHAP_OU_CODE.finditer(txt):
-        reste.append(e(txt[pos:x.start()]))
-        if x.group(1) is not None:
+    codes, echappes, reste, texte, i = [], [], [], [], 0
+    while i < len(txt):
+        c = txt[i]
+        m = _ECHAPPEMENT.match(txt, i) if c == "\\" else None
+        if m:
+            reste.append(e("".join(texte)))
+            texte = []
             reste.append(f"\x01{len(echappes)}\x01")
-            echappes.append(x.group(1))
+            echappes.append(m.group(1))
+            i = m.end()
+        elif c == "`":
+            span = _code_en_ligne(txt, i)
+            if span is None:  # suite sans fermeture : du texte, en entier (sa fin ne peut pas ouvrir un code)
+                fin = _SUITE_GRAVES.match(txt, i).end()
+                texte.append(txt[i:fin])
+                i = fin
+            else:
+                reste.append(e("".join(texte)))
+                texte = []
+                reste.append(f"\x00{len(codes)}\x00")
+                codes.append(f"<code>{e(span[0])}</code>")
+                i = span[1]
         else:
-            reste.append(f"\x00{len(codes)}\x00")
-            codes.append(f"<code>{e(x.group(2))}</code>")
-        pos = x.end()
-    reste.append(e(txt[pos:]))
+            texte.append(c)
+            i += 1
+    reste.append(e("".join(texte)))
     m = "".join(reste)
     m = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", lambda x: _lien(x, echappes), m)
     m = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", m)
@@ -328,10 +360,14 @@ def _liste(items):
 
 
 def _bloc_code(lignes, i):
-    """Bloc ``` commençant à lignes[i] (éventuellement indenté) -> (<pre><code> échappé, indice suivant). L'indentation d'ouverture est retirée."""
+    """Bloc ``` commençant à lignes[i] (éventuellement indenté) -> (<pre><code> échappé, indice suivant). L'indentation d'ouverture est retirée.
+
+    Clôture CommonMark : une ligne faite seulement d'accents graves, au moins autant que l'ouverture (```` ferme ````, pas ```)."""
     retrait = len(lignes[i]) - len(lignes[i].lstrip())
+    n = len(_SUITE_GRAVES.match(lignes[i].lstrip()).group(0))
+    cloture = re.compile(r"`{%d,}" % n)
     bloc, i = [], i + 1
-    while i < len(lignes) and not lignes[i].lstrip().startswith("```"):
+    while i < len(lignes) and not cloture.fullmatch(lignes[i].strip()):
         ln = lignes[i]
         bloc.append(ln[min(retrait, len(ln) - len(ln.lstrip())):])
         i += 1
@@ -349,7 +385,7 @@ def markdown_vers_html(md, decalage=0):
         l = lignes[i]
         if not l.strip():
             i += 1
-        elif l.lstrip().startswith("```"):
+        elif _OUVERTURE_BLOC.match(l):
             bloc, i = _bloc_code(lignes, i)
             out.append(bloc)
         elif re.match(r"^#{1,6}\s", l):
@@ -387,7 +423,7 @@ def markdown_vers_html(md, decalage=0):
                     i += 1
                 elif ln.strip() and ln.startswith((" ", "\t")) and items:
                     parts = items[-1][2]
-                    if ln.lstrip().startswith("```"):  # bloc de code rattaché à l'étape courante
+                    if _OUVERTURE_BLOC.match(ln):  # bloc de code rattaché à l'étape courante
                         bloc, i = _bloc_code(lignes, i)
                         parts.append(["h", bloc])
                     else:  # continuation ; après une ligne vide ou un bloc, nouveau paragraphe
@@ -410,7 +446,7 @@ def markdown_vers_html(md, decalage=0):
             out.append(_liste(items))
         else:
             para = []
-            while i < len(lignes) and lignes[i].strip() and not re.match(r"^(#{1,6}\s|\s*```|\s*>)", lignes[i]) and not _ITEM.match(lignes[i]):
+            while i < len(lignes) and lignes[i].strip() and not re.match(r"^(#{1,6}\s|\s*>)", lignes[i]) and not _OUVERTURE_BLOC.match(lignes[i]) and not _ITEM.match(lignes[i]):
                 para.append(lignes[i].strip())
                 i += 1
             out.append(f"<p>{_inline(' '.join(para))}</p>")

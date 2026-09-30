@@ -596,6 +596,64 @@ class TestEchappementsMarkdown(unittest.TestCase):
         self.assertNotIn("href", self.md("[x](javascript\\:alert(1))"))
 
 
+class TestCodeEnLigneMultiple(unittest.TestCase):
+    """Codes en ligne CommonMark : une suite de N accents graves se ferme sur la suite suivante d'exactement N ; contenu littéral."""
+
+    HOSTILES = ("a`[b](https://evil.example/x)", "a`**gras**", "a``[b](https://evil.example/x)``c", "`[b](https://evil.example/x)",
+                "[b](https://evil.example/x)`", "``", "`", "a```b", "[x] a`b", "a` *it* `b", "x`<img src=x>`[y](javascript:1)",
+                " `a` ", "a\\`[b](https://evil.example/x)")
+
+    def md(self, texte, decalage=0):
+        import rapport_html
+        return rapport_html.markdown_vers_html(texte, decalage)
+
+    def test_reproduction_de_la_revue(self):
+        import corrections
+        h = self.md("- constat: " + corrections.code("a`[b](https://evil.example/x)"))
+        self.assertNotIn("<a", h)
+        self.assertIn("<code>a`[b](https://evil.example/x)</code>", h)
+        self.assertNotIn("<strong", self.md("- " + corrections.code("a`**gras**")))
+
+    def test_suites_doubles_et_triples(self):
+        self.assertEqual(self.md("``a`[b](https://e.example/)``"), "<p><code>a`[b](https://e.example/)</code></p>")
+        self.assertEqual(self.md("```x``[y](https://e.example/)```"), "<p><code>x``[y](https://e.example/)</code></p>")
+        self.assertEqual(self.md("`a` et ``b`c``"), "<p><code>a</code> et <code>b`c</code></p>")
+
+    def test_accent_grave_en_bord_de_code(self):
+        self.assertEqual(self.md("`` `a ``"), "<p><code>`a</code></p>")
+        self.assertEqual(self.md("`` a` ``"), "<p><code>a`</code></p>")
+        self.assertEqual(self.md("`  `"), "<p><code>  </code></p>")  # que des espaces : rien n'est retiré
+
+    def test_suite_sans_fermeture_reste_du_texte(self):
+        self.assertEqual(self.md("``a`"), "<p>``a`</p>")
+        self.assertEqual(self.md("a ``b` **c**"), "<p>a ``b` <strong>c</strong></p>")  # texte de confiance hors code : Markdown normal
+        self.assertEqual(self.md("```a``"), "<p>```a``</p>")
+
+    def test_aucune_syntaxe_dans_un_code(self):
+        self.assertEqual(self.md("``**x** [a](https://e.example/) *y*``"), "<p><code>**x** [a](https://e.example/) *y*</code></p>")
+
+    def test_donnees_hostiles_via_corrections_code(self):
+        import corrections, html
+        for brut in self.HOSTILES:
+            for contexte in ("- {}", "{}", "| a |\n|---|\n| {} |", "1. {} fin"):
+                h = self.md(contexte.format(corrections.code(brut)))
+                for interdit in ("<a", "<strong", "<em", "☑", "☐", "<img"):
+                    self.assertNotIn(interdit, h, f"{brut!r} dans {contexte!r} -> {h!r}")
+            h = self.md("- " + corrections.code(brut))
+            self.assertIn(f"<code>{html.escape(corrections.propre(brut))}</code>", h, brut)
+
+
+class TestBlocsDeCode(unittest.TestCase):
+    def md(self, texte):
+        import rapport_html
+        return rapport_html.markdown_vers_html(texte)
+
+    def test_la_cloture_est_une_suite_au_moins_aussi_longue_sans_texte(self):
+        self.assertEqual(self.md("````text\n```x [a](https://e.example/)\n```\n````\nfin"),
+                         "<pre><code>```x [a](https://e.example/)\n```</code></pre>\n<p>fin</p>")
+        self.assertEqual(self.md("```\na\n```\nb"), "<pre><code>a</code></pre>\n<p>b</p>")
+
+
 def html_texte(s):
     import html
     return html.escape(s)

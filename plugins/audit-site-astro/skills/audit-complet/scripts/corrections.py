@@ -201,12 +201,26 @@ def construire(audit, dossier_fiches):
 _RESTE = re.compile(r"^… et (\d+) autres?$")
 
 
+def _lignes_exemple(e, retrait):
+    """Un exemple (donnée non fiable) : code en ligne s'il n'a pas d'accent grave ; sinon bloc de code dans l'élément de liste,
+    clôture plus longue que toute suite d'accents graves du texte (une ligne, jamais une clôture). Défense en profondeur : un
+    code en ligne à suites multiples mal lu par un moteur Markdown rendrait le reste du texte actif (liens, gras)."""
+    if "`" not in e:
+        return [f"{retrait}- {code(e)}"]
+    cloture = "`" * max(3, max(len(m) for m in re.findall(r"`+", e)) + 1)
+    interieur = retrait + "  "
+    return [f"{retrait}- Exemple (en bloc : contient des accents graves) :", "",
+            f"{interieur}{cloture}text", f"{interieur}{e}", f"{interieur}{cloture}", ""]
+
+
 def _lignes_exemples(sig, retrait):
     """Exemples d'un signal en code en ligne : 10 au plus, puis « … et N autres » (les restes déjà annoncés par le signal s'ajoutent)."""
     exs = exemples_sur(sig)
     deja = sum(int(m.group(1)) for m in (_RESTE.match(e) for e in exs) if m)
     exs = [e for e in exs if not _RESTE.match(e)]
-    out = [f"{retrait}- {code(e)}" for e in exs[:MAX_EXEMPLES]]
+    out = []
+    for e in exs[:MAX_EXEMPLES]:
+        out += _lignes_exemple(e, retrait)
     reste = max(len(exs) - MAX_EXEMPLES, 0) + deja
     if reste:
         out.append(f"{retrait}- … et {reste} autres")
