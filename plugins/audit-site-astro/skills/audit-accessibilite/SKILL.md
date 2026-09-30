@@ -12,6 +12,7 @@ Pourquoi c'est dans un audit SEO/perf : une partie des critères recoupe le SEO 
 ## Données
 - `data/perf/pagespeed.json` → `echecs_autres_categories.accessibility` par page.
 - `data/code/code-scan.md` → `<img>` sans alt.
+- `data/crawl/issues.json` → `form_no_label` : champs de formulaire sans libellé (placeholder seul ou rien), relevés dans le HTML servi. Lighthouse ne les voit pas : il accepte un `placeholder` comme nom accessible. Les champs masqués, désactivés ou pièges à robots sont ignorés.
 - Test automatisé plus complet sur 5 à 10 gabarits (accueil, formation, article, catalogue, contact) :
   ```bash
   bash -c 'npx -y pa11y --standard WCAG2AA --runner axe --reporter json https://site.fr/ > "$AUDIT/data/a11y/accueil.json"'

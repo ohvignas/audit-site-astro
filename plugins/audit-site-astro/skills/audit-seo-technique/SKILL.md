@@ -13,7 +13,7 @@ Scripts : `../audit-complet/scripts/`. Format : `../audit-complet/references/for
 
 ```bash
 python3 $S/crawl_site.py https://site.fr/ --out "$AUDIT/data/crawl" --max-pages 500 --check-images 200
-bash $S/http_checks.sh https://site.fr/ "$AUDIT/data/http"
+bash $S/http_checks.sh https://site.fr/ "$AUDIT/data/http" "$AUDIT/data/crawl/pages.json"   # après le crawl (§7)
 python3 $S/astro_scan.py /chemin/projet --out "$AUDIT/data/code"
 ```
 
@@ -39,9 +39,9 @@ python3 $S/astro_scan.py /chemin/projet --out "$AUDIT/data/code"
 
 ### 4. Statuts, redirections, soft 404
 - 4xx liés en interne (`http_4xx` avec `liens_depuis`) : corriger le lien à la source (souvent une donnée Convex ou un composant de menu), ou créer une redirection 301 si la page a déménagé (`redirects` dans `astro.config`, ou au proxy).
-- **Soft 404** : `http-checks.md` §6 teste une URL inexistante ; elle doit renvoyer 404. Tester aussi une URL inexistante **sous chaque route dynamique** (ex. `/blog/zz-inexistant`, `/outils/zz-inexistant`) :
+- **Soft 404** : `http-checks.md` §6 teste une URL inexistante à la racine ; elle doit renvoyer 404. La §7 teste une URL inexistante **sous chaque segment qui regroupe au moins 2 pages du crawl** (`/blog/`, `/formations/`… : routes dynamiques probables) : une ligne `❌ soft 404 sous /SEG/` = la route répond 200. La §7 ne sonde que les chemins à 2 niveaux et ne suit pas les redirections : pour `/fr/blog/x` ou un site en `trailingSlash: 'always'` (308 puis page), tester à la main avec `-L` :
   ```bash
-  for p in /blog/zz-audit /formations/zz-audit /outils/zz-audit; do curl -s -o /dev/null -w "%{http_code} $p\n" https://site.fr$p; done
+  for p in /fr/blog/zz-audit /blog/categorie/zz-audit; do curl -s -L -o /dev/null -w "%{http_code} $p\n" https://site.fr$p; done
   ```
   Un 200 = soft 404. Correction dans la route `[slug].astro` : `if (!item) return Astro.rewrite('/404');` (Astro ≥ 4.13), ou `Astro.response.status = 404`. `astro_scan.py` liste les routes suspectes.
 - Chaînes de redirection et 302 qui devraient être des 301.
