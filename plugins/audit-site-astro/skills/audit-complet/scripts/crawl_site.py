@@ -46,6 +46,8 @@ SKIP_PATH = re.compile(
 SKIP_QUERY = re.compile(r"(^|&)(replytocom|share|add-to-cart|add_to_wishlist|preview|s|ver|nocache)=", re.I)
 COUNT_TAGS = {"ul", "ol", "table", "time", "main", "article", "iframe", "video", "form", "nav", "script", "link"}
 SKIP_TEXT_TAGS = {"script", "style", "noscript", "svg", "template"}
+# Chemins de CSS/JS nécessaires au rendu : WordPress, Astro (/_astro/), Next.js (/_next/)
+ASSETS_RX = re.compile(r"\.(css|js)|wp-content/(themes|plugins)|wp-includes|/_astro\b|/_next/", re.I)
 
 
 # --------------------------------------------------------------------------- HTTP
@@ -852,16 +854,19 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
         p = pages.get(u)
         if not p:
             continue
+        cible = p
         if p["redirect_hops"]:
             add("sitemap_redirect", "URL du sitemap qui redirigent (souvent http:// ou slash final incohérent)", "moyenne",
-            {"url": u, "vers": p["final_url"]})
-        elif p["final_status"] != 200:
-            add("sitemap_non200", "URL du sitemap en erreur", "haute", {"url": u, "status": p["final_status"]})
-        elif p.get("noindex"):
+                {"url": u, "vers": p["final_url"]})
+            cible = pages.get(p["final_url"]) or p
+        # une redirection ne masque plus l'état de la cible : 404 et noindex restent signalés
+        if cible["final_status"] != 200:
+            add("sitemap_non200", "URL du sitemap en erreur", "haute", {"url": u, "status": cible["final_status"]})
+        elif cible.get("noindex"):
             add("sitemap_noindex", "URL du sitemap en noindex (signal contradictoire)", "haute", u)
-        elif p.get("canonicals") and p["canonicals"][0] != u:
+        elif cible.get("canonicals") and cible["canonicals"][0] != cible["url"]:
             add("sitemap_canonicalized", "URL du sitemap canonisées ailleurs", "moyenne",
-                {"url": u, "canonical": p["canonicals"][0]})
+                {"url": u, "canonical": cible["canonicals"][0]})
     home_url = next(iter(pages), None)
     for u in sitemap_eff:
         p = pages.get(u)
@@ -877,7 +882,7 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
     elif not robots.allowed("Googlebot", f"{scheme}://{host}/"):
         add("robots_blocks_all", "robots.txt bloque tout le site pour Googlebot", "critique")
     for rule_allow, pat in robots.rules_for("Googlebot")[0]:
-        if not rule_allow and re.search(r"\.(css|js)|wp-content/(themes|plugins)|wp-includes", pat, re.I):
+        if not rule_allow and ASSETS_RX.search(pat):
             add("robots_blocks_assets", "robots.txt bloque CSS/JS (empêche le rendu par Google)", "haute", pat)
     for tgt, srcs in variant_links.items():
         add("variant_links", "Liens internes vers une autre variante d'hôte (http / www)", "moyenne",
