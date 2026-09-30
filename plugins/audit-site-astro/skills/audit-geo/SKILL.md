@@ -5,7 +5,7 @@ description: Audit GEO (Generative Engine Optimization) — visibilité et citat
 
 # Audit GEO — visibilité dans les moteurs IA
 
-Scripts : `../audit-complet/scripts/`. Format : `../audit-complet/references/format-constat.md`. Sortie : `rapports/geo.md`.
+Scripts : `../audit-complet/scripts/` (sinon, même commande `find` que dans audit-complet §2). Format : `../audit-complet/references/format-constat.md`. Sortie : `rapports/geo.md`.
 
 ## Ce qu'on sait (et ce qu'on ne sait pas)
 Les assistants IA citent des pages qu'ils peuvent **récupérer** (robots, serveur), **comprendre** (texte présent dans le HTML sans JS, structure claire) et **juger fiables** (entité identifiable, preuves, mentions ailleurs sur le web). La plupart s'appuient sur un index de recherche : Google pour AI Overviews et AI Mode, Bing pour Copilot et une partie des autres assistants, plus leurs propres index (OAI-SearchBot, PerplexityBot, Claude-SearchBot). **Bien référencé en SEO classique = base du GEO.** Rester honnête dans le rapport : les effets de llms.txt ou du balisage FAQ sur les citations ne sont pas démontrés. Les présenter comme des paris à faible coût, pas comme des leviers garantis.

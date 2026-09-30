@@ -5,7 +5,7 @@ description: Audit SEO technique d'un site Astro — crawl complet, indexabilit�
 
 # Audit SEO technique — Astro
 
-Scripts : `../audit-complet/scripts/`. Format : `../audit-complet/references/format-constat.md`. Sortie : `rapports/seo-technique.md`.
+Scripts : `../audit-complet/scripts/` (sinon, même commande `find` que dans audit-complet §2). Format : `../audit-complet/references/format-constat.md`. Sortie : `rapports/seo-technique.md`.
 
 ## Données
 

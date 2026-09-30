@@ -115,6 +115,24 @@ ou directement `/audit-site-astro:audit-complet`.
 
 Les skills suivent le format standard des Agent Skills (`SKILL.md`) : ils fonctionnent aussi avec d'autres agents compatibles.
 
+## 🖱️ Option 2 bis : Cursor
+
+Le même plugin s'installe dans Cursor (manifeste `.cursor-plugin/`).
+
+**a. Depuis le dépôt GitHub** : dans Cursor, *Customize* → *Plugins* → *From GitHub repository*, puis `https://github.com/ohvignas/audit-site-astro`.
+
+**b. Ou par copie des skills** (à jour à chaque `git pull`, sans passer par le marketplace) :
+
+```bash
+git clone https://github.com/ohvignas/audit-site-astro ~/.audit-site-astro
+mkdir -p ~/.cursor/skills
+cp -R ~/.audit-site-astro/plugins/audit-site-astro/skills/* ~/.cursor/skills/
+```
+
+Puis, dans le chat de Cursor, tapez `/audit-complet` ou demandez en langage naturel : « Fais un audit complet de https://votre-site.fr, le code est dans ce dossier. »
+
+> **Limite connue** : le CLI `cursor-agent` ne charge pas les skills des plugins installés depuis le marketplace (bug signalé sur le forum Cursor). En ligne de commande, utilisez `--plugin-dir plugins/audit-site-astro` ou la copie dans `~/.cursor/skills/` (option b).
+
 ## 🛠️ Option 3 : sans Docker
 
 Prérequis : `python3`, `curl`, `node`/`npx`, Google Chrome ou Chromium.

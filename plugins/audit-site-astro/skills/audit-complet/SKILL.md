@@ -39,6 +39,8 @@ bash "<dossier du skill>/scripts/collect_all.sh" https://site.fr /chemin/du/proj
 # options : MAX_PAGES=800  LH_PAGES=8  RUNS=3 (médiane Lighthouse)  BUILD=1 (build d'audit + poids du bundle)  PSI_API_KEY=…
 ```
 
+Si le chemin du skill n'est pas connu (Cursor n'affiche pas « Base directory for this skill »), le retrouver : `S=$(dirname "$(find ~/.cursor ~/.claude ~/.agents . -path '*audit-complet/scripts/collect_all.sh' 2>/dev/null | head -1)")`, puis `bash "$S/collect_all.sh" …`.
+
 Durée typique : 5 à 15 minutes. Le script écrit `data/COLLECTE.md` avec le statut de chaque étape. **Lire ce fichier d'abord**, puis le code de sortie du script :
 
 - **0** : toutes les étapes sont ✅/⚠️/⏭️. Passer à l'analyse.
