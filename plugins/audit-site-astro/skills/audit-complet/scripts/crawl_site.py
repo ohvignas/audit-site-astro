@@ -58,7 +58,7 @@ def masque(tag, a):
             or bool(STYLE_MASQUE.search(a.get("style", ""))))
 
 
-ASSETS_RX = re.compile(r"\.(css|js)|wp-content/(themes|plugins)|wp-includes|/_astro\b|/_next/", re.I)
+ASSETS_RX = re.compile(r"\.(css|m?js)\b|wp-content/(themes|plugins)|wp-includes|/_astro\b|/_next/", re.I)
 
 
 # --------------------------------------------------------------------------- HTTP

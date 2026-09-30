@@ -4,6 +4,7 @@ import unittest
 
 RACINE = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(RACINE / "plugins/audit-site-astro/skills/audit-complet/scripts"))
+import crawl_site  # noqa: E402
 from crawl_site import PageParser, RobotsTxt, jsonld_types  # noqa: E402
 
 ROBOTS = """User-agent: *
@@ -38,6 +39,16 @@ class TestRobots(unittest.TestCase):
         self.assertFalse(r.allowed("Googlebot", "https://ex.fr/page?t=abc"))
         self.assertFalse(r.allowed("Googlebot", "https://ex.fr/doc.pdf"))
         self.assertTrue(r.allowed("Googlebot", "https://ex.fr/doc.pdf?v=2"))
+
+
+class TestAssetsBloques(unittest.TestCase):  # revue finale M7
+    def test_motifs_css_js(self):
+        for motif in ("/*.css$", "/*.js", "/app.mjs", "/_astro/", "/_next/static/", "/wp-content/themes/", "/wp-includes/"):
+            self.assertTrue(crawl_site.ASSETS_RX.search(motif), motif)
+
+    def test_json_n_est_pas_du_js(self):
+        for motif in ("/*.json$", "/api/*.json", "/data.jsonld"):
+            self.assertIsNone(crawl_site.ASSETS_RX.search(motif), motif)
 
 
 class TestParseur(unittest.TestCase):
