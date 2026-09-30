@@ -13,7 +13,6 @@ export default defineConfig({
   redirects: {
     '/ancienne-page': '/page-intermediaire', // S08, S09 (chaîne)
     '/page-intermediaire': '/formations/ia',
-    '/promo': { status: 302, destination: '/formations/no-code' }, // S10
   },
   vite: { build: { sourcemap: true } }, // C16, X02
 });
