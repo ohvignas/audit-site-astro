@@ -5,7 +5,8 @@
 #   CHEMIN_PROJET : racine du repo Astro (optionnel : sans lui, audit « vu de l'extérieur » seulement)
 #   DOSSIER_AUDIT : défaut ~/audits-site/<hôte>/<AAAA-MM-JJ> — HORS du dossier servi par le serveur web
 # Variables : MAX_PAGES (500), LH_PAGES (5), RUNS (1), BUILD=1 (build d'audit), PSI_API_KEY (option),
-#             MIN_FREE_MB (1200), SKIP_LIGHTHOUSE=1, AUDIT_INSECURE_TLS=1 (tests uniquement : certificat auto-signé)
+#             MIN_FREE_MB (1200), SKIP_LIGHTHOUSE=1, SKIP_PDF=1 (pas de RAPPORT.pdf ; implicite avec SKIP_LIGHTHOUSE=1),
+#             CHROME_PATH (Chrome pour le PDF), AUDIT_INSECURE_TLS=1 (tests uniquement : certificat auto-signé)
 # Les étapes tournent UNE PAR UNE : l'empreinte mémoire reste < ~1 Go (Chrome pendant Lighthouse).
 #
 # Codes de sortie : 0 = tout est ✅/⚠️/⏭️ ; 1 = au moins une étape ❌ ; 2 = pré-vol en échec : site injoignable
@@ -138,6 +139,12 @@ else
 fi
 
 python3 "$DIR/rapport_brut.py" "$AUDIT" 2>/dev/null && echo "| rapport brut | ✅ | | RAPPORT-BRUT.md |" >> "$LOG"
+step rapport-html "$AUDIT/RAPPORT.html" valid_aucun python3 "$DIR/rapport_html.py" "$AUDIT"
+if [ "${SKIP_PDF:-0}" = "1" ] || [ "${SKIP_LIGHTHOUSE:-0}" = "1" ]; then
+  echo "| pdf | ⏭️ ignoré (SKIP_PDF=1 ou SKIP_LIGHTHOUSE=1) | | |" >> "$LOG"
+else
+  step pdf "$AUDIT/RAPPORT.pdf" valid_aucun bash "$DIR/rapport_pdf.sh" "$AUDIT"
+fi
 echo >> "$LOG"
 echo "Dossier d'audit : \`$AUDIT\`" >> "$LOG"
 echo

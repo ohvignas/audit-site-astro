@@ -86,6 +86,10 @@ class TestValidationDesEtapes(unittest.TestCase):
                 ligne_crawl = next(l for l in collecte.splitlines() if l.startswith("| crawl"))
                 self.assertIn("❌", ligne_crawl)
                 self.assertIn("⏭️", next(l for l in collecte.splitlines() if l.startswith("| lighthouse")))
+                self.assertIn("✅", next(l for l in collecte.splitlines() if l.startswith("| rapport-html")))
+                self.assertIn("⏭️", next(l for l in collecte.splitlines() if l.startswith("| pdf")))
+                self.assertTrue(pathlib.Path(d, "RAPPORT.html").exists())
+                self.assertFalse(pathlib.Path(d, "RAPPORT.pdf").exists())
                 self.assertEqual(r.returncode, 1, r.stdout[-2000:])
         finally:
             srv.shutdown()
