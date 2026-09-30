@@ -12,7 +12,10 @@ FICHES_REELLES = RACINE / "plugins/audit-site-astro/skills/audit-complet/referen
 FIXTURE_FICHES = RACINE / "tests/unit/fixtures/fiches"
 FIXTURE_AUDIT = RACINE / "tests/unit/fixtures/audit-exemple"
 sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import extraction_detecteurs as extraction  # noqa: E402
 import fiches  # noqa: E402
+import geo_check  # noqa: E402
 import signaux  # noqa: E402
 
 
@@ -83,6 +86,60 @@ class TestChargement(unittest.TestCase):
             pathlib.Path(t, "casse.md").write_text("pas de frontmatter", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "casse.md"):
                 fiches.charger_fiches(t)
+
+
+class TestValidationDuContrat(unittest.TestCase):
+    """charger_fiches valide chaque fiche : ValueError nommant le fichier (et le déclencheur fautif)."""
+
+    def _charger(self, fichiers):
+        with tempfile.TemporaryDirectory() as t:
+            for nom, contenu in fichiers.items():
+                pathlib.Path(t, nom).write_text(contenu, encoding="utf-8")
+            return fiches.charger_fiches(t)
+
+    @staticmethod
+    def _fiche(ident, *declencheurs):
+        decl = "".join(f'  - "{d}"\n' for d in declencheurs)
+        return f"---\nid: {ident}\ntitre: t\ndeclencheurs:\n{decl}sources: []\n---\n# corps\n"
+
+    def test_fiche_valide(self):
+        r = self._charger({"a-b.md": self._fiche("a-b", "crawl:x", "code:(a|b)", "manuel:sujet")})
+        self.assertEqual([x["id"] for x in r], ["a-b"])
+
+    def test_regex_invalide(self):
+        with self.assertRaises(ValueError) as c:
+            self._charger({"a-b.md": self._fiche("a-b", "crawl:ok", "code:(oups")})
+        self.assertIn("a-b.md", str(c.exception))
+        self.assertIn("code:(oups", str(c.exception))
+
+    def test_prefixe_inconnu(self):
+        with self.assertRaises(ValueError) as c:
+            self._charger({"a-b.md": self._fiche("a-b", "inconnu:x")})
+        self.assertIn("a-b.md", str(c.exception))
+        self.assertIn("inconnu:x", str(c.exception))
+
+    def test_id_manquant(self):
+        with self.assertRaisesRegex(ValueError, r"a-b\.md : clé « id » absente"):
+            self._charger({"a-b.md": "---\ntitre: t\ndeclencheurs: []\n---\n"})
+
+    def test_id_different_du_nom_de_fichier(self):
+        with self.assertRaisesRegex(ValueError, r"a-b\.md : id « autre »"):
+            self._charger({"a-b.md": self._fiche("autre")})
+
+    def test_id_en_double(self):
+        # id = nom de fichier et noms uniques => un id en double est toujours rejeté (au plus tard comme « différent du nom de fichier »)
+        with self.assertRaisesRegex(ValueError, r"c-d\.md : id « a-b »"):
+            self._charger({"a-b.md": self._fiche("a-b"), "c-d.md": self._fiche("a-b")})
+
+    def test_associer_ne_leve_jamais_sur_une_base_chargee(self):
+        r = self._charger({"a-b.md": self._fiche("a-b", "code:(a|b)", "crawl:x", "manuel:m"), "c-d.md": self._fiche("c-d")})
+        retenues, sans = fiches.associer([sig("code", "a"), sig("crawl", "y"), {"source": "geo", "cle": None}], r)
+        self.assertEqual(list(retenues), ["a-b"])
+        self.assertEqual(len(sans), 2)
+
+    def test_bom_utf8_toleree_et_cle_scalaire_vide(self):
+        r = self._charger({"a-b.md": "\ufeff---\nid: a-b\ntitre:\ndeclencheurs: []\n---\n"})
+        self.assertEqual(r[0]["titre"], "")
 
 
 class TestAssociation(unittest.TestCase):
@@ -204,49 +261,47 @@ class TestBaseReelle(unittest.TestCase):
                 self.assertEqual(pos, sorted(pos), f"sections dans le désordre : {titres}")
 
     def test_manuelles_et_sans_detection(self):
-        self.assertEqual([x["id"] for x in fiches.fiches_sans_detection(self.f)], ["geo-bing-webmaster-indexnow", "geo-mesure-visibilite-ia"])
+        # fiches volontairement sans détection automatique (conseils, pas de signal mesurable) : liste attendue à tenir à jour
+        attendues = {"geo-bing-webmaster-indexnow", "geo-mesure-visibilite-ia"}
+        self.assertEqual({x["id"] for x in fiches.fiches_sans_detection(self.f)}, attendues)
         self.assertTrue(fiches.fiches_manuelles(self.f))
         for x in fiches.fiches_manuelles(self.f):
             self.assertTrue(any(d.startswith("manuel:") for d in x["declencheurs"]))
 
 
+
+
+def _lire(nom):
+    return (SCRIPTS / nom).read_text(encoding="utf-8")
+
+
 class TestCouverture(unittest.TestCase):
-    """Chaque détecteur de l'outil doit être couvert par au moins une fiche (les trous sont listés dans le message d'échec)."""
+    """Chaque détecteur de l'outil doit être couvert par au moins une fiche.
 
-    @classmethod
-    def setUpClass(cls):
-        cls.f = fiches.charger_fiches(FICHES_REELLES)
+    Les échantillons extraits du source des détecteurs doivent être reconnus par au moins un déclencheur de leur source.
+    LACUNES_CONNUES liste, par famille, les échantillons qu'aucune fiche ne reconnaît aujourd'hui (vrais trous, à trancher par
+    le contrôleur : nouvelle fiche ou déclencheur élargi). Le test les affiche ; il échoue pour tout NOUVEAU trou, et aussi si
+    une lacune connue est désormais couverte (la retirer de la liste)."""
 
-    def _trous(self, sigs):
-        _, sans = fiches.associer(sigs, self.f)
-        return [f"{s['source']}: {s['cle'][:160]}" for s in sans]
-
-    def test_cles_du_crawl(self):
-        src = (SCRIPTS / "crawl_site.py").read_text(encoding="utf-8")
-        cles = set(re.findall(r'\badd\(\s*"([a-z0-9_]+)"', src))
-        cles |= set(re.findall(r'\bissues\[\s*"([a-z0-9_]+)"\s*\]\s*=', src))
-        cles |= set(re.findall(r'\bissues\.setdefault\(\s*"([a-z0-9_]+)"', src))
-        self.assertGreater(len(cles), 40, f"extraction des clés du crawl suspecte : {sorted(cles)}")
-        trous = self._trous([sig("crawl", k) for k in sorted(cles)])
-        self.assertEqual(trous, [], f"clés d'issue du crawl sans fiche : {trous}")
-
-    def _constats_du_scan(self, variante):
-        with tempfile.TemporaryDirectory() as t:
-            subprocess.run([sys.executable, str(SCRIPTS / "astro_scan.py"), str(RACINE / "tests/cobaye" / variante), "--out", t],
-                           check=True, capture_output=True, timeout=180)
-            rapport = json.loads(pathlib.Path(t, "code-scan.json").read_text(encoding="utf-8"))
-        return [sig("code", c["constat"]) for c in rapport["constats"]]
-
-    def test_constats_du_scan_sur_le_cobaye(self):
-        sigs = self._constats_du_scan("casse") + self._constats_du_scan("propre")
-        self.assertGreater(len(sigs), 20)
-        trous = sorted(set(self._trous(sigs)))
-        self.assertEqual(trous, [], f"constats astro_scan.py (cobaye casse/propre) sans fiche : {trous}")
-
+    # famille -> échantillons (chaînes exactes) sans fiche. Vide = aucun trou constaté.
+    LACUNES_CONNUES = {
+        "geo": [],
+        "http": [],
+        # La sonde marque « ❌ EXPOSÉ (info) » un /.well-known/security.txt qui répond 200 avec « Contact: » : c'est le fichier
+        # souhaité (fiche secu-security-txt), pas une exposition. Faux positif de la sonde (à corriger dans security_probe.sh,
+        # ou à absorber par un déclencheur) : sans fiche aujourd'hui, le signal « haute » serait orphelin.
+        "securite": ["| /.well-known/security.txt | 200 | 1234 | ❌ EXPOSÉ (info) |"],
+        "astro_scan": [],
+    }
+    # Messages d'astro_scan.py qui signalent un problème d'entrée (projet introuvable), pas un défaut du site : pas de fiche voulue.
+    ASTRO_SANS_FICHE_VOULU = [
+        "package.json introuvable — est-ce bien la racine du projet Astro ?",
+        "astro.config.* introuvable",
+        "Dossier src/ introuvable",
+    ]
     # Signaux de la fixture audit-exemple qui ne ressemblent à aucune sortie réelle de l'outil (clés d'issue de crawl inventées,
-    # textes de constats/audits reformulés, ligne de sonde sécurité au format simplifié) : aucune fiche ne peut les reconnaître.
-    # Ce ne sont pas des trous de détecteurs mais des artefacts de la fixture. À trancher : aligner la fixture sur les vraies
-    # sorties (et son RAPPORT-BRUT.attendu.md), ou renoncer à cette assertion.
+    # constats/titres Lighthouse reformulés, ligne de sonde au format simplifié) : aucune fiche ne peut les reconnaître.
+    # Artefacts de la fixture, pas des trous de détecteurs ; les détecteurs réels sont couverts par les tests ci-dessous.
     FIXTURE_SYNTHETIQUES = [
         "code: Image d'en-tête non optimisée (<img> au lieu de <Image>)",
         "code: Balise canonical absente du layout",
@@ -260,16 +315,122 @@ class TestCouverture(unittest.TestCase):
         "geo: Aucune donnée structurée Organization sur la page d'accueil",
     ]
 
+    @classmethod
+    def setUpClass(cls):
+        cls.f = fiches.charger_fiches(FICHES_REELLES)
+
+    def _trous(self, sigs):
+        _, sans = fiches.associer(sigs, self.f)
+        return [f"{s['source']}: {s['cle'][:160]}" for s in sans]
+
+    def _verifier(self, famille, source, echantillons):
+        """Échantillons (chaînes) d'une source -> aucun trou hors LACUNES_CONNUES, et aucune lacune connue périmée."""
+        self.assertTrue(echantillons, f"aucun échantillon extrait pour {famille}")
+        _, sans = fiches.associer([sig(source, e) for e in echantillons], self.f)
+        trous = sorted({s["cle"] for s in sans})
+        connues = self.LACUNES_CONNUES[famille]
+        if connues:
+            sys.stderr.write(f"\n[LACUNES_CONNUES {famille}] {len(connues)} échantillon(s) sans fiche :\n"
+                             + "".join(f"  - {c}\n" for c in connues))
+        nouveaux = [c for c in trous if c not in connues]
+        perimees = [c for c in connues if c not in trous]
+        self.assertEqual(nouveaux, [], f"{famille} : échantillons sans fiche (nouveaux trous) : {nouveaux}")
+        self.assertEqual(perimees, [], f"{famille} : lacunes connues désormais couvertes, à retirer de LACUNES_CONNUES : {perimees}")
+
+    # (a) crawl ------------------------------------------------------------------------------------------------------------
+
+    def test_cles_du_crawl(self):
+        cles = extraction.cles_crawl(_lire("crawl_site.py"))
+        self.assertGreaterEqual(len(cles), 55, f"extraction des clés du crawl dégradée : {sorted(cles)}")
+        trous = self._trous([sig("crawl", k) for k in sorted(cles)])
+        self.assertEqual(trous, [], f"clés d'issue du crawl sans fiche : {trous}")
+
+    # (b) astro_scan -------------------------------------------------------------------------------------------------------
+
+    def _constats_du_scan(self, variante):
+        with tempfile.TemporaryDirectory() as t:
+            subprocess.run([sys.executable, str(SCRIPTS / "astro_scan.py"), str(RACINE / "tests/cobaye" / variante), "--out", t],
+                           check=True, capture_output=True, timeout=180)
+            rapport = json.loads(pathlib.Path(t, "code-scan.json").read_text(encoding="utf-8"))
+        return [c["constat"] for c in rapport["constats"]]
+
+    def test_constats_du_scan_sur_le_cobaye(self):
+        constats = self._constats_du_scan("casse") + self._constats_du_scan("propre")
+        self.assertGreater(len(constats), 20)
+        trous = sorted(set(self._trous([sig("code", c) for c in constats])))
+        self.assertEqual(trous, [], f"constats astro_scan.py (cobaye casse/propre) sans fiche : {trous}")
+
+    def test_messages_du_source_d_astro_scan(self):
+        appels = extraction.appels(_lire("astro_scan.py"), "add", 2)
+        self.assertGreaterEqual(len(appels), 60, "extraction des add(...) d'astro_scan.py dégradée")
+        echantillons = sorted({m for msgs in appels for m in msgs} - set(self.ASTRO_SANS_FICHE_VOULU))
+        self._verifier("astro_scan", "code", echantillons)
+
+    # (c) fixture ----------------------------------------------------------------------------------------------------------
+
     def test_signaux_de_la_fixture(self):
         trous = [t for t in self._trous(signaux.collecter(FIXTURE_AUDIT)) if t not in self.FIXTURE_SYNTHETIQUES]
         self.assertEqual(trous, [], f"signaux de la fixture audit-exemple sans fiche : {trous}")
 
-    @unittest.expectedFailure
-    def test_signaux_synthetiques_de_la_fixture_couverts(self):
-        """ÉCHEC ATTENDU : les signaux de FIXTURE_SYNTHETIQUES n'ont pas de fiche (voir le commentaire ci-dessus). Si ce test
-        réussit, la fixture a été alignée : retirer @expectedFailure, FIXTURE_SYNTHETIQUES et le filtre du test précédent."""
-        trous = self._trous(signaux.collecter(FIXTURE_AUDIT))
-        self.assertEqual(trous, [], f"signaux de la fixture audit-exemple sans fiche : {trous}")
+    # (d) geo_check.py -----------------------------------------------------------------------------------------------------
+
+    def test_messages_de_geo_check(self):
+        base = {
+            "row['signal']": ["HTTP 403", "cf-mitigated: challenge", "page de challenge / blocage WAF", "contenu réduit (120 vs 5000 octets)"],
+            "p['url']": ["https://exemple.fr/page"], "', '.join(p['limites_extraits'])": ["nosnippet, max-snippet:0"],
+            "names[:6]": ["['Illith', 'ILLITH SAS']"], "len(micro)": ["2"], "p['champs_manquants']": ["['author', 'dateModified']"],
+            "q": ["1"], "len(ok_pages)": ["5"], "k.replace('_', ' ')": ["a propos", "contact", "mentions legales", "confidentialite"],
+        }
+        echantillons = set()
+        for token, _ua, role, _fam in geo_check.AI_BOTS:  # un environnement par robot : le motif dépend du jeton
+            env = dict(base, **{"row['bot']": [token], "row['role']": [role]})
+            for msgs in extraction.appels(_lire("geo_check.py"), "sig", 1, env):
+                echantillons.update(msgs)
+        # combinaisons impossibles produites par la conditionnelle « obligatoire en France » (réservée à mentions_legales)
+        echantillons = sorted(e for e in echantillons if ("obligatoire" in e) == ("mentions legales" in e) or "introuvable" not in e)
+        self.assertGreater(len(echantillons), 40)
+        self._verifier("geo", "geo", echantillons)
+
+    # (d) http_checks.sh et security_probe.sh --------------------------------------------------------------------------------
+
+    def _via_collecte(self, sous_dossier, fichier, lignes):
+        """Passe les lignes par signaux.collecter (comme un vrai audit). Retourne (cles des signaux, lignes non signalées)."""
+        with tempfile.TemporaryDirectory() as t:
+            d = pathlib.Path(t, "data", sous_dossier)
+            d.mkdir(parents=True)
+            (d / fichier).write_text("\n".join(lignes) + "\n", encoding="utf-8")
+            cles = [s["cle"] for s in signaux.collecter(t)]
+        return cles, sorted(l for l in lignes if l.strip() not in cles)
+
+    def test_lignes_de_http_checks(self):
+        src = extraction.echantillons_shell(_lire("http_checks.sh"), exclure_valeurs={
+            # ❌ absent est écrasé par « ℹ️ optionnel » pour cet en-tête : pas de signal
+            "h": ("cross-origin-opener-policy",)})
+        self.assertGreater(len(src), 20)
+        signales, non_signales = self._via_collecte("http", "http-checks.md", src)
+        if non_signales:
+            sys.stderr.write(f"\n[http_checks.sh] {len(non_signales)} ligne(s) produite(s) mais ignorée(s) par signaux.collecter "
+                             "(❌ partout, ⚠️ seulement dans un tableau) : ses déclencheurs http: ne peuvent pas s'y appliquer :\n"
+                             + "".join(f"  - {l}\n" for l in non_signales))
+        self._verifier("http", "http", [c for c in signales])
+
+    def test_lignes_de_security_probe(self):
+        src = _lire("security_probe.sh")
+        checks = extraction.lignes_check(src)
+        self.assertGreaterEqual(len(checks), 30, "extraction des check(...) de security_probe.sh dégradée")
+        modeles = extraction.echantillons_shell(src, codes=("200",))
+        autres = [m for m in modeles if "@PATH@" not in m]
+        mod_expose = next(m for m in modeles if "@PATH@" in m and "❌" in m)
+        mod_repond = next(m for m in modeles if "@PATH@" in m and "⚠️" in m)
+        lignes = list(autres)
+        for chemin, motif, gravite in checks:
+            # motif attendu vide : le verdict ne peut être que « ⚠️ répond 200 » ; sinon la ligne critique est « ❌ EXPOSÉ »
+            lignes.append((mod_expose if motif else mod_repond).replace("@PATH@", chemin).replace("@SEV@", gravite))
+        signales, non_signales = self._via_collecte("securite", "security-probe.md", lignes)
+        if non_signales:
+            sys.stderr.write(f"\n[security_probe.sh] {len(non_signales)} ligne(s) produite(s) mais ignorée(s) par signaux.collecter "
+                             "(❌ partout, ⚠️ seulement dans un tableau) :\n" + "".join(f"  - {l}\n" for l in non_signales))
+        self._verifier("securite", "securite", [c for c in signales])
 
 
 if __name__ == "__main__":

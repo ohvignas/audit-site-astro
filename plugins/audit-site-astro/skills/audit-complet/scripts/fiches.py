@@ -6,7 +6,9 @@ Module partagé (stdlib seule, Python 3.9). Sert à générer le dossier CORRECT
 
 API :
   charger_fiches(dossier)      -> liste de dicts (clés du frontmatter + « corps » sans frontmatter + « chemin »), triée par id ;
-                                  ignore _MODELE.md et tout fichier dont le nom commence par « _ »
+                                  ignore _MODELE.md et tout fichier dont le nom commence par « _ » ; valide chaque fiche
+                                  (id présent, égal au nom de fichier et unique ; déclencheurs à préfixe connu et regex
+                                  compilable) et lève ValueError « <fichier> : … » sinon
   associer(signaux, fiches)    -> (fiche id -> signaux déclencheurs, signaux sans fiche) ; ordre déterministe
   fiches_manuelles(fiches)     -> fiches ayant au moins un déclencheur « manuel:<sujet> » (jamais associées automatiquement ;
                                   à lister comme « Contrôles manuels recommandés »)
@@ -38,7 +40,7 @@ SECTIONS = ("Pourquoi c'est important", "Comment le constater soi-même", "Corre
 
 # --------------------------------------------------------------------------- parseur de frontmatter (sous-ensemble de YAML)
 
-_ECHAPPEMENTS = {"\\": "\\", '"': '"', "/": "/", "n": "\n", "t": "\t", "r": "\r", "0": "\0", " ": " "}
+_ECHAPPEMENTS = {"\\": "\\", '"': '"', "/": "/", "n": "\n", "t": "\t"}
 
 
 def _chaine_double(s, debut):
@@ -148,7 +150,7 @@ def parse_frontmatter(texte):
     """Sépare un fichier en (dict du frontmatter, corps). Lève ValueError si le frontmatter est absent ou mal formé.
 
     Sous-ensemble de YAML pris en charge : « clé: valeur » au niveau 0 ; valeurs = scalaire non cité, chaîne entre guillemets
-    doubles (échappements \\\\ \\" \\n \\t) ou simples, « [] » / liste en ligne ; listes en blocs « - élément » indentées sous une
+    doubles (échappements \\\\ \\" \\/ \\n \\t) ou simples, « [] » / liste en ligne ; listes en blocs « - élément » indentées (non indentées : refusées) sous une
     clé sans valeur ; commentaires « # … » (ligne entière ou fin de ligne après un espace) ; lignes vides ignorées."""
     lignes = texte.replace("\r\n", "\n").split("\n")
     if not lignes or lignes[0].strip() != "---":
@@ -185,29 +187,56 @@ def parse_frontmatter(texte):
 # --------------------------------------------------------------------------- chargement
 
 def charger_fiches(dossier):
-    """Charge toutes les fiches *.md du dossier (hors fichiers commençant par « _ »), triées par nom de fichier.
+    """Charge toutes les fiches *.md du dossier (hors fichiers commençant par « _ »), triées par id.
     Chaque fiche = clés du frontmatter + « corps » (Markdown sans frontmatter) + « chemin » (Path). Les listes
-    « declencheurs » et « sources » sont toujours présentes (liste, éventuellement vide)."""
+    « declencheurs » et « sources » sont toujours présentes (liste, éventuellement vide).
+    Lève ValueError (« <fichier> : … », avec le déclencheur fautif le cas échéant) si le frontmatter est mal formé, si « id »
+    manque, diffère du nom de fichier ou est en double, ou si un déclencheur a un préfixe inconnu ou une regex invalide."""
     fiches = []
+    vus = {}
     for chemin in sorted(Path(dossier).glob("*.md")):
         if chemin.name.startswith("_"):
             continue
         try:
-            meta, corps = parse_frontmatter(chemin.read_text(encoding="utf-8"))
+            meta, corps = parse_frontmatter(chemin.read_text(encoding="utf-8-sig"))
         except ValueError as e:
             raise ValueError(f"{chemin.name} : {e}") from None
+        for k, v in list(meta.items()):
+            if v == [] and k not in ("declencheurs", "sources"):
+                meta[k] = ""  # clé scalaire sans valeur
         for k in ("declencheurs", "sources"):
             if not isinstance(meta.get(k), list):
                 meta[k] = [] if meta.get(k) in (None, "") else [meta[k]]
+        _valider(chemin, meta)
+        if meta["id"] in vus:
+            raise ValueError(f"{chemin.name} : id « {meta['id']} » déjà utilisé par {vus[meta['id']]}")
+        vus[meta["id"]] = chemin.name
         fiches.append(dict(meta, corps=corps, chemin=chemin))
-    return fiches
+    return sorted(fiches, key=lambda f: f["id"])
+
+
+def _valider(chemin, meta):
+    ident = meta.get("id")
+    if not isinstance(ident, str) or not ident:
+        raise ValueError(f"{chemin.name} : clé « id » absente ou vide")
+    if ident != chemin.stem:
+        raise ValueError(f"{chemin.name} : id « {ident} » différent du nom de fichier")
+    for d in meta["declencheurs"]:
+        try:
+            prefixe, motif = declencheur(d)
+            if prefixe not in ("crawl", PREFIXE_MANUEL):
+                re.compile(motif, re.I)
+        except (ValueError, re.error) as e:
+            raise ValueError(f"{chemin.name} : déclencheur {d!r} : {e}") from None
 
 
 # --------------------------------------------------------------------------- association
 
 def declencheur(texte):
     """« crawl:http_4xx » -> ("crawl", "http_4xx"). Lève ValueError si le préfixe est inconnu ou le motif vide."""
-    prefixe, sep, motif = str(texte).partition(":")
+    if not isinstance(texte, str):
+        raise ValueError(f"déclencheur invalide : {texte!r} (chaîne attendue)")
+    prefixe, sep, motif = texte.partition(":")
     if not sep or prefixe not in PREFIXES or not motif.strip():
         raise ValueError(f"déclencheur invalide : {texte!r} (attendu « <{'|'.join(PREFIXES)}>:<motif> »)")
     return prefixe, motif
