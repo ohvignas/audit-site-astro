@@ -47,7 +47,7 @@ Ces cas ont tous été trouvés sur de vrais sites. Cet outil les détecte autom
 docker run --rm --memory=2g -v "$PWD/audits:/audits" ghcr.io/ohvignas/audit-site-astro https://votre-site.fr
 ```
 
-Au bout de 5 à 15 minutes, ouvrez **`audits/votre-site.fr/<date>/RAPPORT-BRUT.md`**.
+Au bout de 5 à 15 minutes, ouvrez **`audits/votre-site.fr/<date>/RAPPORT.html`** dans votre navigateur (ou `RAPPORT-BRUT.md`).
 
 Pour analyser **aussi le code** du projet (monté en lecture seule, jamais modifié) :
 
@@ -115,6 +115,8 @@ ou directement `/audit-site-astro:audit-complet`.
 
 Les skills suivent le format standard des Agent Skills (`SKILL.md`) : ils fonctionnent aussi avec d'autres agents compatibles.
 
+**Cursor** : installer le plugin depuis le dépôt ; voir `.cursor-plugin/`.
+
 ## 🛠️ Option 3 : sans Docker
 
 Prérequis : `python3`, `curl`, `node`/`npx`, Google Chrome ou Chromium.
@@ -129,17 +131,27 @@ bash audit-site-astro/plugins/audit-site-astro/skills/audit-complet/scripts/coll
 ## 📂 Ce que vous obtenez
 
 ```
-audits/votre-site.fr/2026-09-30/
-├── RAPPORT-BRUT.md            ← synthèse automatique, triée par sévérité
-├── RAPPORT-AUDIT.md           ← rapport priorisé (plugin Claude Code)
-└── data/
-    ├── COLLECTE.md            ← statut de chaque étape
-    ├── crawl/                 ← pages.csv, issues.json, summary.md
-    ├── perf/                  ← rapports Lighthouse JSON + synthèse
-    ├── http/                  ← en-têtes, compression, TTFB, TLS
-    ├── geo/                   ← robots IA, llms.txt, entités
-    ├── securite/              ← fichiers exposés, secrets, CORS
-    └── code/                  ← scan Astro/Convex, npm audit, astro check
+audits/votre-site.fr/
+├── index.html                 ← historique des audits, avec le graphique des notes
+└── 2026-09-30/
+    ├── RAPPORT.html           ← rapport à lire dans un navigateur (un seul fichier, sans JavaScript)
+    ├── RAPPORT.pdf            ← le même rapport, à envoyer par e-mail
+    ├── RAPPORT-BRUT.md        ← synthèse automatique, triée par sévérité
+    ├── RAPPORT-AUDIT.md       ← rapport priorisé (plugin Claude Code)
+    ├── CORRECTIONS/           ← à donner à votre agent de code
+    │   ├── LISEZ-MOI.md       ← méthode et règles de sécurité
+    │   ├── 00-PLAN.md         ← checklist priorisée
+    │   ├── NN-<id>.md         ← une fiche par correction
+    │   ├── annexes/           ← fiches complémentaires
+    │   └── index.json
+    └── data/
+        ├── COLLECTE.md        ← statut de chaque étape
+        ├── crawl/             ← pages.csv, issues.json, summary.md
+        ├── perf/              ← rapports Lighthouse JSON + synthèse
+        ├── http/              ← en-têtes, compression, TTFB, TLS
+        ├── geo/               ← robots IA, llms.txt, entités
+        ├── securite/          ← fichiers exposés, secrets, CORS
+        └── code/              ← scan Astro/Convex, npm audit, astro check
 ```
 
 Extrait réel de `RAPPORT-BRUT.md` :
@@ -154,6 +166,25 @@ Extrait réel de `RAPPORT-BRUT.md` :
 - Performance — Réduisez les ressources JavaScript inutilisées (426 Ko) — ChatBubble.js
 - SEO technique — Directive Sitemap relative dans robots.txt (Google exige une URL absolue)
 ```
+
+## 🛠️ Corriger le site avec son agent
+
+Chaque audit produit un dossier `CORRECTIONS/` : une fiche par problème, avec l'explication, les étapes, les critères de réussite et la vérification. Elles s'appuient sur une base de 142 fiches (performance, SEO, sécurité, accessibilité, GEO, contenu, code, serveur, Convex). Donnez ce dossier à votre agent de code.
+
+```text
+Ouvre ton projet dans Claude Code ou Cursor et dis : applique les corrections du dossier
+audits/votre-site.fr/2026-09-30/CORRECTIONS/ en suivant LISEZ-MOI.md
+```
+
+L'agent travaille sur une branche Git, fait un commit par fiche, et vous demande votre accord avant tout changement sensible : problème critique, infrastructure (serveur, DNS, pare-feu), textes éditoriaux ou juridiques. Si vous relancez un audit, `CORRECTIONS/` est régénéré ; créez un fichier `CORRECTIONS/.garder` pour conserver le vôtre (le nouveau est alors écrit dans `CORRECTIONS-<horodatage>/`).
+
+## 📄 Rapports
+
+- **`RAPPORT.html`** : le rapport complet, avec un « Plan de correction » et des « Guides de correction » en annexe. Un seul fichier autonome, sans JavaScript.
+- **`RAPPORT.pdf`** : la même chose en A4, produite avec Chrome. Sans Chrome, ou si la mémoire est trop juste, l'étape est sautée avec un ⚠️ et le reste de l'audit continue.
+- **`audits/votre-site.fr/index.html`** : l'historique des audits du site, avec l'évolution des notes. Il est mis à jour à chaque audit.
+
+**Partager** : envoyez le PDF, ou hébergez `RAPPORT.html` (il n'a besoin d'aucun autre fichier). Le rapport détaille des failles : ne le publiez pas sur un site ouvert à tous.
 
 ## 📚 Calé sur la documentation officielle
 
@@ -179,6 +210,12 @@ Oui pour le crawl SEO, le GEO, le HTTP, la sécurité et Lighthouse : ils regard
 <summary>Pourquoi pas de données PageSpeed Insights par défaut ?</summary>
 
 Sans clé, l'API PageSpeed renvoie presque toujours « 429 Too Many Requests ». Lighthouse tourne donc en local dans le conteneur. Avec une clé gratuite (`-e PSI_API_KEY=…`), on ajoute les données terrain des vrais visiteurs (CrUX), si le site a assez de trafic.
+</details>
+
+<details>
+<summary>Comment partager le rapport ?</summary>
+
+Envoyez `RAPPORT.pdf`, ou hébergez `RAPPORT.html` : c'est un fichier autonome, sans JavaScript. Le rapport décrit des failles : réservez-le à des personnes de confiance (accès protégé, pas de page publique). Dans Claude Code, l'agent peut aussi le publier comme artefact privé.
 </details>
 
 <details>
