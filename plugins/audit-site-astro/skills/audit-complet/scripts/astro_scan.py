@@ -241,8 +241,14 @@ def scan_src(root, report):
             image_comp += len(RX["image_comp"].findall(t))
             if RX["storage_url"].search(t) and imgs:
                 storage_imgs.append(r)
-        # JSON-LD (<script type="application/ld+json" set:html={…}>) : pas du HTML interprété, pas un XSS
-        set_html += [f"{r}:{i} {l}" for i, l in lines_matching(t, RX["set_html"]) if not RX["jsonld_script"].search(l)]
+        # JSON-LD (<script type="application/ld+json" set:html={…}>) : pas du HTML interprété, pas un XSS.
+        # La balise peut s'étaler sur plusieurs lignes (Prettier) : on exclut les lignes de toute la balise ouvrante.
+        lignes_jsonld = set()
+        for m in re.finditer(r"<script\b[^>]*>", t, re.I):
+            if RX["jsonld_script"].search(m.group(0)):
+                debut = t.count("\n", 0, m.start()) + 1
+                lignes_jsonld.update(range(debut, debut + m.group(0).count("\n") + 1))
+        set_html += [f"{r}:{i} {l}" for i, l in lines_matching(t, RX["set_html"]) if i not in lignes_jsonld]
         if f.suffix in CLIENT_EXT or ("<script" in t and f.suffix == ".astro"):
             # dans un .astro, seul le contenu des <script> part au navigateur
             scope = t if f.suffix in CLIENT_EXT else "\n".join(re.findall(r"<script\b[^>]*>(.*?)</script>", t, re.S))

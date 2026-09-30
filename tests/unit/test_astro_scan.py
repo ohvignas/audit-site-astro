@@ -91,6 +91,14 @@ class TestSetHtml(unittest.TestCase):
         self.assertEqual(len(c[0]["ou"]), 1)
         self.assertIn("src/pages/index.astro:6", c[0]["ou"][0])
 
+    def test_json_ld_multiligne_prettier(self):  # revue finale M5
+        page = ('---\nconst o = {};\n---\n<script\n  type="application/ld+json"\n  set:html={JSON.stringify(o)}\n></script>\n'
+                '<div\n  set:html={o.html}\n></div>\n')
+        c = [x for x in scanner({"src/pages/index.astro": page}) if "set:html" in x["constat"]]
+        self.assertEqual(len(c), 1)
+        self.assertEqual(len(c[0]["ou"]), 1)
+        self.assertIn("src/pages/index.astro:9", c[0]["ou"][0])
+
     def test_json_ld_seul_rien_a_signaler(self):
         page = '---\nconst o = {};\n---\n<script type="application/ld+json" set:html={JSON.stringify(o)}></script>\n'
         self.assertNotIn("set:html", textes(scanner({"src/pages/index.astro": page})))
