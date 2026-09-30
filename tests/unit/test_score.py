@@ -220,5 +220,21 @@ class TestSeuils(unittest.TestCase):
             self.assertGreaterEqual(seuils[cle], 0, cle)
 
 
+class TestCliquetPhase1(unittest.TestCase):
+    def test_banc_mesure_la_phase_1(self):
+        ci = (RACINE / ".github/workflows/docker.yml").read_text(encoding="utf-8")
+        self.assertIn("--phase 1", ci)
+        verite = json.loads((RACINE / "tests/cobaye/verite-terrain.json").read_text(encoding="utf-8"))
+        requis = {d["id"] for d in verite["defauts"] if d["matcher"]["type"] != "unitaire" and score._phase(d["phase"]) <= 1}
+        self.assertTrue({"S19", "S35b", "X06"} <= requis)
+        self.assertEqual(len(requis), 104)
+
+    def test_seuils_au_maximum(self):
+        seuils = json.loads((RACINE / "tests/cobaye/seuils.json").read_text(encoding="utf-8"))
+        self.assertEqual(seuils["rappel_min_global"], 1.0)
+        self.assertEqual(set(seuils["rappel_min_par_domaine"].values()), {1.0})
+        self.assertEqual((seuils["faux_positifs_max"], seuils["inattendus_max"]), (0, 0))
+
+
 if __name__ == "__main__":
     unittest.main()

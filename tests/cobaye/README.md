@@ -12,7 +12,7 @@ Deux sites Astro jumeaux servent à valider l'outil d'audit.
 bash tests/cobaye/lancer.sh            # certificat + docker compose up (réseau Docker "cobaye")
 bash tests/cobaye/auditer.sh casse     # collecte -> audits-cobaye/casse/
 bash tests/cobaye/auditer.sh propre    # collecte -> audits-cobaye/propre/
-python3 tests/cobaye/score.py --casse audits-cobaye/casse --propre audits-cobaye/propre --phase 0 \
+python3 tests/cobaye/score.py --casse audits-cobaye/casse --propre audits-cobaye/propre --phase 1 \
     [--sortie audits-cobaye] [--resume "$GITHUB_STEP_SUMMARY"]   # verdict rappel / faux positifs
 ```
 
