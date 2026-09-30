@@ -416,9 +416,11 @@ class TestCouverture(unittest.TestCase):
             "h": ("cross-origin-opener-policy",)})
         self.assertGreater(len(src), 20)
         signales, non_signales = self._via_collecte("http", "http-checks.md", src)
-        # tous les avertissements produits, y compris les puces / citations / lignes en gras, deviennent des signaux
-        self.assertEqual(non_signales, [], "lignes ❌/⚠️ de http_checks.sh ignorées par signaux.collecter")
-        for morceau in ("TLS 1.0 : ⚠️ encore accepté", "TLS 1.1 : ⚠️ encore accepté", "⚠️ TLS non vérifié",
+        # tous les avertissements produits, y compris les puces / citations / lignes en gras, deviennent des signaux, sauf l'avis
+        # du mode test TLS (« mode test AUDIT_INSECURE_TLS=1 »), qui n'est pas un constat sur le site
+        self.assertEqual([l for l in non_signales if "AUDIT_INSECURE_TLS" not in l], [],
+                         "lignes ❌/⚠️ de http_checks.sh ignorées par signaux.collecter")
+        for morceau in ("TLS 1.0 : ⚠️ encore accepté", "TLS 1.1 : ⚠️ encore accepté",
                         "⚠️ Aucune image avec fetchpriority", "une seule devrait"):
             self.assertTrue(any(morceau in c for c in signales), f"pas de signal pour « {morceau} »")
         self._verifier("http", "http", signales)

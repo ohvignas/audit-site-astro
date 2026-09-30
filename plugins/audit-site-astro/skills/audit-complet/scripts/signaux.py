@@ -99,7 +99,8 @@ def collecter(audit):
 
     for path, dom_name, source in ((d / "securite/security-probe.md", "Sécurité", "securite"), (d / "http/http-checks.md", "Serveur / HTTP", "http")):
         if path.exists():
-            lignes = path.read_text(encoding="utf-8").splitlines()
+            # « > ⚠️ TLS non vérifié (mode test AUDIT_INSECURE_TLS=1) » : avis du mode test de l'audit, pas un constat sur le site
+            lignes = [l for l in path.read_text(encoding="utf-8").splitlines() if not ("mode test" in l and "AUDIT_INSECURE_TLS" in l)]
             source_signals = []
             for line in lignes:
                 if "❌" in line:

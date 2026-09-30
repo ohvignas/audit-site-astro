@@ -9,7 +9,6 @@ declencheurs:
   - "http:Expiration dans \\*\\*(-\\d+|\\d|[12]\\d) jours"
   - "http:TLS 1\\.2 : non accepté"
   - "http:certificat illisible"
-  - "http:TLS non vérifié"      # audit lancé avec AUDIT_INSECURE_TLS=1 : le certificat n'a pas été contrôlé
 sources:
   - https://nginx.org/en/docs/http/ngx_http_ssl_module.html#ssl_protocols
   - https://caddyserver.com/docs/caddyfile/directives/tls#protocols

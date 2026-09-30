@@ -201,6 +201,17 @@ class TestAvertissementsEnListe(unittest.TestCase):
         self.assertFalse([c for c in cles if c.startswith("#") or "Légende" in c or "TLS 1.2" in c or "Attendu" in c])
         self.assertEqual(len(cles), 6)
 
+    def test_avis_du_mode_test_tls_n_est_pas_un_constat(self):
+        import signaux
+        avis = "> ⚠️ TLS non vérifié (mode test AUDIT_INSECURE_TLS=1) : les contrôles de certificat ne sont pas significatifs."
+        with tempfile.TemporaryDirectory() as t:
+            d = pathlib.Path(t, "data/http")
+            d.mkdir(parents=True)
+            (d / "http-checks.md").write_text(f"# Contrôles HTTP\n\n{avis}\n\n- TLS 1.0 : ⚠️ encore accepté (obsolète)\n", encoding="utf-8")
+            cles = [s["cle"] for s in signaux.collecter(t)]
+        self.assertEqual(cles, ["- TLS 1.0 : ⚠️ encore accepté (obsolète)"])  # un vrai avertissement TLS reste un signal
+        self.assertFalse(any("AUDIT_INSECURE_TLS" in c for c in cles))
+
 
 if __name__ == "__main__":
     unittest.main()
