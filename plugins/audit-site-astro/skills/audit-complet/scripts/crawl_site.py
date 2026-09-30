@@ -693,12 +693,13 @@ def crawl(args):
         p["inlinks"] = len(inlinks.get(u, ()))
         p["inlink_anchors"] = anchors[u].most_common(10)
 
-    # --- cibles de canonical jamais crawlées (page non liée) : vérifier quand même leur statut (50 au plus)
+    # --- cibles de canonical jamais crawlées (page non liée) : vérifier quand même leur statut (50 au plus).
+    # Seules les pages analysées (HTML 200 sans redirection) portent des canonicals ; robots.txt est respecté.
     canon_targets = {}
     for p in list(pages.values()):
         c = (p.get("canonicals") or [None])[0]
         if (c and c != p["url"] and c not in pages and c not in canon_targets and (internal(c) or variant(c))
-                and len(canon_targets) < 50):
+                and (args.ignore_robots or robots.allowed("Googlebot", c)) and len(canon_targets) < 50):
             canon_targets[c], _ = analyze_page(c, fetch(c, timeout=args.timeout))
             time.sleep(args.delay)
 
@@ -848,7 +849,10 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
             add("canonical_other", "Canonical vers une autre URL (vérifier que c'est voulu)", "basse",
                 {"url": p["url"], "canonical": canon[0]})
             tgt = pages.get(canon[0]) or canon_targets.get(canon[0])
-            if tgt and (tgt["final_status"] != 200 or tgt["redirect_hops"] or tgt.get("noindex")):
+            if tgt and tgt["final_status"] <= 0:  # timeout, DNS, TLS : pas une preuve d'erreur de la cible
+                add("canonical_target_unreachable", "Cible de canonical injoignable pendant l'audit (à revérifier)",
+                    "basse", {"url": p["url"], "canonical": canon[0], "erreur": tgt.get("error")})
+            elif tgt and (tgt["final_status"] != 200 or tgt["redirect_hops"] or tgt.get("noindex")):
                 add("canonical_bad_target", "Canonical vers une URL en erreur, redirigée ou noindex", "haute",
                     {"url": p["url"], "canonical": canon[0], "statut_cible": tgt["final_status"]})
         if p.get("noindex"):

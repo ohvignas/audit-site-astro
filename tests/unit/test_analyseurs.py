@@ -51,6 +51,33 @@ class TestAssetsBloques(unittest.TestCase):  # revue finale M7
             self.assertIsNone(crawl_site.ASSETS_RX.search(motif), motif)
 
 
+def _page(url, status=200, html="", error=None):
+    res = {"chain": [], "status": status, "final_url": url, "error": error, "ttfb": 0.1, "time": 0.1,
+           "raw_bytes": len(html), "body": html.encode("utf-8"), "headers": {"content-type": "text/html"} if html else {}}
+    return crawl_site.analyze_page(url, res)[0]
+
+
+class TestCiblesDeCanonical(unittest.TestCase):  # revue finale M2
+    def issues(self, statut_cible):
+        u, c = "https://ex.fr/a", "https://ex.fr/b"
+        p = _page(u, html="<html><head><link rel='canonical' href='" + c + "'></head><body></body></html>")
+        p["depth"] = 0
+        cible = _page(c, status=statut_cible, error="timeout" if statut_cible <= 0 else None)
+        from collections import Counter
+        return crawl_site.build_issues({u: p}, {}, set(), [], [], RobotsTxt(""), {}, Counter(), {}, "ex.fr", "https",
+                                       {c: cible})
+
+    def test_cible_injoignable_n_est_pas_une_erreur_haute(self):
+        it = self.issues(0)
+        self.assertNotIn("canonical_bad_target", it)
+        self.assertEqual(it["canonical_target_unreachable"]["severity"], "basse")
+
+    def test_cible_404_reste_haute(self):
+        it = self.issues(404)
+        self.assertEqual(it["canonical_bad_target"]["severity"], "haute")
+        self.assertNotIn("canonical_target_unreachable", it)
+
+
 class TestParseur(unittest.TestCase):
     def parse(self, html):
         p = PageParser()

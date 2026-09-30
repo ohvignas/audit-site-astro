@@ -19,7 +19,10 @@ def page(corps, tete=""):
 
 
 ROUTES = {
-    "/": (200, HTML, page('<a href="/canon-cassee">Canonical</a> <a href="/formulaire">Formulaire</a>')),
+    "/": (200, HTML, page('<a href="/canon-cassee">Canonical</a> <a href="/formulaire">Formulaire</a> '
+                          '<a href="/canon-bloquee">Bloquée</a>')),
+    # canonical vers une cible interdite par robots.txt : jamais demandée (revue finale M2)
+    "/canon-bloquee": (200, HTML, page("<p>Asset</p>", "<link rel='canonical' href='@@BASE@@/_astro/cible'>")),
     "/robots.txt": (200, {"Content-Type": "text/plain"},
                     "User-agent: *\nDisallow: /_astro/\n\nSitemap: @@BASE@@/sitemap.xml\n"),
     "/sitemap.xml": (200, {"Content-Type": "application/xml"},
@@ -46,6 +49,7 @@ class TestCrawlLocal(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         with SiteLocal(ROUTES) as site:
+            cls.requetes = site.requetes
             r = subprocess.run([sys.executable, str(CRAWL), site.url, "--out", cls.tmp.name, "--delay", "0",
                                 "--max-pages", "50", "--timeout", "5"], capture_output=True, text=True, timeout=120)
         assert r.returncode == 0, r.stderr[-2000:]
@@ -73,6 +77,12 @@ class TestCrawlLocal(unittest.TestCase):
         ex = self.issues.get("canonical_bad_target", {}).get("examples", [])
         self.assertEqual([(e["url"].endswith("/canon-cassee"), e["statut_cible"]) for e in ex], [(True, 404)])
         self.assertNotIn("/supprimee", self.exemples("http_4xx"), "la cible n'est pas une page liée : pas de http_4xx")
+
+    # Revue finale M2 : robots.txt respecté pour les cibles de canonical
+    def test_cible_de_canonical_bloquee_par_robots_non_demandee(self):
+        self.assertNotIn("/_astro/cible", self.requetes)
+        meta = json.loads(pathlib.Path(self.tmp.name, "pages.json").read_text(encoding="utf-8"))["meta"]
+        self.assertFalse(any(u.endswith("/_astro/cible") for u in meta["canonical_targets_checked"]))
 
     # Tâche 3 : champ de formulaire sans libellé (placeholder seul), invisible pour Lighthouse (A05)
     def test_champ_sans_libelle(self):
