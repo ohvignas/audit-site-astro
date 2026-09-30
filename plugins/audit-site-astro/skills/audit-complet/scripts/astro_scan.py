@@ -60,6 +60,17 @@ def read(p):
         return ""
 
 
+def sans_commentaires(t):
+    """Retire les commentaires JS/TS (/* … */ et // …) sans toucher aux URL (https://…).
+    Réservé aux fichiers de config et aux endpoints : un motif « /* » dans une chaîne (glob) serait mal lu."""
+    t = re.sub(r"/\*.*?\*/", "", t, flags=re.S)
+    return re.sub(r"(?<![:\w\"'`/])//[^\n]*", "", t)
+
+
+# Espaces de noms XML : des identifiants, pas des URL chargées (xmlns du sitemap…)
+NAMESPACES_XML = re.compile(r"http://(www\.sitemaps\.org|www\.w3\.org|www\.google\.com/schemas|purl\.org)/")
+
+
 def lines_matching(text, rx, limit=50):
     out = []
     for i, line in enumerate(text.splitlines(), 1):
@@ -107,7 +118,7 @@ def scan_astro_config(root, report):
     if not cfg:
         add("haute", "config", "astro.config.* introuvable")
         return {}
-    t = read(cfg)
+    t = sans_commentaires(read(cfg))
     name = rel(cfg, root)
 
     def val(key):
@@ -163,6 +174,7 @@ RX = {
     "is_inline": re.compile(r"<script[^>]*is:inline"),
     "storage_url": re.compile(r"storage\.getUrl|/api/storage/|convex\.cloud/api/storage|getUrl\("),
     "astro_url_href": re.compile(r"Astro\.url\.href|Astro\.request\.url|url\.origin|request\.url"),
+    "jsonld_script": re.compile(r"type\s*=\s*[\"']application/ld\+json[\"']", re.I),
 }
 
 
@@ -205,7 +217,8 @@ def scan_src(root, report):
             image_comp += len(RX["image_comp"].findall(t))
             if RX["storage_url"].search(t) and imgs:
                 storage_imgs.append(r)
-        set_html += [f"{r}:{i} {l}" for i, l in lines_matching(t, RX["set_html"])]
+        # JSON-LD (<script type="application/ld+json" set:html={…}>) : pas du HTML interprété, pas un XSS
+        set_html += [f"{r}:{i} {l}" for i, l in lines_matching(t, RX["set_html"]) if not RX["jsonld_script"].search(l)]
         if f.suffix in CLIENT_EXT or ("<script" in t and f.suffix == ".astro"):
             # dans un .astro, seul le contenu des <script> part au navigateur
             scope = t if f.suffix in CLIENT_EXT else "\n".join(re.findall(r"<script\b[^>]*>(.*?)</script>", t, re.S))
@@ -321,12 +334,17 @@ def scan_src(root, report):
         report["routes"]["endpoints_seo"] = list(eps)
         for name, t in eps.items():
             if "sitemap" in name:
-                if re.search(r"url\.origin|request\.url|Astro\.url\.origin|new URL\(\s*request", t) and "site" not in t:
+                code = sans_commentaires(t)
+                par_requete = re.search(r"url\.origin|request\.url|Astro\.url\.origin|new URL\(\s*request", code)
+                # l'identifiant `site` (Astro.site, context.site, ({ site })…), pas la sous-chaîne de « sitemaps.org »
+                par_site = re.search(r"\bAstro\.site\b|\bcontext\.site\b|import\.meta\.env\.SITE\b|(?<![\w.$])site\b(?!\s*:)", code)
+                if par_requete and not par_site:
                     add("haute", "seo", f"{name} construit les URL depuis l'origine de la requête : derrière un proxy "
                                         f"elles sortent en http:// (constaté sur le sitemap en ligne ?)", [name],
                         "utiliser l'origine canonique : new URL(path, import.meta.env.SITE ?? 'https://domaine.fr')")
-                if "http://" in t:
-                    add("haute", "seo", f"{name} contient une URL http:// en dur", [name])
+                en_dur = [u for u in re.findall(r"http://[^\s'\"`<>)]+", code) if not NAMESPACES_XML.match(u)]
+                if en_dur:
+                    add("haute", "seo", f"{name} contient une URL http:// en dur ({en_dur[0][:60]})", [name])
                 if "lastmod" not in t:
                     add("basse", "seo", f"{name} sans <lastmod> (aide Google et Bing à recrawler le contenu modifié)", [name])
     # public/
@@ -386,7 +404,7 @@ def latest_astro():
 def scan_astro_features(root, report):
     cfg = next((root / f for f in ("astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts")
                 if (root / f).exists()), None)
-    t = read(cfg) if cfg else ""
+    t = sans_commentaires(read(cfg)) if cfg else ""
     cname = rel(cfg, root) if cfg else "astro.config"
     v = astro_version(root) or (0, 0, 0)
     latest = latest_astro()
@@ -525,7 +543,7 @@ def scan_astro_features(root, report):
                                    "les pages liées dans le navigateur", [cname])
 
     # --- proxy / URL : security.allowedDomains (5.14.2+)
-    if ssr and at_least(5, 14) and "allowedDomains" not in t:
+    if ssr and at_least(5, 14) and not re.search(r"\ballowedDomains\s*:", t):
         add("moyenne", "seo", "Serveur derrière un proxy sans security.allowedDomains : Astro ignore X-Forwarded-Host/"
                               "Proto et Astro.url reflète l'hôte interne (souvent en http://) — cause typique de "
                               "canonicals/sitemap en http", [cname],

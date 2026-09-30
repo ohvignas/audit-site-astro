@@ -88,7 +88,7 @@
     {"id": "C04", "domaine": "code", "titre": ".collect() non borné", "phase": "base", "matcher": {"type": "code", "regex": "\\.collect\\(\\) non bornés"}},
     {"id": "C05", "domaine": "code", "titre": "v.any()", "phase": "base", "matcher": {"type": "code", "regex": "v\\.any\\(\\)"}},
     {"id": "C06", "domaine": "code", "titre": "Env non PUBLIC_ côté client", "phase": "base", "matcher": {"type": "code", "regex": "non PUBLIC_", "ou_contient": "Secret.astro"}},
-    {"id": "C07", "domaine": "code", "titre": "set:html non assaini", "phase": "base", "propre": "ignorer", "raison_ignorer": "Sans le filtre d'emplacement, la regex set:html se déclenche sur l'usage légitime et quasi universel de set:html pour injecter du JSON-LD (JSON.stringify) dans le layout, que le scanner ne distingue pas encore d'un HTML non assaini (amélioration de phase 1).", "matcher": {"type": "code", "regex": "set:html", "ou_contient": "src/pages/index.astro"}},
+    {"id": "C07", "domaine": "code", "titre": "set:html non assaini", "phase": "base", "matcher": {"type": "code", "regex": "set:html", "ou_contient": "src/pages/index.astro"}},
     {"id": "C08", "domaine": "code", "titre": ".env hors .gitignore", "phase": "base", "matcher": {"type": "code", "regex": "\\.env absent du \\.gitignore"}},
     {"id": "C10", "domaine": "code", "titre": "Sitemap depuis request.url", "phase": "base", "matcher": {"type": "code", "regex": "depuis l'origine de la requête"}},
     {"id": "C11", "domaine": "code", "titre": "Canonical depuis Astro.url.href", "phase": "base", "matcher": {"type": "code", "regex": "canonical construite depuis Astro\\.url\\.href", "ou_contient": "BaseHttp.astro"}},

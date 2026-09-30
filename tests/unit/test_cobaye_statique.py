@@ -24,9 +24,15 @@ class TestCobayeStatique(unittest.TestCase):
             casse, propre = self._scan("casse", t1), self._scan("propre", t2)
             rates = [d["id"] for d in code if not score.detecte(d["matcher"], casse)]
             fps = [d["id"] for d in code if d.get("propre", "absent") == "absent" and score.detecte(score._matcher_fp(d), propre)]
-        # trous connus du scanner, corrigés en phase 1 (la liste ne doit que rétrécir)
-        self.assertEqual(rates, ["C10", "C12"], f"défauts de code non détectés : {rates}")
+        self.assertEqual(rates, [], f"défauts de code non détectés : {rates}")
         self.assertEqual(fps, [], f"faux positifs de code : {fps}")
+
+    def test_propre_sans_constat_critique_ni_haut(self):
+        with tempfile.TemporaryDirectory() as t:
+            propre = self._scan("propre", t)
+            constats = json.loads((propre / "data/code/code-scan.json").read_text(encoding="utf-8"))["constats"]
+        hauts = [c["constat"] for c in constats if c["severite"] in score.SEVERES]
+        self.assertEqual(hauts, [], "constats Critique/Haute sur le jumeau propre (comptés « inattendus » en CI)")
 
 
 if __name__ == "__main__":
