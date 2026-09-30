@@ -553,6 +553,54 @@ class TestMarkdownListes(unittest.TestCase):
         self.assertIn("<pre><code>a\n  b</code></pre>", self.md("   ```\n   a\n     b\n   ```\n"))
 
 
+class TestEchappementsMarkdown(unittest.TestCase):
+    """« \\X » (ponctuation ASCII, CommonMark) : X littéral, jamais de lien, gras, code ni case à cocher ; pas de barre oblique."""
+
+    def md(self, texte, decalage=0):
+        import rapport_html
+        return rapport_html.markdown_vers_html(texte, decalage)
+
+    def test_lien_echappe_reste_du_texte(self):
+        h = self.md("Constat : \\[x\\](https://evil.example/x)")
+        self.assertNotIn("<a", h)
+        self.assertNotIn("href", h)
+        self.assertNotIn("\\", h)
+        self.assertIn("[x](https://evil.example/x)", h)
+
+    def test_balise_echappee_sans_barre_oblique_et_echappee_en_html(self):
+        h = self.md("3 \\<img\\> sans attribut alt")
+        self.assertEqual(h, "<p>3 &lt;img&gt; sans attribut alt</p>")
+
+    def test_prose_de_corrections_rendue_sans_syntaxe_ni_barre(self):
+        import corrections
+        for brut in ("x <img> [a](https://e.example/) **gras** *it* `code` _souligne_ PUBLIC_CLE <head>",
+                     "[cliquez ici](https://evil.example/x)", "- [x] coché ?", "# titre", "1. liste", "\\ fin \\"):
+            h = self.md(corrections.prose(brut))
+            for interdit in ("<a", "<strong", "<em", "<code", "<h", "<li", "☑", "☐"):
+                self.assertNotIn(interdit, h, f"{brut!r} -> {h!r}")
+            self.assertEqual(h, f"<p>{html_texte(brut)}</p>")  # texte d'origine exact : aucune barre oblique ajoutée
+
+    def test_aller_retour_des_caracteres_echappes(self):
+        self.assertEqual(self.md("a \\_b\\_ \\*c\\* \\`d\\` \\\\ \\# \\|"), "<p>a _b_ *c* `d` \\ # |</p>")
+        self.assertEqual(self.md("\\*\\*pas gras\\*\\*"), "<p>**pas gras**</p>")
+        self.assertEqual(self.md("- \\[ \\] pas une case"), "<ul><li>[ ] pas une case</li></ul>")
+
+    def test_echappement_dans_le_code_reste_litteral(self):
+        self.assertEqual(self.md("`a\\*b` et \\`c`"), "<p><code>a\\*b</code> et `c`</p>")
+
+    def test_barre_oblique_non_echappante_conservee(self):
+        self.assertEqual(self.md("C:\\Users\\x et \\d+ \\é"), "<p>C:\\Users\\x et \\d+ \\é</p>")
+
+    def test_echappement_dans_l_url_d_un_lien_de_confiance(self):
+        self.assertIn('<a href="https://exemple.test/a_b" rel="noopener">lien</a>', self.md("[lien](https://exemple.test/a\\_b)"))
+        self.assertNotIn("href", self.md("[x](javascript\\:alert(1))"))
+
+
+def html_texte(s):
+    import html
+    return html.escape(s)
+
+
 class TestFichesReelles(unittest.TestCase):
     """Rend de vraies fiches de references/fiches/ : les blocs de code des étapes numérotées et les listes doivent tenir."""
 

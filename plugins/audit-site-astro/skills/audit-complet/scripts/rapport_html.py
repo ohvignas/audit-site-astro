@@ -232,28 +232,42 @@ def _url_propre(u):
     return c
 
 
-def _lien(x):
+def _lien(x, echappes):
     if "\x00" in x.group(2):  # du code en ligne dans l'URL : ce n'est pas un lien
         return x.group(0)
-    url = _url_propre(html.unescape(x.group(2)))
+    brute = re.sub(r"\x01(\d+)\x01", lambda y: e(echappes[int(y.group(1))]), x.group(2))
+    url = _url_propre(html.unescape(brute))
     return f'<a href="{e(url)}" rel="noopener">{x.group(1)}</a>' if url else x.group(1)
 
 
+# Échappement Markdown (CommonMark) : « \\ » suivi d'une ponctuation ASCII donne ce caractère, littéral ; ou code en ligne.
+_ECHAP_OU_CODE = re.compile(r"\\([!-/:-@\[-`{-~])|`([^`]+)`")
+
+
 def _inline(txt):
-    """Texte en ligne -> HTML. Les codes en ligne sont mis de côté (jeton \\x00N\\x00) pour que le gras et l'italique les entourent."""
-    morceaux = re.split(r"`([^`]+)`", txt.replace("\x00", ""))
-    codes, reste = [], []
-    for i, m in enumerate(morceaux):
-        if i % 2:
-            reste.append(f"\x00{len(codes)}\x00")
-            codes.append(f"<code>{e(m)}</code>")
+    """Texte en ligne -> HTML.
+
+    Les codes en ligne (jeton \\x00N\\x00) et les caractères échappés « \\X » (jeton \\x01N\\x01) sont mis de côté avant les
+    liens, le gras et l'italique : un caractère échappé est rendu littéralement et ne forme jamais de syntaxe ; une barre
+    oblique inverse dans un code en ligne reste telle quelle (CommonMark)."""
+    txt = txt.replace("\x00", "").replace("\x01", "")
+    codes, echappes, reste, pos = [], [], [], 0
+    for x in _ECHAP_OU_CODE.finditer(txt):
+        reste.append(e(txt[pos:x.start()]))
+        if x.group(1) is not None:
+            reste.append(f"\x01{len(echappes)}\x01")
+            echappes.append(x.group(1))
         else:
-            reste.append(e(m))
+            reste.append(f"\x00{len(codes)}\x00")
+            codes.append(f"<code>{e(x.group(2))}</code>")
+        pos = x.end()
+    reste.append(e(txt[pos:]))
     m = "".join(reste)
-    m = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", _lien, m)
+    m = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", lambda x: _lien(x, echappes), m)
     m = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", m)
     m = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<em>\1</em>", m)
-    return re.sub(r"\x00(\d+)\x00", lambda x: codes[int(x.group(1))], m)
+    m = re.sub(r"\x00(\d+)\x00", lambda x: codes[int(x.group(1))], m)
+    return re.sub(r"\x01(\d+)\x01", lambda x: e(echappes[int(x.group(1))]), m)
 
 
 _SEP = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
