@@ -54,7 +54,7 @@ Durée typique : 5 à 15 minutes. Le script écrit `data/COLLECTE.md` avec le st
 
 | Étape | Script | Produit (dans `data/`) |
 |---|---|---|
-| HTTP | `http_checks.sh` | `http/http-checks.md` : variantes d'hôte, TTFB avec et sans cache, compression, cache des `/_astro/`, en-têtes de sécurité, TLS, fichiers techniques, test de soft 404 |
+| HTTP | `http_checks.sh` | `http/http-checks.md` : variantes d'hôte, TTFB avec et sans cache, compression, cache des `/_astro/`, en-têtes de sécurité, TLS, fichiers techniques, soft 404 à la racine et sous chaque route dynamique (§7, via `pages.json` du crawl) |
 | Crawl | `crawl_site.py` | `crawl/pages.json`, `pages.csv`, `issues.json`, `summary.md` : statuts, redirections, titles, metas, H1, canonicals, sitemap vs pages, orphelines, profondeur, maillage, images, JSON-LD, îlots Astro |
 | GEO | `geo_check.py` | `geo/geo.json`, `geo-summary.md` : robots.txt par robot IA, réponse réelle du serveur/WAF, llms.txt, entités schema, extractibilité, pages de confiance |
 | Sécurité | `security_probe.sh` | `securite/security-probe.md` : fichiers exposés, source maps, secrets dans le JS, CORS |

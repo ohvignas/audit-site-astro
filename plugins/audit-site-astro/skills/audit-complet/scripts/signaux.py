@@ -10,6 +10,7 @@ API :
   lighthouse(audit)  -> entrées de perf/pagespeed.json sans clé « erreur »
   meta_crawl(audit)  -> « meta » de crawl/pages.json ({} si absent)
   charger(p)         -> contenu JSON du fichier p, ou None s'il est absent/illisible
+  severite_opportunite(ms, octets) -> sévérité d'une opportunité Lighthouse (temps OU poids gagné)
   ORDRE              -> rang de chaque sévérité (critique=0 … info=4)
 """
 import json
@@ -37,6 +38,16 @@ def ex_str(e):
     if isinstance(e, dict):
         return " — ".join(f"{k}: {v}" for k, v in e.items() if not isinstance(v, (list, dict)) or k in ("liens_depuis", "urls"))[:220]
     return str(e)[:220]
+
+
+def severite_opportunite(ms, octets):
+    """Sévérité d'un gain Lighthouse : le temps OU le poids économisé (6 Mo d'images = haute même sans ms estimées)."""
+    ms, octets = ms or 0, octets or 0
+    if ms >= 1000 or octets >= 1000000:
+        return "haute"
+    if ms >= 300 or octets >= 250000:
+        return "moyenne"
+    return "basse"
 
 
 def lighthouse(audit):
@@ -85,8 +96,9 @@ def collecter(audit):
             if key in seen or not (o.get("gain_ms") or o.get("gain_octets")):
                 continue
             seen.add(key)
-            sev = "haute" if (o.get("gain_ms") or 0) >= 1000 else "moyenne" if (o.get("gain_ms") or 0) >= 300 else "basse"
-            gain = f"{o['gain_ms']} ms" if o.get("gain_ms") else f"{int(o['gain_octets']) // 1024} Ko"
+            sev = severite_opportunite(o.get("gain_ms"), o.get("gain_octets"))
+            gain = " + ".join(g for g in (f"{o['gain_ms']} ms" if o.get("gain_ms") else "",
+                                          f"{int(o['gain_octets']) // 1024} Ko" if o.get("gain_octets") else "") if g)
             signals.append(_signal(sev, "Performance", f"{o['titre']} (gain estimé {gain}, {r.get('strategie')})", o.get("exemples", [])[:3],
                                    "lighthouse", f"{o['id']} {o['titre']}"))
         for cat, fails in (r.get("echecs_autres_categories") or {}).items():

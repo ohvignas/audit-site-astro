@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import signaux  # noqa: E402
 
 ORDER = signaux.ORDRE
+severite_opportunite = signaux.severite_opportunite  # compatibilité : la règle vit dans signaux.py
 ICON = {"critique": "🟥", "haute": "🟧", "moyenne": "🟨", "basse": "🟦", "info": "⬜"}
 
 

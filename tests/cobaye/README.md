@@ -5,6 +5,7 @@ Deux sites Astro jumeaux servent à valider l'outil d'audit.
 - `casse/` : site volontairement défectueux. Chaque défaut porte un ID en commentaire (ex. `H07`, `X01`, `G02`), dans le code Astro comme dans `nginx/conf.d/casse.conf`.
 - `propre/` : jumeau sain, censé ne déclencher aucun de ces défauts (`nginx/conf.d/propre.conf` applique les bonnes pratiques).
 - `nginx/` : proxy HTTPS (certificat auto-signé généré dans `nginx/certs/`, ignoré par git) et faux fichiers sensibles (`leurres/`, sans aucune valeur réelle).
+- `nginx/images/` + `nginx/conf.d/images.conf` : hôte d'images « tiers » interne au réseau (`http://images.cobaye.test/cobaye.png`). `auditer.sh` le passe dans `AUDIT_IMAGE_DISTANTE` : la sonde X06 (proxy `/_image` ouvert) ne dépend ainsi d'aucun site Internet.
 
 ## Commandes
 
@@ -12,7 +13,7 @@ Deux sites Astro jumeaux servent à valider l'outil d'audit.
 bash tests/cobaye/lancer.sh            # certificat + docker compose up (réseau Docker "cobaye")
 bash tests/cobaye/auditer.sh casse     # collecte -> audits-cobaye/casse/
 bash tests/cobaye/auditer.sh propre    # collecte -> audits-cobaye/propre/
-python3 tests/cobaye/score.py --casse audits-cobaye/casse --propre audits-cobaye/propre --phase 0 \
+python3 tests/cobaye/score.py --casse audits-cobaye/casse --propre audits-cobaye/propre --phase 1 \
     [--sortie audits-cobaye] [--resume "$GITHUB_STEP_SUMMARY"]   # verdict rappel / faux positifs
 ```
 
