@@ -402,17 +402,29 @@ class TestCouverture(unittest.TestCase):
             cles = [s["cle"] for s in signaux.collecter(t)]
         return cles, sorted(l for l in lignes if l.strip() not in cles)
 
+    def _declencheurs_sans_echantillon(self, source, lignes):
+        """Déclencheurs `source:` qu'aucune des lignes produites (signalées ou non) ne reconnaît : information, pas une assertion.
+        Ce sont surtout des lignes de tableau sans ❌/⚠️ (ex. /robots.txt en 404, `TLS 1.2 : non accepté`, `Expiration dans`) que
+        `signaux.collecter` ne transforme volontairement pas en signaux."""
+        sigs = [sig(source, l.strip()) for l in lignes]
+        return sorted(f"{f['id']}: {d}" for f in self.f for d in f["declencheurs"]
+                      if d.startswith(source + ":") and not any(fiches.correspond(d, s) for s in sigs))
+
     def test_lignes_de_http_checks(self):
         src = extraction.echantillons_shell(_lire("http_checks.sh"), exclure_valeurs={
             # ❌ absent est écrasé par « ℹ️ optionnel » pour cet en-tête : pas de signal
             "h": ("cross-origin-opener-policy",)})
         self.assertGreater(len(src), 20)
         signales, non_signales = self._via_collecte("http", "http-checks.md", src)
-        if non_signales:
-            sys.stderr.write(f"\n[http_checks.sh] {len(non_signales)} ligne(s) produite(s) mais ignorée(s) par signaux.collecter "
-                             "(❌ partout, ⚠️ seulement dans un tableau) : ses déclencheurs http: ne peuvent pas s'y appliquer :\n"
-                             + "".join(f"  - {l}\n" for l in non_signales))
-        self._verifier("http", "http", [c for c in signales])
+        # tous les avertissements produits, y compris les puces / citations / lignes en gras, deviennent des signaux
+        self.assertEqual(non_signales, [], "lignes ❌/⚠️ de http_checks.sh ignorées par signaux.collecter")
+        for morceau in ("TLS 1.0 : ⚠️ encore accepté", "TLS 1.1 : ⚠️ encore accepté", "⚠️ TLS non vérifié",
+                        "⚠️ Aucune image avec fetchpriority", "une seule devrait"):
+            self.assertTrue(any(morceau in c for c in signales), f"pas de signal pour « {morceau} »")
+        self._verifier("http", "http", signales)
+        sans = self._declencheurs_sans_echantillon("http", src)
+        sys.stderr.write(f"\n[http] {len(sans)} déclencheur(s) http: sans ligne ❌/⚠️ produite par http_checks.sh (informatif) :\n"
+                         + "".join(f"  - {s}\n" for s in sans))
 
     def test_lignes_de_security_probe(self):
         src = _lire("security_probe.sh")
@@ -427,10 +439,13 @@ class TestCouverture(unittest.TestCase):
             # motif attendu vide : le verdict ne peut être que « ⚠️ répond 200 » ; sinon la ligne critique est « ❌ EXPOSÉ »
             lignes.append((mod_expose if motif else mod_repond).replace("@PATH@", chemin).replace("@SEV@", gravite))
         signales, non_signales = self._via_collecte("securite", "security-probe.md", lignes)
-        if non_signales:
-            sys.stderr.write(f"\n[security_probe.sh] {len(non_signales)} ligne(s) produite(s) mais ignorée(s) par signaux.collecter "
-                             "(❌ partout, ⚠️ seulement dans un tableau) :\n" + "".join(f"  - {l}\n" for l in non_signales))
-        self._verifier("securite", "securite", [c for c in signales])
+        self.assertEqual(non_signales, [], "lignes ❌/⚠️ de security_probe.sh ignorées par signaux.collecter")
+        for morceau in ("→ .map HTTP", "⚠️ CORS sur la page HTML"):
+            self.assertTrue(any(morceau in c for c in signales), f"pas de signal pour « {morceau} »")
+        self._verifier("securite", "securite", signales)
+        sans = self._declencheurs_sans_echantillon("securite", lignes)
+        sys.stderr.write(f"\n[securite] {len(sans)} déclencheur(s) securite: sans ligne ❌/⚠️ produite par security_probe.sh (informatif) :\n"
+                         + "".join(f"  - {s}\n" for s in sans))
 
 
 if __name__ == "__main__":

@@ -146,5 +146,61 @@ class TestSignaux(unittest.TestCase):
         self.assertNotIn("astro check :", propre.replace("Lignes", ""))
 
 
+class TestAvertissementsEnListe(unittest.TestCase):
+    """http / sécurité : les ⚠️ hors tableau (puces, citations, gras) deviennent des signaux « basse » ; pas de doublon."""
+
+    HTTP = """# Contrôles HTTP — exemple.test
+
+> ⚠️ TLS non vérifié (mode test) : les contrôles de certificat ne sont pas significatifs.
+> Attendu : toutes les variantes → une seule URL https.
+
+| Contrôle | Valeur | Verdict |
+|---|---|---|
+| Poids HTML | 200 Ko | ⚠️ > 150 Ko : SVG inline ? |
+| Favicon déclaré | /favicon.svg | ✅ |
+
+- ⚠️ > 150 Ko : SVG inline ?
+- ⚠️ Aucune image avec fetchpriority="high" : l'image LCP n'est pas priorisée.
+- ⚠️ Aucune image avec fetchpriority="high" : l'image LCP n'est pas priorisée.
+- TLS 1.0 : ⚠️ encore accepté (obsolète)
+- TLS 1.1 : ⚠️ encore accepté (obsolète)
+- TLS 1.2 : ✅ accepté
+- Légende : ✅ ok, ⚠️ à voir
+**Images en priorité haute : 2** — ⚠️ une seule devrait l'être
+## ⚠️ un titre n'est jamais un signal
+"""
+
+    def _collecter(self):
+        import signaux
+        with tempfile.TemporaryDirectory() as t:
+            d = pathlib.Path(t, "data/http")
+            d.mkdir(parents=True)
+            (d / "http-checks.md").write_text(self.HTTP, encoding="utf-8")
+            return [s for s in signaux.collecter(t) if s["source"] == "http"]
+
+    def test_puces_citations_et_gras(self):
+        cles = [s["cle"] for s in self._collecter()]
+        for attendu in ("> ⚠️ TLS non vérifié (mode test) : les contrôles de certificat ne sont pas significatifs.",
+                        '- ⚠️ Aucune image avec fetchpriority="high" : l\'image LCP n\'est pas priorisée.',
+                        "- TLS 1.0 : ⚠️ encore accepté (obsolète)", "- TLS 1.1 : ⚠️ encore accepté (obsolète)",
+                        "**Images en priorité haute : 2** — ⚠️ une seule devrait l'être"):
+            self.assertIn(attendu, cles)
+
+    def test_severite_et_texte_comme_les_lignes_de_tableau(self):
+        par_cle = {s["cle"]: s for s in self._collecter()}
+        s = par_cle["- TLS 1.0 : ⚠️ encore accepté (obsolète)"]
+        self.assertEqual((s["severite"], s["domaine"], s["source"]), ("basse", "Serveur / HTTP", "http"))
+        self.assertEqual(s["texte"], "TLS 1.0 : ⚠️ encore accepté (obsolète)")
+        self.assertEqual(par_cle["| Poids HTML | 200 Ko | ⚠️ > 150 Ko : SVG inline ? |"]["severite"], "basse")
+
+    def test_pas_de_doublon_ni_titre_ni_legende_ni_ok(self):
+        cles = [s["cle"] for s in self._collecter()]
+        self.assertEqual(len(cles), len(set(cles)))
+        self.assertNotIn("- ⚠️ > 150 Ko : SVG inline ?", cles)  # déjà signalé par la ligne de tableau
+        self.assertEqual(sum("fetchpriority" in c for c in cles), 1)  # puce répétée : un seul signal
+        self.assertFalse([c for c in cles if c.startswith("#") or "Légende" in c or "TLS 1.2" in c or "Attendu" in c])
+        self.assertEqual(len(cles), 6)
+
+
 if __name__ == "__main__":
     unittest.main()

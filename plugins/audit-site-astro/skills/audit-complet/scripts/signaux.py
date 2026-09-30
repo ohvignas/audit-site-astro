@@ -99,11 +99,26 @@ def collecter(audit):
 
     for path, dom_name, source in ((d / "securite/security-probe.md", "Sécurité", "securite"), (d / "http/http-checks.md", "Serveur / HTTP", "http")):
         if path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
+            lignes = path.read_text(encoding="utf-8").splitlines()
+            source_signals = []
+            for line in lignes:
                 if "❌" in line:
-                    signals.append(_signal("haute", dom_name, line.strip("| ").replace(" | ", " · ")[:220], [], source, line.strip()))
+                    source_signals.append(_signal("haute", dom_name, line.strip("| ").replace(" | ", " · ")[:220], [], source, line.strip()))
                 elif "⚠️" in line and line.startswith("|"):
-                    signals.append(_signal("basse", dom_name, line.strip("| ").replace(" | ", " · ")[:220], [], source, line.strip()))
+                    source_signals.append(_signal("basse", dom_name, line.strip("| ").replace(" | ", " · ")[:220], [], source, line.strip()))
+            # Avertissements ⚠️ hors tableau (puces « - ⚠️ … », citations « > ⚠️ … », lignes en gras, « - TLS 1.0 : ⚠️ … »), même sévérité
+            # que ceux des tableaux. Ignorés : titres (#), lignes ✅ (légendes, verdicts favorables), doublons d'un constat déjà signalé
+            # par une ligne de tableau ou une puce précédente (même texte, préfixe compris).
+            for line in lignes:
+                brute = line.strip()
+                if "⚠️" not in brute or "❌" in brute or "✅" in brute or brute.startswith(("|", "#")):
+                    continue
+                texte = brute.lstrip("->* ").replace("**", "")[:220]
+                message = brute.lstrip("->* ").rstrip("| ")  # « ⚠️ msg » ou « TLS 1.0 : ⚠️ msg » : le préfixe distingue les puces
+                if any(message in s["cle"] for s in source_signals):
+                    continue
+                source_signals.append(_signal("basse", dom_name, texte, [], source, brute))
+            signals.extend(source_signals)
 
     # Santé du projet (project_checks.sh) : lignes ❌ / ⚠️ et vulnérabilités critical/high/moderate.
     path = d / "code/project-checks.md"
