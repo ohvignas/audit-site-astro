@@ -61,10 +61,34 @@ def read(p):
 
 
 def sans_commentaires(t):
-    """Retire les commentaires JS/TS (/* … */ et // …) sans toucher aux URL (https://…).
-    Réservé aux fichiers de config et aux endpoints : un motif « /* » dans une chaîne (glob) serait mal lu."""
-    t = re.sub(r"/\*.*?\*/", "", t, flags=re.S)
-    return re.sub(r"(?<![:\w\"'`/])//[^\n]*", "", t)
+    """Retire les commentaires JS/TS (/* … */ et // …) en laissant intacts les littéraux '…', "…" et `…`
+    (échappements compris) : un glob '/images/**' ou une URL 'https://…' ne sont pas des commentaires.
+    Les retours à la ligne des commentaires sont conservés (numéros de ligne inchangés)."""
+    out, i, n = [], 0, len(t)
+    while i < n:
+        c = t[i]
+        if c in "'\"`":
+            j = i + 1
+            while j < n and t[j] != c:
+                if t[j] == "\\":
+                    j += 1
+                elif c != "`" and t[j] == "\n":  # chaîne non fermée : on s'arrête à la ligne
+                    break
+                j += 1
+            out.append(t[i:j + 1])
+            i = j + 1
+        elif t.startswith("//", i) and not (i and t[i - 1] == ":"):
+            j = t.find("\n", i)
+            i = n if j < 0 else j
+        elif t.startswith("/*", i):
+            j = t.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append("\n" * t.count("\n", i, j))
+            i = j
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
 
 
 # Espaces de noms XML : des identifiants, pas des URL chargées (xmlns du sitemap…)
