@@ -63,7 +63,7 @@ git log --all --oneline -- .env .env.local .env.production | head   # présent :
    git push --force --mirror
    ```
 
-   Ensuite, chaque collaborateur reclone le dépôt (les anciens clones contiennent encore l'historique). Sur GitHub, contactez le support pour purger les vues en cache et les forks si le dépôt était public.
+   Ensuite, chaque collaborateur reclone le dépôt (les anciens clones contiennent encore l'historique). Sur GitHub, demander à l'humain de contacter le support pour purger les vues en cache et les forks si le dépôt était public.
 6. **Activer une détection automatique** : GitHub secret scanning et push protection, ou `gitleaks` en intégration continue.
 7. Placer les vraies valeurs dans les secrets de l'hébergeur / de la CI et dans le `.env` du serveur (permissions `chmod 600`, propriétaire l'utilisateur de l'application).
 

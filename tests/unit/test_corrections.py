@@ -926,9 +926,12 @@ class TestCommandesDeProduction(Base):
         for cmd in ("npx convex deploy", "npx convex run leads:purger", "npx convex import --table t x.jsonl", "npx convex export --prod",
                     "vercel --prod", "vercel deploy --prod", "netlify deploy --prod", "wrangler deploy", "rm -rf dist",
                     "sudo nginx -t", "systemctl reload nginx", "nginx -s reload", "caddy reload --config x", "sudo certbot renew",
-                    "git push --force --mirror", "pm2 delete app", "docker compose down", "« Purge Everything »"):
+                    "git push --force --mirror", "pm2 delete app", "docker compose down", "« Purge Everything »",
+                    "npx convex env set WEBHOOK_SECRET x", "npx convex deployment token create", "wrangler pages deploy dist",
+                    "purger le cache du CDN", "Purgez le cache", "vider le cache Cloudflare", "Cloudflare : Caching > Purge"):
             self.assertRegex(cmd, corrections.COMMANDES_SENSIBLES)
-        for anodin in ("npx convex dev --once", "npm run build", "curl -sI https://SITE/", "--production", "git revert"):
+        for anodin in ("npx convex dev --once", "npm run build", "curl -sI https://SITE/", "--production", "git revert",
+                       "npx convex env list", "Cache-Control: max-age=0", "cf-cache-status: HIT"):
             self.assertNotRegex(anodin, corrections.COMMANDES_SENSIBLES)
 
     def test_le_controle_detecte_une_consigne_de_deploiement(self):
@@ -970,7 +973,8 @@ class TestCommandesDeProduction(Base):
         t = (self.generer(audit, FIXTURE_FICHES) / "LISEZ-MOI.md").read_text(encoding="utf-8")
         regle = t[t.index("Commandes interdites à l'agent"):]
         regle = regle[:regle.index("\n- ", 1) if "\n- " in regle else len(regle)]
-        for attendu in ("`npx convex deploy`", "`npx convex run`", "`npx convex import`", "`--prod`", "`vercel --prod`",
+        for attendu in ("`npx convex deploy`", "`npx convex run`", "`npx convex import`", "`npx convex env set`", "`npx convex deployment token`",
+                        "`--prod`", "`vercel --prod`",
                         "`netlify deploy --prod`", "`wrangler deploy`", "DNS", "CDN", "`rm -rf`", "migrations", "demander"):
             self.assertIn(attendu, regle)
         self.assertIn("`npx convex dev`", t)

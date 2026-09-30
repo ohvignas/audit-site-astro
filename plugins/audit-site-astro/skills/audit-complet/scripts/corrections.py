@@ -236,9 +236,10 @@ def _lignes_signal(sig):
 # jamais lancées par l'agent (règle d'arrêt du LISEZ-MOI). Une fiche qui en cite reçoit une mise en garde ; le test
 # test_corrections.TestCommandesDeProduction exige qu'une telle commande soit accompagnée d'une mention de l'humain.
 COMMANDES_SENSIBLES = re.compile(
-    r"convex (deploy|run|import)\b|--prod\b|vercel (deploy|--prod)|netlify deploy|wrangler (deploy|publish)|rm -rf|\bsudo |"
+    r"convex (deploy|run|import|env (set|remove|unset)|deployment)\b|--prod\b|vercel (deploy|--prod)|netlify deploy|"
+    r"wrangler (pages )?(deploy|publish)|rm -rf|\bsudo |"
     r"systemctl (reload|restart|stop|start)|nginx -s |caddy reload|certbot renew|push --force|pm2 (delete|restart|stop)|"
-    r"docker compose down|Purge Everything")
+    r"docker compose down|\b[Pp]urg(er|ez)\b|\bPurge\b|\b[Vv]id(er|ez) le cache|[Cc]loudflare\b[^./\n`]{0,40}\b[Cc]ache\b")
 
 
 def _mise_en_garde(c):
@@ -426,7 +427,7 @@ def rendre_lisez_moi(audit, site, date, projet, avec_rapport_audit, url):
             "- Ne pas déployer, ne pas pousser vers la production : l'humain valide et publie.",
             "- **Commandes interdites à l'agent** : ne **jamais** lancer une commande qui déploie, écrit en production, supprime ou modifie des "
             "données, même si une fiche la cite ; la remettre à l'humain et lui demander. En particulier : `npx convex deploy`, "
-            "`npx convex run` sur une mutation (ou sur tout déploiement autre que celui de développement), `npx convex import`, toute option `--prod`, "
+            "`npx convex run` sur une mutation (ou sur tout déploiement autre que celui de développement), `npx convex import`, `npx convex env set` et `npx convex deployment token` (variables et clés), toute option `--prod`, "
             "`vercel --prod`, `netlify deploy --prod`, `wrangler deploy`, les changements de DNS ou de CDN (règles, purge de cache), "
             "`rm -rf`, les migrations de base de données, les commandes du serveur de production (`sudo`, `systemctl`, rechargement de nginx "
             "ou Caddy, `certbot`), `git push --force`.",

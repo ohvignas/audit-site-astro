@@ -98,7 +98,7 @@ Attendu : plus aucune ligne « robots.txt bloque … » dans la section « Signa
 
 - `robots.txt` interdit de **crawler**, pas d'**indexer** : pour retirer une page d'un index il faut `noindex` (et la page doit rester crawlable pour que la directive soit lue).
 - Selon OpenAI et Perplexity, `ChatGPT-User` et `Perplexity-User` (visites déclenchées par un utilisateur) peuvent ne pas respecter robots.txt : l'absence de blocage ici ne garantit donc pas l'accès si un pare-feu les bloque (voir `geo-waf-cdn-bloque-bots-ia`).
-- Un cache CDN peut servir l'ancien robots.txt quelques heures : purger si besoin.
+- Un cache CDN peut servir l'ancien robots.txt quelques heures : si besoin, faire purger ce cache par l'humain (changement de CDN).
 - Retour arrière : `git revert` du commit ; le fichier redevient celui d'avant.
 
 ## Pour aller plus loin

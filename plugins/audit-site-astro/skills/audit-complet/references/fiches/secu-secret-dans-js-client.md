@@ -43,7 +43,7 @@ Présent : au moins un motif trouvé, ou une variable sans `PUBLIC_` lue dans un
 
    | Fournisseur | Où faire tourner la clé |
    |---|---|
-   | Convex (clé de déploiement) | Tableau de bord du déploiement, page Settings : supprimer la clé (« Delete ») puis générer une nouvelle clé ; en ligne de commande `npx convex deployment token` permet de créer et de supprimer (`token delete`) une clé. Mettez la nouvelle valeur dans le secret de votre CI / hébergeur. |
+   | Convex (clé de déploiement) | Tableau de bord du déploiement, page Settings : supprimer la clé (« Delete ») puis générer une nouvelle clé ; en ligne de commande, `npx convex deployment token` (lancée par l'humain) permet de créer et de supprimer (`token delete`) une clé. Mettez la nouvelle valeur dans le secret de votre CI / hébergeur. |
    | Stripe | Tableau de bord, Développeurs, Clés API : « Renouveler la clé » (roll) sur la clé secrète, avec expiration de l'ancienne. |
    | OpenAI, Anthropic | Console du fournisseur, section clés d'API : créer une nouvelle clé, supprimer l'ancienne. |
    | AWS | IAM, utilisateur, identifiants de sécurité : créer une seconde clé, migrer, désactiver puis supprimer l'ancienne. |
@@ -95,7 +95,7 @@ python3 scripts/astro_scan.py /chemin/du/projet --out /tmp/verif-code && grep -i
 ## Pièges et retour arrière
 
 - Préfixer une variable par `PUBLIC_` la publie : à réserver aux valeurs publiques.
-- Le CDN ou le navigateur peut garder l'ancienne page : purgez le cache.
+- Le CDN ou le navigateur peut garder l'ancienne page : faites purger le cache du CDN par l'humain.
 - Ne faites pas tourner la clé avant d'avoir prévu où mettre la nouvelle valeur (secrets de l'hébergeur, `.env` du serveur) : sinon interruption de service.
 - Retour arrière : impossible et non souhaitable pour la clé compromise ; annulez seulement le changement de code si une régression apparaît.
 

@@ -37,7 +37,7 @@ Problème présent : des lignes `404`, `403`, `500` ou `000`. Corrigé : toutes 
 1. Lire, dans le fichier de données du crawl (`data/crawl/issues.json`, clé `broken_images`), la liste des URL cassées et les pages qui les contiennent.
 2. Classer chaque cas selon l'URL :
    - **`/images/...` ou fichier de `public/`** : le fichier n'existe pas dans `public/` ou son nom a une casse différente (Linux distingue `Photo.JPG` de `photo.jpg`). Restaurer le fichier (`git log --diff-filter=D -- public/images/x.jpg`) ou corriger la référence.
-   - **`/_astro/x.HASH.webp`** : ancien HTML en cache qui référence un fichier dont le hash a changé après un nouveau build. Purger le cache du CDN ou du proxy, et s'assurer que les pages HTML ne sont pas mises en cache plus longtemps que les déploiements.
+   - **`/_astro/x.HASH.webp`** : ancien HTML en cache qui référence un fichier dont le hash a changé après un nouveau build. Faire purger le cache du CDN ou du proxy (par l'humain, ou avec son accord explicite), et s'assurer que les pages HTML ne sont pas mises en cache plus longtemps que les déploiements.
    - **`/_image?href=...`** : la transformation échoue. Vérifier le journal du serveur Node ; causes usuelles : domaine distant non autorisé (`image.remotePatterns`, voir `perf-images-convex-storage`), `sharp` manquant en production, source introuvable.
    - **URL Convex `/api/storage/...`** : le fichier a été supprimé du storage alors que la ligne en base pointe encore vers lui. Recréer le fichier, ou mettre à jour l'enregistrement, et afficher une image par défaut si l'URL est absente.
    - **Domaine externe** : remplacer par une image locale (les images de sites tiers peuvent disparaître à tout moment).

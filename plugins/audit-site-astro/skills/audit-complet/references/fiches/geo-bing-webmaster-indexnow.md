@@ -71,7 +71,7 @@ import { v } from 'convex/values';
 export const notifier = action({
   args: { urls: v.array(v.string()) },
   handler: async (_ctx, { urls }) => {
-    const key = process.env.INDEXNOW_KEY; // npx convex env set INDEXNOW_KEY <cle>
+    const key = process.env.INDEXNOW_KEY; // défini par l'humain : npx convex env set INDEXNOW_KEY <cle> (--prod en production)
     if (!key || urls.length === 0) return { status: 0 };
     const res = await fetch('https://api.indexnow.org/indexnow', {
       method: 'POST',

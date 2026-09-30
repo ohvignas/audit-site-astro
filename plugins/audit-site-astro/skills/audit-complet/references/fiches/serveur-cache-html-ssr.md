@@ -119,7 +119,7 @@ server {
 
 nginx ne met en cache que si la réponse le permet (`X-Accel-Expires` en priorité, sinon `Cache-Control`/`Expires`). Une page sans ces en-têtes n'est pas cachée : c'est voulu, on active le cache page par page (étape 3). nginx ne cache pas non plus les réponses qui portent un `Set-Cookie`.
 
-5. **CDN** : Vercel, Netlify et Cloudflare peuvent cacher le HTML si la réponse porte `s-maxage`. Astro 7 propose des fournisseurs de cache d'adaptateur (expérimentaux) : `cacheVercel()` (`@astrojs/vercel/cache`), `cacheNetlify()` (`@astrojs/netlify/cache`), `cacheCloudflare()` (`@astrojs/cloudflare/cache`) à passer à `cache: { provider: … }`. Cloudflare seul ne met **pas** le HTML en cache par défaut : il faut une règle de cache qui respecte les en-têtes de l'origine.
+5. **CDN** : Vercel, Netlify et Cloudflare peuvent cacher le HTML si la réponse porte `s-maxage`. Astro 7 propose des fournisseurs de cache d'adaptateur (expérimentaux) : `cacheVercel()` (`@astrojs/vercel/cache`), `cacheNetlify()` (`@astrojs/netlify/cache`), `cacheCloudflare()` (`@astrojs/cloudflare/cache`) à passer à `cache: { provider: … }`. Cloudflare seul ne met **pas** le HTML en cache par défaut : il faut une règle de cache qui respecte les en-têtes de l'origine (changement de CDN : par l'humain, ou avec son accord explicite).
 
 ## Critères d'acceptation
 
