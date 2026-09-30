@@ -2,18 +2,23 @@
 # http_checks.sh — Contrôles HTTP côté réseau : redirections d'hôte, TTFB (cache / sans cache),
 # compression, HTTP/2-3, cache des assets Astro (/_astro/), en-têtes de sécurité, TLS.
 #
-# Usage : bash http_checks.sh https://exemple.fr [DOSSIER_SORTIE]
+# Usage : bash http_checks.sh https://exemple.fr [DOSSIER_SORTIE] [PAGES_JSON]
+#   PAGES_JSON (optionnel) : pages.json du crawl, pour trouver les routes dynamiques à tester (soft 404, §7) ;
+#   sans lui, les liens de la page d'accueil servent de repli.
 # Sortie : DOSSIER_SORTIE/http-checks.md (lisible) — aucune modification du site.
 set -u
 curl() { if [ "${AUDIT_INSECURE_TLS:-}" = "1" ]; then command curl -k "$@"; else command curl "$@"; fi; }
 URL="${1:?usage: http_checks.sh https://site.tld [dossier_sortie]}"
 OUT="${2:-.}"
+PAGES_JSON="${3:-}"
 mkdir -p "$OUT"
 REPORT="$OUT/http-checks.md"
 UA="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
 HOST=$(printf '%s' "$URL" | awk -F/ '{print $3}')
 BARE="${HOST#www.}"
-BASE="https://$HOST"
+# Origine réellement servie (après redirections http→https, www…) : base des URL relatives de la page
+FINAL=$(curl -s -o /dev/null -L --max-redirs 10 --max-time 20 -A "$UA" -w '%{url_effective}' "$URL" 2>/dev/null)
+BASE=$(printf '%s' "${FINAL:-$URL}" | awk -F/ '{print $1"//"$3}')
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -103,8 +108,13 @@ echo "## 4. Cache et compression des ressources statiques"
 echo
 echo "| Ressource | Cache-Control | Encodage | Verdict |"
 echo "|---|---|---|---|"
-grep -oE '(src|href)="[^"]+\.(js|css|woff2?|webp|avif|png|jpe?g|svg)(\?[^"]*)?"' "$TMP/body.html" \
-  | sed -E 's/^(src|href)="//; s/"$//' | awk '!seen[$0]++' | head -12 | while read -r a; do
+# Les JS hashés d'Astro sont souvent référencés seulement par les îlots (component-url / renderer-url) :
+# on en prend toujours quelques-uns, puis les ressources classiques (src / href).
+{ grep -oE '(src|href|component-url|renderer-url)="(https?://[^"/]+)?/_astro/[^"]+"' "$TMP/body.html" \
+    | sed -E 's/^[a-z-]+="//; s/"$//' | head -4
+  grep -oE '(src|href)="[^"]+\.(js|css|woff2?|webp|avif|png|jpe?g|svg)(\?[^"]*)?"' "$TMP/body.html" \
+    | sed -E 's/^(src|href)="//; s/"$//'
+} | sed 's/&amp;/\&/g' | awk '!seen[$0]++' | head -12 | while read -r a; do
   case "$a" in http*) full="$a";; //*) full="https:$a";; /*) full="$BASE$a";; *) full="$BASE/$a";; esac
   h=$(curl -s -o /dev/null -D - -A "$UA" -H 'Accept-Encoding: br, gzip' --max-time 20 "$full")
   acc=$(printf '%s' "$h" | grep -i '^cache-control:' | head -1 | cut -d: -f2- | tr -d '\r' | sed 's/^ *//')
@@ -193,3 +203,46 @@ for f in robots.txt sitemap.xml sitemap-index.xml sitemap-0.xml llms.txt llms-fu
 done
 echo
 echo "> La dernière ligne doit renvoyer **404** (une page inexistante en 200 = soft 404, fréquent en SSR Astro si la route dynamique ne fixe pas Astro.response.status)."
+
+echo
+echo "## 7. Soft 404 sous les routes dynamiques"
+echo
+# Segments qui regroupent au moins 2 pages (/formations/a, /formations/b…) = route dynamique probable.
+SEGS=$(python3 - "$PAGES_JSON" "$TMP/body.html" "$(printf '%s' "$BASE" | awk -F/ '{print $3}')" <<'PY'
+import json, re, sys
+from collections import defaultdict
+from urllib.parse import urlparse
+pages_json, accueil, hote = sys.argv[1:4]
+urls = []
+try:
+    urls = [p["url"] for p in json.load(open(pages_json, encoding="utf-8"))["pages"]
+            if p.get("final_status") == 200 and not p.get("redirect_hops")]
+except Exception:
+    try:
+        urls = re.findall(r'href="((?:https?://[^/"]+)?/[^"#?]*)"', open(accueil, encoding="utf-8", errors="replace").read())
+    except Exception:
+        pass
+enfants = defaultdict(set)
+for u in urls:
+    p = urlparse(u)
+    if p.netloc and p.netloc != hote:
+        continue
+    parts = [x for x in p.path.split("/") if x]
+    if len(parts) == 2:
+        enfants[parts[0]].add(parts[1])
+print("\n".join(sorted(s for s, e in enfants.items() if len(e) >= 2)[:6]))
+PY
+)
+if [ -z "$SEGS" ]; then
+  echo "- Aucune route dynamique repérée (aucun segment avec au moins 2 pages)."
+else
+  for seg in $SEGS; do
+    faux="/$seg/zz-audit-inexistant-$RANDOM"
+    code=$(curl -s -o /dev/null -A "$UA" --max-time 15 -w '%{http_code}' "$BASE$faux")
+    if [ "$code" = "200" ]; then
+      echo "- ❌ soft 404 sous /$seg/ : $faux répond 200 (page vide indexable) — si l'élément n'existe pas : return Astro.rewrite('/404') ou Astro.response.status = 404"
+    else
+      echo "- ✅ /$seg/… inexistant → HTTP $code"
+    fi
+  done
+fi

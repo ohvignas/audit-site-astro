@@ -86,9 +86,10 @@ step() {  # $1 nom, $2 sortie principale, $3 validateur, reste = commande
 prevol || { echo; cat "$LOG"; exit 2; }
 [ "${AUDIT_INSECURE_TLS:-}" = "1" ] && echo "| mode test | ⚠️ TLS non vérifié (AUDIT_INSECURE_TLS=1) | | |" >> "$LOG"
 
-step http "$D/http/http-checks.md" valid_aucun bash "$DIR/http_checks.sh" "$URL" "$D/http"
 step crawl "$D/crawl/pages.json" valid_crawl python3 "$DIR/crawl_site.py" "$URL" --out "$D/crawl" \
      --max-pages "${MAX_PAGES:-500}" --delay 0.3 --check-images 200
+# après le crawl : http_checks y lit les routes dynamiques à tester en soft 404
+step http "$D/http/http-checks.md" valid_aucun bash "$DIR/http_checks.sh" "$URL" "$D/http" "$D/crawl/pages.json"
 step geo "$D/geo/geo.json" valid_geo python3 "$DIR/geo_check.py" "$URL" --out "$D/geo" --crawl "$D/crawl/pages.json" --sample 12
 step securite "$D/securite/security-probe.md" valid_aucun bash "$DIR/security_probe.sh" "$URL" "$D/securite"
 
