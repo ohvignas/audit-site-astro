@@ -8,7 +8,7 @@ Un seul fichier HTML : CSS en ligne, SVG en ligne, aucun JavaScript, aucune ress
 clair/sombre selon le système, imprimable en A4 (c'est aussi la source du PDF). Tout texte issu du site audité
 ou des fichiers de données passe par html.escape.
 
-API : notes_par_domaine(signaux), markdown_vers_html(md), generer(audit) -> HTML complet.
+API : notes_par_domaine(signaux), notes_audit(audit), note_globale(notes), markdown_vers_html(md), generer(audit) -> HTML complet.
 """
 import argparse
 import html
@@ -192,6 +192,21 @@ def note_globale(notes):
     if any(notes.get(d, {}).get("critique") for d in ("Sécurité", "SEO technique")) and g > 49:
         return 49, True
     return g, False
+
+
+def notes_audit(audit, sigs=None):
+    """Notes par domaine d'un dossier d'audit (signaux bruts) ; `sigs` évite de relire les données si déjà collectés.
+
+    Les domaines dont la source de données existe (crawl, geo, securite, code, Lighthouse) comptent même sans constat.
+    """
+    audit = Path(audit)
+    if sigs is None:
+        sigs = signaux.collecter(audit)
+    d = audit / "data"
+    audites = [dom for dom, chemin in (("SEO technique", "crawl"), ("GEO / IA", "geo"), ("Sécurité", "securite"), ("Code", "code")) if (d / chemin).is_dir()]
+    if signaux.lighthouse(audit):
+        audites += ["Performance", "Accessibilité"]
+    return notes_par_domaine(sigs, audites)
 
 
 # --- Markdown minimal -> HTML ----------------------------------------------------------------------------------------
@@ -532,11 +547,7 @@ def generer(audit):
     site = str(meta.get("start_url") or audit.resolve().name)
     collecte = _lu(audit / "data/COLLECTE.md")
     priorise = _lu(audit / "RAPPORT-AUDIT.md")
-    d = audit / "data"
-    audites = [dom for dom, chemin in (("SEO technique", "crawl"), ("GEO / IA", "geo"), ("Sécurité", "securite"), ("Code", "code")) if (d / chemin).is_dir()]
-    if signaux.lighthouse(audit):
-        audites += ["Performance", "Accessibilité"]
-    notes = notes_par_domaine(sigs, audites)
+    notes = notes_audit(audit, sigs)
     glob, plafonnee = note_globale(notes)
     ver = version_plugin()
     total = {k: sum(1 for s in sigs if s["severite"] == k) for k in MALUS}

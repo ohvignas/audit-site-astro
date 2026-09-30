@@ -108,6 +108,9 @@ class TestValidationDesEtapes(unittest.TestCase):
                 self.assertIn("⏭️", next(l for l in collecte.splitlines() if l.startswith("| lighthouse")))
                 self.assertIn("✅", next(l for l in collecte.splitlines() if l.startswith("| rapport-html")))
                 self.assertIn("⏭️", next(l for l in collecte.splitlines() if l.startswith("| pdf")))
+                # dossier d'audit non daté : le parent n'est pas un dossier de site, rien n'y est écrit
+                self.assertIn("⏭️", next(l for l in collecte.splitlines() if l.startswith("| historique")))
+                self.assertFalse(pathlib.Path(d).parent.joinpath("index.html").exists())
                 self.assertTrue(pathlib.Path(d, "RAPPORT.html").exists())
                 self.assertFalse(pathlib.Path(d, "RAPPORT.pdf").exists())
                 self.assertEqual(r.returncode, 1, r.stdout[-2000:])
@@ -139,6 +142,28 @@ class TestEtapePdf(unittest.TestCase):
         self.assertIn("⚠️ PDF non généré : Chrome introuvable", ligne)
         self.assertNotIn("❌", collecte, collecte)
         self.assertEqual(r.returncode, 0, r.stdout[-2000:])
+
+    def test_historique_est_la_derniere_etape_dans_le_dossier_du_site(self):
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _PageHtml)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            url = f"http://127.0.0.1:{srv.server_port}/"
+            with tempfile.TemporaryDirectory() as t:
+                site = pathlib.Path(t, "beta.exemple.fr")
+                audit = site / "2026-09-30"
+                env = dict(os.environ, MAX_PAGES="3", SKIP_LIGHTHOUSE="1")
+                r = subprocess.run(["bash", str(SCRIPT), url, "", str(audit)], capture_output=True, text=True,
+                                   timeout=600, env=env)
+                lignes = [l for l in lire_collecte(audit).splitlines() if l.startswith("| ") and not l.startswith("| Étape")]
+                self.assertTrue(lignes[-1].startswith("| historique"), lignes[-1])
+                self.assertIn("✅", lignes[-1])
+                index = site / "index.html"
+                self.assertTrue(index.exists(), r.stdout[-2000:])
+                self.assertIn("2026-09-30", index.read_text(encoding="utf-8"))
+                self.assertIn("Historique des audits — beta.exemple.fr", index.read_text(encoding="utf-8"))
+        finally:
+            srv.shutdown()
+            srv.server_close()
 
     def test_skip_pdf_seul_ignore_l_etape(self):
         r, collecte = self._lancer(_PageHtml, SKIP_LIGHTHOUSE="1", SKIP_PDF="1", FORCE_PDF="1")

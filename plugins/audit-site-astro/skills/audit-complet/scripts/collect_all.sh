@@ -9,6 +9,7 @@
 #             CHROME_PATH (Chrome pour le PDF), AUDIT_INSECURE_TLS=1 (tests uniquement : certificat auto-signé),
 #             FORCE_PDF=1 (tests uniquement : imprime le PDF même avec SKIP_LIGHTHOUSE=1)
 # Un PDF impossible (Chrome absent, RAM insuffisante) est un avertissement ⚠️ et ne fait pas échouer la collecte.
+# Dernière étape « historique » : régénère <dossier du site>/index.html (évolution des notes de tous les audits AAAA-MM-JJ du site).
 # Les étapes tournent UNE PAR UNE : l'empreinte mémoire reste < ~1 Go (Chrome pendant Lighthouse).
 #
 # Codes de sortie : 0 = tout est ✅/⚠️/⏭️ ; 1 = au moins une étape ❌ ; 2 = pré-vol en échec : site injoignable
@@ -164,6 +165,13 @@ if [ "${SKIP_PDF:-0}" = "1" ] || { [ "${SKIP_LIGHTHOUSE:-0}" = "1" ] && [ "${FOR
 else
   pdf_step
 fi
+# Historique du site (dossier parent) : toujours en dernier, il reprend le RAPPORT.html/.pdf qu'on vient de produire.
+# Seulement pour un dossier d'audit daté AAAA-MM-JJ (sinon le parent n'est pas un dossier de site : rien n'y est écrit).
+case "$(basename "$AUDIT")" in
+  [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])
+    step historique "$(dirname "$AUDIT")/index.html" valid_aucun python3 "$DIR/historique.py" "$(dirname "$AUDIT")";;
+  *) echo "| historique | ⏭️ ignoré (dossier d'audit non daté AAAA-MM-JJ) | | |" >> "$LOG";;
+esac
 echo >> "$LOG"
 echo "Dossier d'audit : \`$AUDIT\`" >> "$LOG"
 echo

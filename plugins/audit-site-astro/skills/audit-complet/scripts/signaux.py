@@ -39,7 +39,9 @@ def ex_str(e):
 def lighthouse(audit):
     """Entrées de pagespeed.json sans erreur."""
     perf = charger(Path(audit) / "data/perf/pagespeed.json") or []
-    return [r for r in perf if not r.get("erreur")]
+    if not isinstance(perf, list):
+        return []
+    return [r for r in perf if isinstance(r, dict) and not r.get("erreur")]
 
 
 def meta_crawl(audit):
