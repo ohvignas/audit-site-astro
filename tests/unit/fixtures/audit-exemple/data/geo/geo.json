@@ -1,0 +1,13 @@
+{
+ "signaux": [
+  {
+   "severite": "moyenne",
+   "constat": "llms.txt absent : les assistants IA n'ont pas de résumé du site"
+  },
+  {
+   "severite": "basse",
+   "constat": "Aucune donnée structurée Organization sur la page d'accueil"
+  }
+ ],
+ "pages": []
+}
