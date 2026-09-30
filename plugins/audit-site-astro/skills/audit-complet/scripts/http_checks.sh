@@ -19,6 +19,8 @@ BARE="${HOST#www.}"
 # Origine réellement servie (après redirections http→https, www…) : base des URL relatives de la page
 FINAL=$(curl -s -o /dev/null -L --max-redirs 10 --max-time 20 -A "$UA" -w '%{url_effective}' "$URL" 2>/dev/null)
 BASE=$(printf '%s' "${FINAL:-$URL}" | awk -F/ '{print $1"//"$3}')
+# Page réellement servie : TTFB, en-têtes et contenu (§2 à §4 bis, repli de §7) se mesurent sur elle, pas sur une redirection
+PAGE="${FINAL:-$URL}"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -56,13 +58,13 @@ echo "| Requête | DNS | Connexion | TLS | **TTFB** | Total | Taille | HTTP |"
 echo "|---|---|---|---|---|---|---|---|"
 for i in 1 2 3 4 5; do
   curl -s -o /dev/null -A "$UA" -H 'Accept-Encoding: br, gzip' --max-time 30 \
-    -w "| normale #$i | %{time_namelookup}s | %{time_connect}s | %{time_appconnect}s | **%{time_starttransfer}s** | %{time_total}s | %{size_download} o | %{http_version} |\n" "$URL"
+    -w "| normale #$i | %{time_namelookup}s | %{time_connect}s | %{time_appconnect}s | **%{time_starttransfer}s** | %{time_total}s | %{size_download} o | %{http_version} |\n" "$PAGE"
 done
 for i in 1 2 3; do
-  sep='?'; case "$URL" in *\?*) sep='&';; esac
+  sep='?'; case "$PAGE" in *\?*) sep='&';; esac
   curl -s -o /dev/null -A "$UA" -H 'Accept-Encoding: br, gzip' -H 'Cache-Control: no-cache' --max-time 30 \
     -w "| sans cache #$i | %{time_namelookup}s | %{time_connect}s | %{time_appconnect}s | **%{time_starttransfer}s** | %{time_total}s | %{size_download} o | %{http_version} |\n" \
-    "${URL}${sep}audit_nocache=$RANDOM$RANDOM"
+    "${PAGE}${sep}audit_nocache=$RANDOM$RANDOM"
 done
 echo
 echo "> Bon : TTFB < 0,2 s servi par cache/CDN, < 0,8 s en rendu serveur (SSR). Un grand écart normale/sans cache = le cache fonctionne ;"
@@ -71,7 +73,7 @@ echo
 
 echo "## 3. En-têtes de la page HTML"
 echo
-curl -s -D "$TMP/h_html" -o "$TMP/body.html" -A "$UA" -H 'Accept-Encoding: br, gzip' --compressed --max-time 30 "$URL" >/dev/null
+curl -s -D "$TMP/h_html" -o "$TMP/body.html" -A "$UA" -H 'Accept-Encoding: br, gzip' --compressed --max-time 30 "$PAGE" >/dev/null
 echo '```'
 grep -viE '^(set-cookie|report-to|nel):' "$TMP/h_html" | tr -d '\r' | sed -n '1,60p'
 echo '```'
@@ -79,7 +81,7 @@ hv() { grep -i "^$1:" "$2" | head -1 | cut -d: -f2- | tr -d '\r' | sed 's/^ *//'
 echo
 echo "| Contrôle | Valeur | Verdict |"
 echo "|---|---|---|"
-enc=$(curl -s -o /dev/null -D - -A "$UA" -H 'Accept-Encoding: br, gzip' --max-time 20 "$URL" | grep -i '^content-encoding:' | tr -d '\r' | cut -d: -f2 | sed 's/ //g')
+enc=$(curl -s -o /dev/null -D - -A "$UA" -H 'Accept-Encoding: br, gzip' --max-time 20 "$PAGE" | grep -i '^content-encoding:' | tr -d '\r' | cut -d: -f2 | sed 's/ //g')
 hsize=$(wc -c < "$TMP/body.html" | tr -d ' ')
 echo "| Compression HTML | ${enc:-aucune} (HTML décompressé : $((hsize / 1024)) Ko) | $([ -n "$enc" ] && echo ✅ || echo '❌ activer brotli/gzip (proxy, CDN ou middleware)') |"
 [ "$hsize" -gt 150000 ] && echo "| Poids HTML | $((hsize / 1024)) Ko | ⚠️ > 150 Ko : SVG inline, JSON d'îlots, CSS inline ? |"

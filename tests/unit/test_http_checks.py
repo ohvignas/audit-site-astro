@@ -63,5 +63,18 @@ class TestHttpChecksAstro(unittest.TestCase):
         self.assertIn("soft 404 sous /cours/", md)
 
 
+class TestHttpChecksRedirection(unittest.TestCase):  # revue finale M4 : apex → www
+    def test_page_lue_apres_redirection(self):
+        with SiteLocal({"/": (200, HTML, ACCUEIL)},
+                       {"/_astro/": (200, dict(JS, **{"Cache-Control": "no-cache"}), "x")}) as final:
+            with SiteLocal({"/": (301, {"Location": final.url}, "")}) as apex, tempfile.TemporaryDirectory() as d:
+                env = dict(os.environ)
+                env.pop("AUDIT_INSECURE_TLS", None)
+                subprocess.run(["bash", str(SCRIPT), apex.url, d], capture_output=True, text=True, timeout=240, env=env)
+                md = pathlib.Path(d, "http-checks.md").read_text(encoding="utf-8")
+        self.assertIn("/_astro/Chat.abc123.js", md)
+        self.assertIn("asset hashé Astro", md)
+
+
 if __name__ == "__main__":
     unittest.main()
