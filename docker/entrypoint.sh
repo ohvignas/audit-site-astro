@@ -21,6 +21,7 @@ PROJ=""
 [ -f /projet/package.json ] && PROJ=/projet
 HOST=$(printf '%s' "$URL" | awk -F/ '{print $3}')
 AUDIT="/audits/$HOST/$(date +%F)"
+export AUDIT_DANS_DOCKER=1  # corrections.py : commande de relance au format « docker run » (les chemins du conteneur sont inutilisables sur l'hôte)
 bash /app/scripts/collect_all.sh "$URL" "$PROJ" "$AUDIT"
 code=$?
 echo
@@ -30,7 +31,10 @@ else
   echo "📄 Rapport : audits/$HOST/$(date +%F)/RAPPORT-BRUT.md"
   [ -f "$AUDIT/RAPPORT.html" ] && echo "🌐 Page web : audits/$HOST/$(date +%F)/RAPPORT.html"
   [ -f "$AUDIT/RAPPORT.pdf" ] && echo "📕 PDF : audits/$HOST/$(date +%F)/RAPPORT.pdf"
-  [ -f "$AUDIT/CORRECTIONS/LISEZ-MOI.md" ] && echo "🛠️ Corrections : audits/$HOST/$(date +%F)/CORRECTIONS/"
+  # CORRECTIONS/ ou, si un suivi y est commencé (ou .garder), le plus récent CORRECTIONS-<horodatage>/ (tri alphabétique : le dernier est le plus récent)
+  CORR=""
+  for c in "$AUDIT"/CORRECTIONS*/; do [ -f "${c}LISEZ-MOI.md" ] && CORR=$(basename "$c"); done
+  [ -n "$CORR" ] && echo "🛠️ Corrections : audits/$HOST/$(date +%F)/$CORR/"
   [ -f "/audits/$HOST/index.html" ] && echo "📈 Historique : audits/$HOST/index.html"
   echo "🤖 Rapport priorisé avec correctifs : ouvrir le dossier dans Claude Code et lancer /audit-site-astro:audit-complet"
 fi

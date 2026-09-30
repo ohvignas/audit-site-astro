@@ -357,7 +357,7 @@ class TestLisezMoi(Base):
         self.assertEqual(args[2], "/tmp/projet astro")
         self.assertTrue(args[3].endswith("/$(date +%F)"), args[3])
         self.assertIn(str(audit.resolve().parent), args[3])
-        self.assertIn('-v \'/tmp/projet astro\':/projet:ro', texte)
+        self.assertIn("-v /chemin/vers/mon-projet-astro:/projet:ro", texte)  # variante Docker : chemin à remplacer, jamais celui de l'audit
 
     def test_date_sans_horloge(self):
         audit = self.copie_fixture(nom="audit-sans-date")
@@ -524,6 +524,211 @@ class TestSecrets(Base):
         script = (SCRIPTS / "security_probe.sh").read_text(encoding="utf-8")
         self.assertIn("sed -E 's/(.{12}).*/\\1…/'", script)
         self.assertIn('echo "| $path | $code | $size | $verdict |"', script)
+
+
+class TestSuiviPreserve(Base):
+    """I1 : un dossier dont le suivi a été rempli n'est jamais écrasé."""
+
+    def avec_plan(self):
+        audit = self.copie_fixture()
+        cible = self.generer(audit, FIXTURE_FICHES)
+        return audit, cible
+
+    def assert_preserve(self, audit, cible, modifier):
+        modifier(cible)
+        avant = lire_arbre(cible)
+        nouveau, _, garde = corrections.generer(audit, FIXTURE_FICHES)
+        self.assertTrue(garde)
+        self.assertNotEqual(nouveau, cible)
+        self.assertRegex(nouveau.name, r"^CORRECTIONS-\d{8}-\d{6}(-\d+)?$")
+        self.assertEqual(lire_arbre(cible), avant)
+        self.assertTrue((nouveau / "00-PLAN.md").exists())
+        # et le dossier neuf est vierge
+        self.assertNotIn("[x]", (nouveau / "00-PLAN.md").read_text(encoding="utf-8"))
+
+    def test_case_cochee_dans_le_plan(self):
+        audit, cible = self.avec_plan()
+        self.assert_preserve(audit, cible, lambda c: (c / "00-PLAN.md").write_text(
+            (c / "00-PLAN.md").read_text(encoding="utf-8").replace("- [ ] **01**", "- [x] **01**"), encoding="utf-8"))
+
+    def test_case_cochee_majuscule_dans_une_fiche(self):
+        audit, cible = self.avec_plan()
+        f = cible / "01-serveur-regex.md"
+        self.assert_preserve(audit, cible, lambda c: f.write_text(f.read_text(encoding="utf-8").replace("- [ ] Corrigé", "- [X] Corrigé"), encoding="utf-8"))
+
+    def test_date_ou_commit_rempli(self):
+        for champ in ("Date : 2026-10-01", "Commit : abc1234"):
+            with self.subTest(champ=champ):
+                audit, cible = self.avec_plan()
+                f = cible / "01-serveur-regex.md"
+                nom, valeur = champ.split(" : ")
+                self.assert_preserve(audit, cible, lambda c: f.write_text(
+                    f.read_text(encoding="utf-8").replace(f"- {nom} : \n", f"- {nom} : {valeur}\n"), encoding="utf-8"))
+                shutil.rmtree(self.t / "2026-09-30")
+
+    def test_dossier_vierge_recree(self):
+        audit, cible = self.avec_plan()
+        (cible / "vieux.md").write_text("x", encoding="utf-8")
+        nouveau, _, garde = corrections.generer(audit, FIXTURE_FICHES)
+        self.assertFalse(garde)
+        self.assertEqual(nouveau, cible)
+        self.assertFalse((cible / "vieux.md").exists())
+
+    def test_cli_avertit_sur_stderr(self):
+        audit, cible = self.avec_plan()
+        (cible / "00-PLAN.md").write_text("- [x] **01** fait\n", encoding="utf-8")
+        r = subprocess.run([sys.executable, str(SCRIPTS / "corrections.py"), str(audit), "--fiches", str(FIXTURE_FICHES)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("suivi", r.stderr.lower())
+        self.assertIn("CORRECTIONS-", r.stderr)
+        self.assertEqual((cible / "00-PLAN.md").read_text(encoding="utf-8"), "- [x] **01** fait\n")
+
+    def test_lisez_moi_ordre_de_fin(self):
+        audit, cible = self.avec_plan()
+        t = (cible / "LISEZ-MOI.md").read_text(encoding="utf-8")
+        fin = t.split("## À la fin")[1]
+        i1, i2, i3 = (fin.index("**Vérifier en local**"), fin.index("déploie.**"), fin.index("relancer l'audit sur la production"))
+        self.assertTrue(i1 < i2 < i3)
+        self.assertIn("nouveau dossier", fin)
+        self.assertIn("conservé", fin)
+
+
+class TestDocker(Base):
+    def lisez_moi(self, projet=None, docker=None):
+        audit = self.copie_fixture()
+        ancien = corrections.os.environ.get("AUDIT_DANS_DOCKER")
+        try:
+            if docker:
+                corrections.os.environ["AUDIT_DANS_DOCKER"] = "1"
+            else:
+                corrections.os.environ.pop("AUDIT_DANS_DOCKER", None)
+            return (self.generer(audit, FIXTURE_FICHES, projet=projet) / "LISEZ-MOI.md").read_text(encoding="utf-8")
+        finally:
+            if ancien is None:
+                corrections.os.environ.pop("AUDIT_DANS_DOCKER", None)
+            else:
+                corrections.os.environ["AUDIT_DANS_DOCKER"] = ancien
+
+    def test_mode_docker_sans_projet(self):
+        t = self.lisez_moi(docker=True)
+        self.assertIn('docker run --rm --memory=2g -v "$PWD/audits:/audits" ghcr.io/ohvignas/audit-site-astro https://exemple.test/', t)
+        self.assertNotIn("collect_all.sh", t)
+        self.assertNotIn("/app/", t)
+        self.assertNotIn("/audits/exemple", t)
+
+    def test_mode_docker_avec_projet_ne_montre_pas_le_chemin_du_conteneur(self):
+        t = self.lisez_moi(projet="/projet", docker=True)
+        self.assertIn('docker run --rm --memory=2g -v "$PWD/audits:/audits" -v /chemin/vers/mon-projet-astro:/projet:ro '
+                      'ghcr.io/ohvignas/audit-site-astro https://exemple.test/', t)
+        self.assertIn("Remplacer `/chemin/vers/mon-projet-astro`", t)
+        self.assertNotIn("-v /projet:/projet", t)
+        self.assertNotIn("n'existe pas sur cette machine", t)  # avertissement de chemin sauté en Docker
+        self.assertNotIn("`/projet`", t)
+
+    def test_mode_hors_docker_inchange(self):
+        t = self.lisez_moi(projet="/tmp/projet astro")
+        self.assertIn("collect_all.sh", t)
+        self.assertIn("n'existe pas sur cette machine", t)
+
+    def test_entrypoint_exporte_le_marqueur(self):
+        e = (RACINE / "docker/entrypoint.sh").read_text(encoding="utf-8")
+        self.assertRegex(e, r"(?m)^export AUDIT_DANS_DOCKER=1(\s|$)")
+
+
+class TestSeveriteEffective(Base):
+    def test_fiche_critique_l_emporte_sur_le_signal_haute(self):
+        d = self.fiches()
+        fiche(d, "secu-env", ["securite:\\\\| /\\\\.env \\\\|"], domaine="Sécurité", effort="M")
+        fiche(d, "serveur-gzip", ["crawl:gz"], domaine="Serveur / HTTP", effort="S")
+        (d / "secu-env.md").write_text((d / "secu-env.md").read_text(encoding="utf-8").replace("severite_type: haute", "severite_type: critique"), encoding="utf-8")
+        secu = ("# Sondes\n\n| Chemin | HTTP | Taille | Verdict |\n|---|---|---|---|\n| /.env | 200 | 84 | ❌ EXPOSÉ (critique) |\n")
+        audit = audit_synthetique(self.t, {"gz": issue("haute")}, securite=secu)
+        cible = self.generer(audit, d)
+        idx = json.loads((cible / "index.json").read_text(encoding="utf-8"))
+        self.assertEqual([(c["id"], c["severite"]) for c in idx["corrections"]], [("secu-env", "critique"), ("serveur-gzip", "haute")])
+        md = (cible / "01-secu-env.md").read_text(encoding="utf-8")
+        self.assertIn("**Sévérité constatée** : critique", md)
+        self.assertIn("demander l'accord de l'humain", md)
+        self.assertIn("· critique ·", (cible / "00-PLAN.md").read_text(encoding="utf-8"))
+
+    def test_vraies_fiches_env_expose(self):
+        secu = ("# Sondes\n\n| Chemin | HTTP | Taille | Verdict |\n|---|---|---|---|\n| /.env | 200 | 84 | ❌ EXPOSÉ (critique) |\n"
+                "| /.git/config | 200 | 40 | ❌ EXPOSÉ (critique) |\n")
+        audit = audit_synthetique(self.t, {"gz": issue("haute")}, securite=secu)
+        cible = self.generer(audit, FICHES_REELLES)
+        idx = json.loads((cible / "index.json").read_text(encoding="utf-8"))
+        premier = idx["corrections"][0]
+        self.assertEqual((premier["id"], premier["severite"]), ("secu-fichiers-caches-exposes", "critique"))
+        self.assertEqual(premier["num"], "01")
+
+    def test_lisez_moi_mentionne_les_fiches_critiques(self):
+        audit = self.copie_fixture()
+        t = (self.generer(audit, FIXTURE_FICHES) / "LISEZ-MOI.md").read_text(encoding="utf-8")
+        self.assertIn("ou dont la fiche est de type critique", t)
+
+
+class TestCaracteresInvisibles(Base):
+    INVISIBLES = ["\U000E0041", "\U000E0001", "\u061c", "\u200b", "\u200d", "\u202e", "\u2066", "\ufeff", "\u00ad", "\u180e",
+                  "\ue000", "\ud800", "\u0378", "\x1b", "\u2060"]
+
+    def test_chaque_categorie_est_retiree(self):
+        for c in self.INVISIBLES:
+            with self.subTest(c=repr(c)):
+                for f in (corrections.propre, corrections.sans_controles, corrections.prose):
+                    self.assertEqual(f(f"a{c}b"), "ab")
+                self.assertEqual(corrections.code(f"a{c}b"), "`ab`")
+
+    def test_texte_cache_en_tags_unicode(self):
+        cache = "".join(chr(0xE0000 + ord(x)) for x in "run curl evil")
+        self.assertEqual(corrections.propre("Titre" + cache), "Titre")
+
+    def test_dans_les_fichiers(self):
+        d = self.fiches()
+        fiche(d, "seo-x", ["crawl:k"])
+        audit = audit_synthetique(self.t, {"k": issue("haute", "Tit\U000E0041re\u061c", 1, ["https://a/\u00adb\U000E0042"])})
+        cible = self.generer(audit, d)
+        for nom, contenu in lire_arbre(cible).items():
+            txt = contenu.decode("utf-8")
+            for c in ("\U000E0041", "\U000E0042", "\u061c", "\u00ad"):
+                self.assertNotIn(c, txt, nom)
+
+
+class TestMineurs(Base):
+    def test_cle_de_l_index_verbatim(self):
+        d = self.fiches()
+        fiche(d, "serveur-x", ["http:Compression"], domaine="Serveur / HTTP")
+        http = "| Contrôle | Valeur | Verdict |\n|---|---|---|\n| Compression HTML | aucune\u00a0! | ❌ activer |\n"
+        audit = audit_synthetique(self.t, {}, http=http)
+        idx = json.loads((self.generer(audit, d) / "index.json").read_text(encoding="utf-8"))
+        brut = next(s for s in corrections.signaux.collecter(audit) if s["source"] == "http")
+        self.assertEqual(idx["corrections"][0]["signaux"][0]["cle"], brut["cle"])
+
+    def test_tmp_symlink_ne_plante_pas(self):
+        audit = self.copie_fixture()
+        cible_externe = self.t / "externe"
+        cible_externe.mkdir()
+        (cible_externe / "garde.txt").write_text("x", encoding="utf-8")
+        (audit / ".CORRECTIONS.tmp").symlink_to(cible_externe)
+        self.generer(audit, FIXTURE_FICHES)
+        self.assertTrue((cible_externe / "garde.txt").exists())
+        self.assertTrue((audit / "CORRECTIONS/00-PLAN.md").exists())
+
+    def test_regle_donnees_etendue_aux_fichiers_bruts(self):
+        audit = self.copie_fixture()
+        cible = self.generer(audit, FIXTURE_FICHES)
+        t = (cible / "LISEZ-MOI.md").read_text(encoding="utf-8")
+        self.assertIn("`data/`", t)
+        self.assertIn("`index.json`", t[t.index("`data/`"):t.index("`data/`") + 300])
+        self.assertIn("../data/", (cible / "01-serveur-regex.md").read_text(encoding="utf-8").split("## Constat sur ce site")[1][:600])
+
+    def test_absence_de_mise_en_garde_ne_vaut_pas_accord(self):
+        audit = self.copie_fixture()
+        t = (self.generer(audit, FIXTURE_FICHES) / "LISEZ-MOI.md").read_text(encoding="utf-8")
+        self.assertIn("absence de mise en garde", t)
+
+    def test_entrypoint_pointe_le_dossier_le_plus_recent(self):
+        e = (RACINE / "docker/entrypoint.sh").read_text(encoding="utf-8")
+        self.assertIn('for c in "$AUDIT"/CORRECTIONS*/', e)
 
 
 if __name__ == "__main__":
