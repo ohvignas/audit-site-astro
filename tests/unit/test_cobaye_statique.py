@@ -17,8 +17,6 @@ class TestCobayeStatique(unittest.TestCase):
                        check=True, capture_output=True, timeout=120)
         return pathlib.Path(dossier)
 
-    @unittest.expectedFailure
-    # trous connus du scanner (phase 1) : C10, C12 ; faux positifs : (none)
     def test_defauts_de_code_detectes_sur_casse_et_absents_sur_propre(self):
         verite = json.loads((RACINE / "tests/cobaye/verite-terrain.json").read_text(encoding="utf-8"))
         code = [d for d in verite["defauts"] if d["matcher"]["type"] == "code" and d["phase"] == "base"]
@@ -26,7 +24,8 @@ class TestCobayeStatique(unittest.TestCase):
             casse, propre = self._scan("casse", t1), self._scan("propre", t2)
             rates = [d["id"] for d in code if not score.detecte(d["matcher"], casse)]
             fps = [d["id"] for d in code if d.get("propre", "absent") == "absent" and score.detecte(d["matcher"], propre)]
-        self.assertEqual(rates, [], f"défauts de code non détectés : {rates}")
+        # trous connus du scanner, corrigés en phase 1 (la liste ne doit que rétrécir)
+        self.assertEqual(rates, ["C10", "C12"], f"défauts de code non détectés : {rates}")
         self.assertEqual(fps, [], f"faux positifs de code : {fps}")
 
 

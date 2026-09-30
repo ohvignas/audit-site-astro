@@ -39,7 +39,11 @@ bash "<dossier du skill>/scripts/collect_all.sh" https://site.fr /chemin/du/proj
 # options : MAX_PAGES=800  LH_PAGES=8  RUNS=3 (médiane Lighthouse)  BUILD=1 (build d'audit + poids du bundle)  PSI_API_KEY=…
 ```
 
-Durée typique : 5 à 15 minutes. Le script continue même si une étape échoue. Il écrit `data/COLLECTE.md` avec le statut de chaque étape. **Lire ce fichier d'abord.** Une étape en ⚠️/❌ se relance seule après correction de la cause (voir « Dépannage » en bas).
+Durée typique : 5 à 15 minutes. Le script écrit `data/COLLECTE.md` avec le statut de chaque étape. **Lire ce fichier d'abord**, puis le code de sortie du script :
+
+- **0** : toutes les étapes sont ✅/⚠️/⏭️. Passer à l'analyse.
+- **1** : au moins une étape est ❌ (sortie absente ou inexploitable). Les autres données restent utilisables : continuer l'analyse, dire clairement ce qui manque, corriger la cause si possible (voir « Dépannage » en bas) et relancer cette étape seule.
+- **2** : le pré-vol a échoué (site injoignable ou page d'accueil en erreur 5xx). Rien n'a été collecté : vérifier l'adresse, le DNS et le certificat avec l'utilisateur avant de relancer.
 
 | Étape | Script | Produit (dans `data/`) |
 |---|---|---|
@@ -109,6 +113,7 @@ Relancer `collect_all.sh` avec un nouveau dossier daté, puis comparer les notes
 
 ## Dépannage de la collecte
 
+- `pré-vol` ❌ (code 2) → site injoignable (nom de domaine, DNS, certificat TLS, serveur arrêté) ou page d'accueil en 5xx : aucune donnée n'est collectée. Vérifier l'URL exacte (`https://…`) et l'état du site avec l'utilisateur, puis relancer. Un ⚠️ HTTP 4xx (pare-feu, page protégée) ne bloque pas l'audit.
 - `lighthouse` ❌ « Chrome introuvable » → installer chrome-headless-shell (voir §1) ou fournir `PSI_API_KEY`.
 - `crawl` très long → `MAX_PAGES=200`. Site derrière un WAF qui bloque → le signaler, crawler depuis le serveur avec l'URL interne si possible.
 - `projet` : « node_modules absent » → proposer `npm ci` (modifie `node_modules/` seulement, accord requis sur un serveur de production).

@@ -16,7 +16,8 @@ docker run --rm --network cobaye --memory=2g \
   --entrypoint bash "$IMAGE" /app/scripts/collect_all.sh "https://$V.cobaye.test/" /projet "/audits/$V"
 code=$?
 echo "Collecte $V terminée (code $code)"
-# code 1 = étapes ❌ légitimes (le cobaye cassé) : le verdict vient de score.py.
-# code >= 2 (docker 125/126/127, collecte 2 = site injoignable) = panne d'infrastructure : on la remonte.
-[ "$code" -ge 2 ] && { echo "❌ collecte $V impossible (code $code)"; exit "$code"; }
+# Seul le code 0 passe. Code 1 = au moins une étape ❌ (sortie absente ou inexploitable) : cela ne doit
+# arriver sur aucun des deux jumeaux, sinon la mesure est faussée (un propre en panne « ressemble » à un propre sans faux positif).
+# Codes 2 (site injoignable ou accueil en 5xx) et docker 125/126/127 = panne d'infrastructure. Dans tous les cas on remonte le code.
+[ "$code" -ne 0 ] && { echo "❌ collecte $V incomplète (code $code)"; exit "$code"; }
 exit 0

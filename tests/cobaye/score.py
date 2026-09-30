@@ -7,7 +7,12 @@ score.py — Compare les sorties de l'audit à la vérité terrain du cobaye.
 
 Rappel = défauts requis (phase ≤ N) détectés sur le cobaye cassé.
 Faux positifs = matchers qui se déclenchent sur le jumeau propre (sauf "propre": "ignorer").
+  Sur le propre, les filtres d'emplacement propres au cassé (contient / ou_contient / exemple_contient)
+  sont retirés : la seule présence de la détection (clé du crawl, regex du code ou de Lighthouse) compte.
+  Un défaut peut fournir un "matcher_propre" explicite, utilisé tel quel à la place.
 Inattendus = constats Critique/Haute du jumeau propre (crawl + code) : à examiner.
+
+Codes de sortie : 0 = seuils respectés ; 1 = seuil violé ; 2 = audit invalide (collecte incomplète, fichiers manquants).
 """
 import argparse
 import json
@@ -73,6 +78,42 @@ def detecte(matcher, audit):
     raise ValueError("type de matcher inconnu : {0}".format(t))
 
 
+FILTRES_CASSE = ("contient", "ou_contient", "exemple_contient")
+FICHIERS_REQUIS = ("crawl/issues.json", "geo/geo.json", "code/code-scan.json", "perf/pagespeed.json")
+
+
+def matcher_propre(m):
+    """Copie du matcher sans les filtres d'emplacement propres au jumeau cassé (chemins qui n'existent pas sur le propre).
+
+    crawl_issue -> clé seule ; code / lighthouse -> regex seule ; texte et geo_signal inchangés."""
+    return {k: v for k, v in m.items() if k not in FILTRES_CASSE}
+
+
+def _matcher_fp(d):
+    """Matcher évalué sur le jumeau propre : celui fourni explicitement, sinon le matcher dépouillé de ses filtres."""
+    return d.get("matcher_propre") or matcher_propre(d["matcher"])
+
+
+def valider_audit(audit):
+    """Liste des problèmes qui rendent un dossier d'audit inutilisable pour la mesure (vide = valide)."""
+    audit = Path(audit)
+    data = audit / "data"
+    problemes = []
+    collecte = data / "COLLECTE.md"
+    if not collecte.is_file():
+        problemes.append("data/COLLECTE.md manquant")
+    else:
+        for ligne in _texte(collecte).splitlines():
+            if ligne.startswith("| "):
+                cellules = ligne.split("|")
+                if len(cellules) > 2 and "❌" in cellules[2]:
+                    problemes.append("étape en échec dans COLLECTE.md : {0}".format(ligne.strip()))
+    for rel in FICHIERS_REQUIS:
+        if not (data / rel).is_file():
+            problemes.append("data/{0} manquant".format(rel))
+    return problemes
+
+
 def _phase(p):
     return 0 if p == "base" else int(p)
 
@@ -99,7 +140,7 @@ def scorer(verite, casse, propre, phase):
             res["unitaires"].append(d)
             continue
         requis = _phase(d["phase"]) <= phase
-        fp = propre is not None and d.get("propre", "absent") == "absent" and bool(detecte(d["matcher"], propre))
+        fp = propre is not None and d.get("propre", "absent") == "absent" and bool(detecte(_matcher_fp(d), propre))
         res["details"].append(dict(list(d.items()) + [("detecte", det), ("requis", requis), ("faux_positif", fp)]))
         if fp:
             res["faux_positifs"].append(d)
@@ -165,6 +206,13 @@ def main():
     ap.add_argument("--sortie")
     ap.add_argument("--resume")
     a = ap.parse_args()
+    invalides = []
+    for nom, chemin in (("casse", a.casse), ("propre", a.propre)):
+        if chemin:
+            invalides += ["[{0}] {1}".format(nom, p) for p in valider_audit(chemin)]
+    if invalides:
+        print("❌ Audit invalide : impossible de mesurer.\n" + "\n".join("  - " + p for p in invalides), file=sys.stderr)
+        sys.exit(2)
     r = scorer(_json(a.verite), Path(a.casse), Path(a.propre) if a.propre else None, a.phase)
     violations = verdict(r, _json(a.seuils) or {})
     md = markdown(r, violations)

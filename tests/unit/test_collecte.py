@@ -28,6 +28,22 @@ class _JsonSeulement(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class _Erreur503(http.server.BaseHTTPRequestHandler):
+    def _repondre(self):
+        corps = b"indisponible"
+        self.send_response(503)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(corps)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(corps)
+
+    do_GET = do_HEAD = do_POST = _repondre
+
+    def log_message(self, *args):
+        pass
+
+
 def lire_collecte(dossier):
     return pathlib.Path(dossier, "data", "COLLECTE.md").read_text(encoding="utf-8")
 
@@ -40,6 +56,20 @@ class TestPreVol(unittest.TestCase):
             self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
             self.assertIn("injoignable", lire_collecte(d))
             self.assertFalse(pathlib.Path(d, "data", "crawl").exists(), "aucune étape ne doit tourner")
+
+    def test_accueil_en_503_arrete_tout(self):
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Erreur503)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            url = f"http://127.0.0.1:{srv.server_port}/"
+            with tempfile.TemporaryDirectory() as d:
+                r = subprocess.run(["bash", str(SCRIPT), url, "", d], capture_output=True, text=True, timeout=180)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("HTTP 503", lire_collecte(d))
+                self.assertFalse(pathlib.Path(d, "data", "crawl").exists(), "aucune étape ne doit tourner")
+        finally:
+            srv.shutdown()
+            srv.server_close()
 
 
 class TestValidationDesEtapes(unittest.TestCase):

@@ -67,7 +67,7 @@ docker run --rm --memory=2g -v "$PWD/audits:/audits" -v /chemin/vers/mon-projet-
 | `PSI_API_KEY` | — | Clé PageSpeed Insights (gratuite) pour ajouter les données terrain CrUX |
 | `SKIP_LIGHTHOUSE` | — | Saute l'étape Lighthouse (⏭️) |
 
-**Codes de sortie** : 0 = tout est ✅/⚠️/⏭️ ; 1 = au moins une étape ❌ ; 2 = site injoignable (rien n'est collecté).
+**Codes de sortie** : 0 = tout est ✅/⚠️/⏭️ ; 1 = au moins une étape ❌ ; 2 = site injoignable ou page d'accueil en erreur 5xx (rien n'est collecté).
 
 Exemple : `docker run --rm --memory=2g -e LH_PAGES=8 -e RUNS=3 -v "$PWD/audits:/audits" ghcr.io/ohvignas/audit-site-astro https://votre-site.fr`
 </details>

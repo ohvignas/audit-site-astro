@@ -97,6 +97,8 @@ jobs:
     needs: lint
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read   # construit des dépendances npm tierces : ne doit pas hériter de packages: write
     steps:
       - uses: actions/checkout@v4
       - name: Construire l'image d'audit

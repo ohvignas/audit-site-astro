@@ -25,7 +25,7 @@ bash /app/scripts/collect_all.sh "$URL" "$PROJ" "$AUDIT"
 code=$?
 echo
 if [ "$code" = 2 ]; then
-  echo "❌ Audit annulé : site injoignable (voir audits/$HOST/$(date +%F)/data/COLLECTE.md)"
+  echo "❌ Audit annulé : site injoignable ou page d'accueil en erreur 5xx (voir audits/$HOST/$(date +%F)/data/COLLECTE.md)"
 else
   echo "📄 Rapport : audits/$HOST/$(date +%F)/RAPPORT-BRUT.md"
   echo "🤖 Rapport priorisé avec correctifs : ouvrir le dossier dans Claude Code et lancer /audit-site-astro:audit-complet"

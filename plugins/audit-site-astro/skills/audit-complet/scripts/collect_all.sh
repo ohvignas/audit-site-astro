@@ -8,7 +8,8 @@
 #             MIN_FREE_MB (1200), SKIP_LIGHTHOUSE=1, AUDIT_INSECURE_TLS=1 (tests uniquement : certificat auto-signé)
 # Les étapes tournent UNE PAR UNE : l'empreinte mémoire reste < ~1 Go (Chrome pendant Lighthouse).
 #
-# Codes de sortie : 0 = tout est ✅/⚠️/⏭️ ; 1 = au moins une étape ❌ ; 2 = site injoignable (rien collecté).
+# Codes de sortie : 0 = tout est ✅/⚠️/⏭️ ; 1 = au moins une étape ❌ ; 2 = pré-vol en échec : site injoignable
+#                   ou page d'accueil en erreur 5xx (rien collecté).
 set -u
 URL="${1:?usage: collect_all.sh https://site.fr [chemin_projet] [dossier_audit]}"
 PROJ="${2:-}"
@@ -83,6 +84,7 @@ step() {  # $1 nom, $2 sortie principale, $3 validateur, reste = commande
 }
 
 prevol || { echo; cat "$LOG"; exit 2; }
+[ "${AUDIT_INSECURE_TLS:-}" = "1" ] && echo "| mode test | ⚠️ TLS non vérifié (AUDIT_INSECURE_TLS=1) | | |" >> "$LOG"
 
 step http "$D/http/http-checks.md" valid_aucun bash "$DIR/http_checks.sh" "$URL" "$D/http"
 step crawl "$D/crawl/pages.json" valid_crawl python3 "$DIR/crawl_site.py" "$URL" --out "$D/crawl" \
@@ -90,7 +92,8 @@ step crawl "$D/crawl/pages.json" valid_crawl python3 "$DIR/crawl_site.py" "$URL"
 step geo "$D/geo/geo.json" valid_geo python3 "$DIR/geo_check.py" "$URL" --out "$D/geo" --crawl "$D/crawl/pages.json" --sample 12
 step securite "$D/securite/security-probe.md" valid_aucun bash "$DIR/security_probe.sh" "$URL" "$D/securite"
 
-python3 - "$D/crawl/pages.json" "$URL" "${LH_PAGES:-5}" > "$D/lighthouse-urls.txt" <<'PY'
+if [ -s "$D/crawl/pages.json" ]; then
+  python3 - "$D/crawl/pages.json" "$URL" "${LH_PAGES:-5}" > "$D/lighthouse-urls.txt" <<'PY'
 import json, sys
 from urllib.parse import urlparse
 home, n = sys.argv[2], int(sys.argv[3])
@@ -108,6 +111,9 @@ for p in idx:
         break
 print("\n".join(out))
 PY
+else
+  printf '%s\n' "$URL" > "$D/lighthouse-urls.txt"
+fi
 if [ "${SKIP_LIGHTHOUSE:-0}" = "1" ]; then
   echo "| lighthouse | ⏭️ ignoré (SKIP_LIGHTHOUSE=1) | | |" >> "$LOG"
 elif [ -n "${PSI_API_KEY:-}" ]; then

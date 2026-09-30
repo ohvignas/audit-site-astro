@@ -1,3 +1,4 @@
+import importlib
 import json
 import pathlib
 import sys
@@ -5,6 +6,7 @@ import tempfile
 import unittest
 
 RACINE = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(RACINE))
 sys.path.insert(0, str(RACINE / "tests/cobaye"))
 import score  # noqa: E402
 
@@ -86,6 +88,122 @@ class TestScore(unittest.TestCase):
         r = {"global": {"rappel": 0.5}, "par_domaine": {"seo": {"rappel": 0.5}}, "faux_positifs": [{}], "inattendus": []}
         v = score.verdict(r, {"rappel_min_global": 0.6, "rappel_min_par_domaine": {"seo": 0.4}, "faux_positifs_max": 0, "inattendus_max": 5})
         self.assertEqual(len(v), 2)
+
+
+def collecte_ok(dossier, lignes=None):
+    """Écrit un data/COLLECTE.md minimal ; `lignes` = lignes de tableau supplémentaires."""
+    d = pathlib.Path(dossier, "data")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "COLLECTE.md").write_text("\n".join(
+        ["# Collecte", "", "| Étape | Statut | Durée | Sortie |", "|---|---|---|---|", "| pré-vol | ✅ HTTP 200 | | https://x/ |"]
+        + list(lignes or [])) + "\n", encoding="utf-8")
+
+
+class TestMatcherPropre(unittest.TestCase):
+    def test_retire_les_trois_filtres_et_garde_le_reste(self):
+        self.assertEqual(score.matcher_propre({"type": "crawl_issue", "cle": "orphan", "contient": "/orpheline"}),
+                         {"type": "crawl_issue", "cle": "orphan"})
+        self.assertEqual(score.matcher_propre({"type": "code", "regex": "x", "ou_contient": "a.ts"}),
+                         {"type": "code", "regex": "x"})
+        self.assertEqual(score.matcher_propre({"type": "lighthouse", "regex": "x", "exemple_contient": "b.js"}),
+                         {"type": "lighthouse", "regex": "x"})
+        for m in ({"type": "texte", "fichier": "f.md", "regex": "r"}, {"type": "geo_signal", "regex": "r"}):
+            self.assertEqual(score.matcher_propre(m), m)
+
+    def test_ne_modifie_pas_le_matcher_d_origine(self):
+        m = {"type": "crawl_issue", "cle": "orphan", "contient": "/orpheline"}
+        score.matcher_propre(m)
+        self.assertEqual(m["contient"], "/orpheline")
+
+    def _verite(self, defaut):
+        return {"defauts": [dict({"id": "T1", "domaine": "seo", "titre": "t", "phase": "base"}, **defaut)]}
+
+    def test_faux_positif_detecte_meme_avec_des_chemins_differents(self):
+        verite = self._verite({"matcher": {"type": "crawl_issue", "cle": "orphan", "contient": "/orpheline"}})
+        with tempfile.TemporaryDirectory() as t1, tempfile.TemporaryDirectory() as t2:
+            casse = audit(t1, crawl={"orphan": {"examples": ["https://x/orpheline"]}})
+            propre = audit(t2, crawl={"orphan": {"examples": ["https://x/autre-page"]}})
+            r = score.scorer(verite, casse, propre, phase=0)
+            self.assertEqual([d["id"] for d in r["faux_positifs"]], ["T1"])
+
+    def test_pas_de_faux_positif_si_la_cle_est_absente(self):
+        verite = self._verite({"matcher": {"type": "crawl_issue", "cle": "orphan", "contient": "/orpheline"}})
+        with tempfile.TemporaryDirectory() as t1, tempfile.TemporaryDirectory() as t2:
+            casse = audit(t1, crawl={"orphan": {"examples": ["https://x/orpheline"]}})
+            propre = audit(t2, crawl={"http_4xx": {"examples": []}})
+            self.assertEqual(score.scorer(verite, casse, propre, phase=0)["faux_positifs"], [])
+
+    def test_ignorer_reste_ignore(self):
+        verite = self._verite({"propre": "ignorer", "matcher": {"type": "crawl_issue", "cle": "orphan", "contient": "/orpheline"}})
+        with tempfile.TemporaryDirectory() as t1, tempfile.TemporaryDirectory() as t2:
+            casse = audit(t1, crawl={"orphan": {"examples": ["https://x/orpheline"]}})
+            propre = audit(t2, crawl={"orphan": {"examples": ["https://x/autre-page"]}})
+            self.assertEqual(score.scorer(verite, casse, propre, phase=0)["faux_positifs"], [])
+
+    def test_matcher_propre_explicite_prioritaire(self):
+        verite = self._verite({"matcher": {"type": "crawl_issue", "cle": "orphan", "contient": "/orpheline"},
+                               "matcher_propre": {"type": "crawl_issue", "cle": "orphan", "contient": "/cible-propre"}})
+        with tempfile.TemporaryDirectory() as t1, tempfile.TemporaryDirectory() as t2, tempfile.TemporaryDirectory() as t3:
+            casse = audit(t1, crawl={"orphan": {"examples": ["https://x/orpheline"]}})
+            propre_autre = audit(t2, crawl={"orphan": {"examples": ["https://x/autre-page"]}})
+            propre_cible = audit(t3, crawl={"orphan": {"examples": ["https://x/cible-propre"]}})
+            self.assertEqual(score.scorer(verite, casse, propre_autre, phase=0)["faux_positifs"], [])
+            self.assertEqual([d["id"] for d in score.scorer(verite, casse, propre_cible, phase=0)["faux_positifs"]], ["T1"])
+
+
+class TestValiderAudit(unittest.TestCase):
+    def _complet(self, dossier, lignes=None):
+        collecte_ok(dossier, lignes)
+        return audit(dossier, crawl={}, code={"constats": []}, geo={"signaux": []}, perf=[])
+
+    def test_audit_valide(self):
+        with tempfile.TemporaryDirectory() as t:
+            self.assertEqual(score.valider_audit(self._complet(t, ["| crawl | ✅ | 3 s | data/crawl/pages.json |",
+                                                                   "| lighthouse | ⚠️ code 1 (voir data/.log) | 2 s | x |"])), [])
+
+    def test_etape_en_echec(self):
+        with tempfile.TemporaryDirectory() as t:
+            problemes = score.valider_audit(self._complet(t, ["| geo | ❌ résultat vide ou inexploitable | 1 s | data/geo/geo.json |"]))
+            self.assertEqual(len(problemes), 1)
+            self.assertIn("geo", problemes[0])
+
+    def test_fichier_manquant(self):
+        with tempfile.TemporaryDirectory() as t:
+            a = self._complet(t)
+            (a / "data/perf/pagespeed.json").unlink()
+            problemes = score.valider_audit(a)
+            self.assertEqual(len(problemes), 1)
+            self.assertIn("perf/pagespeed.json", problemes[0])
+
+    def test_collecte_absente(self):
+        with tempfile.TemporaryDirectory() as t:
+            a = self._complet(t)
+            (a / "data/COLLECTE.md").unlink()
+            self.assertTrue(any("COLLECTE.md" in p for p in score.valider_audit(a)))
+
+    def test_croix_hors_colonne_statut_ignoree(self):
+        with tempfile.TemporaryDirectory() as t:
+            self.assertEqual(score.valider_audit(self._complet(t, ["| http | ✅ | 1 s | http/❌.md |"])), [])
+
+
+class TestVeriteUnitaires(unittest.TestCase):
+    def test_tests_unitaires_references_existent(self):
+        verite = json.loads((RACINE / "tests/cobaye/verite-terrain.json").read_text(encoding="utf-8"))
+        vus = 0
+        for d in verite["defauts"]:
+            m = d["matcher"]
+            if m["type"] != "unitaire" or score._phase(d["phase"]) > 0:
+                continue
+            vus += 1
+            chemin = m["test"]
+            try:
+                importlib.import_module(chemin)
+            except ImportError:
+                module, _, classe = chemin.rpartition(".")
+                self.assertTrue(module, "test {0} introuvable".format(chemin))
+                obj = getattr(importlib.import_module(module), classe, None)
+                self.assertIsNotNone(obj, "défaut {0} : {1} n'existe pas".format(d["id"], chemin))
+        self.assertGreater(vus, 0)
 
 
 if __name__ == "__main__":
