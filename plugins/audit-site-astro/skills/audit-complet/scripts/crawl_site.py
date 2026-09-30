@@ -47,6 +47,17 @@ SKIP_QUERY = re.compile(r"(^|&)(replytocom|share|add-to-cart|add_to_wishlist|pre
 COUNT_TAGS = {"ul", "ol", "table", "time", "main", "article", "iframe", "video", "form", "nav", "script", "link"}
 SKIP_TEXT_TAGS = {"script", "style", "noscript", "svg", "template"}
 # Chemins de CSS/JS nécessaires au rendu : WordPress, Astro (/_astro/), Next.js (/_next/)
+# Éléments sans balise fermante (ne s'empilent pas) ; styles qui masquent un élément
+VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+STYLE_MASQUE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
+
+
+def masque(tag, a):
+    """Élément absent de l'arbre d'accessibilité (ignoré par axe/Lighthouse) : hidden, aria-hidden, style, template."""
+    return (tag in ("template", "noscript") or "hidden" in a or a.get("aria-hidden", "").lower() == "true"
+            or bool(STYLE_MASQUE.search(a.get("style", ""))))
+
+
 ASSETS_RX = re.compile(r"\.(css|js)|wp-content/(themes|plugins)|wp-includes|/_astro\b|/_next/", re.I)
 
 
@@ -264,6 +275,8 @@ class PageParser(HTMLParser):
         self.fields = []        # champs de formulaire saisissables
         self.label_for = set()  # id visés par <label for>
         self._label_depth = 0
+        self._ouverts = []      # pile [balise, masquée] des éléments ouverts (ancêtres masqués des champs)
+        self._masques = 0
 
     def champs_sans_libelle(self):
         """Champs sans nom accessible fiable : ni <label for>, ni <label> englobant, ni aria-label(ledby), ni title.
@@ -273,6 +286,10 @@ class PageParser(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         a = {k.lower(): (v or "") for k, v in attrs}
+        cache = masque(tag, a)
+        if tag not in VOID_TAGS:
+            self._ouverts.append((tag, cache))
+            self._masques += cache
         if tag in COUNT_TAGS:
             self.tags[tag] += 1
             if self._main_depth:
@@ -329,7 +346,9 @@ class PageParser(HTMLParser):
                 self.label_for.add(a["for"])
         elif tag in ("input", "select", "textarea"):
             kind = (a.get("type") or "text").lower() if tag == "input" else tag
-            if kind not in ("hidden", "submit", "button", "reset", "image"):
+            # champs masqués, désactivés ou pièges à robots (honeypot : tabindex=-1) : hors de l'arbre d'accessibilité
+            invisible = self._masques or cache or "disabled" in a or a.get("tabindex", "").strip() == "-1"
+            if kind not in ("hidden", "submit", "button", "reset", "image") and not invisible:
                 self.fields.append({"id": a.get("id", ""), "dans_label": self._label_depth > 0,
                                     "nomme": any(a.get(k, "").strip() for k in ("aria-label", "aria-labelledby", "title"))})
         elif tag in ("iframe", "source", "video", "audio", "embed"):
@@ -344,6 +363,11 @@ class PageParser(HTMLParser):
             self._main_by_article = True
 
     def handle_endtag(self, tag):
+        for i in range(len(self._ouverts) - 1, -1, -1):
+            if self._ouverts[i][0] == tag:  # ferme aussi les éléments laissés ouverts (<li>, <p>…)
+                self._masques -= sum(m for _, m in self._ouverts[i:])
+                del self._ouverts[i:]
+                break
         if tag == "title" and self._in_title:
             self._in_title = False
             self.title = " ".join("".join(self._title_buf).split())

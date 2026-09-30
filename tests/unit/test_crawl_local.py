@@ -36,7 +36,8 @@ ROUTES = {
         '<input type="email" placeholder="Votre email">'           # sans libellé (placeholder seul)
         '<label for="nom">Nom</label><input id="nom">'             # libellé explicite
         '<label>Ville <input name="ville"></label>'                # libellé englobant
-        '<input type="hidden" name="jeton"><input aria-label="Recherche"><button>OK</button>')),
+        '<input type="hidden" name="jeton"><input aria-label="Recherche"><button>OK</button>'
+        '<input name="_gotcha" style="display:none" tabindex="-1"><div hidden><input name="bot-field"></div>')),  # pièges
 }
 
 

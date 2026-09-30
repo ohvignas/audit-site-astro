@@ -74,6 +74,23 @@ class TestParseur(unittest.TestCase):
                        '<input type="hidden"><input type="submit"><button>OK</button><textarea></textarea>')
         self.assertEqual(len(p.champs_sans_libelle()), 2)
 
+    def test_champs_masques_et_pieges_ignores(self):  # revue finale I2
+        p = self.parse('<form><label for="e">Email</label><input id="e" type="email">'
+                       '<input name="_gotcha" style="display: none">'
+                       '<input name="piege" tabindex="-1" autocomplete="off">'
+                       '<div hidden><input name="bot-field"><div><span></span></div><input name="bot-2"></div>'
+                       '<p style="visibility:hidden"><input name="v"></p>'
+                       '<div aria-hidden="true"><input name="a"></div><input name="h" hidden>'
+                       '<input name="ah" aria-hidden="true"><input name="d" disabled>'
+                       '<template><input placeholder="modèle"></template><noscript><input name="n"></noscript>'
+                       '</form>')
+        self.assertEqual(p.champs_sans_libelle(), [])
+
+    def test_champ_visible_apres_un_bloc_masque_reste_signale(self):
+        p = self.parse('<div hidden><div><input name="x"></div></div>'
+                       '<footer><input type="email" placeholder="Votre email"></footer>')
+        self.assertEqual(len(p.champs_sans_libelle()), 1)
+
 
 class TestJsonLd(unittest.TestCase):
     def test_graph_et_erreurs(self):
