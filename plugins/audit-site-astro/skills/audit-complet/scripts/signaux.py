@@ -6,7 +6,7 @@ Utilisé par rapport_brut.py (Markdown), rapport_html.py (HTML/PDF) et historiqu
 rapports lisent les mêmes signaux, triés de la même façon.
 
 API :
-  collecter(audit)   -> liste de dicts {severite, domaine, texte, exemples}, triée par sévérité puis domaine
+  collecter(audit)   -> liste de dicts {severite, domaine, texte, exemples, source, cle}, triée par sévérité puis domaine
   lighthouse(audit)  -> entrées de perf/pagespeed.json sans clé « erreur »
   meta_crawl(audit)  -> « meta » de crawl/pages.json ({} si absent)
   charger(p)         -> contenu JSON du fichier p, ou None s'il est absent/illisible
@@ -19,6 +19,9 @@ ORDRE = {"critique": 0, "haute": 1, "moyenne": 2, "basse": 3, "info": 4}
 
 _DOMAINES_CODE = {"performance": "Performance", "seo": "SEO technique", "securite": "Sécurité", "accessibilite": "Accessibilité",
                   "geo": "GEO / IA", "projet": "Code", "config": "Code"}
+
+
+_VULN = {"- **critical**": "critique", "- **high**": "haute", "- **moderate**": "moyenne"}
 
 
 def charger(p):
@@ -48,8 +51,11 @@ def meta_crawl(audit):
     return (charger(Path(audit) / "data/crawl/pages.json") or {}).get("meta", {})
 
 
-def _signal(sev, domaine, texte, exemples):
-    return {"severite": sev, "domaine": domaine, "texte": texte, "exemples": list(exemples)}
+def _signal(sev, domaine, texte, exemples, source, cle):
+    """source ∈ {crawl, geo, code, http, securite, lighthouse, projet} ; cle identifie le constat dans sa source
+    (crawl : clé d'issue ; geo : texte du signal ; code : texte du constat ; http/securite/projet : ligne brute
+    du fichier ; lighthouse : « <id> <titre> » ou titre de l'échec). Sert à associer les fiches de correction."""
+    return {"severite": sev, "domaine": domaine, "texte": texte, "exemples": list(exemples), "source": source, "cle": cle}
 
 
 def collecter(audit):
@@ -58,17 +64,19 @@ def collecter(audit):
     signals = []
 
     crawl = charger(d / "crawl/issues.json") or {}
-    for it in crawl.values():
-        signals.append(_signal(it["severity"], "SEO technique", f"{it['label']} — {it['count']}", [ex_str(e) for e in it["examples"][:5]]))
+    for k, it in crawl.items():
+        signals.append(_signal(it["severity"], "SEO technique", f"{it['label']} — {it['count']}", [ex_str(e) for e in it["examples"][:5]],
+                               "crawl", k))
 
     geo = charger(d / "geo/geo.json") or {}
     for s in geo.get("signaux", []):
-        signals.append(_signal(s["severite"], "GEO / IA", s["constat"], []))
+        signals.append(_signal(s["severite"], "GEO / IA", s["constat"], [], "geo", s["constat"]))
 
     code = charger(d / "code/code-scan.json") or {}
     for f in code.get("constats", []):
         signals.append(_signal(f["severite"], _DOMAINES_CODE.get(f["categorie"], "Code"),
-                               f["constat"] + (f" → {f['piste']}" if f["piste"] else ""), f["ou"][:5]))
+                               f["constat"] + (f" → {f['piste']}" if f["piste"] else ""), f["ou"][:5],
+                               "code", f["constat"]))
 
     seen = set()
     for r in lighthouse(audit):
@@ -79,22 +87,33 @@ def collecter(audit):
             seen.add(key)
             sev = "haute" if (o.get("gain_ms") or 0) >= 1000 else "moyenne" if (o.get("gain_ms") or 0) >= 300 else "basse"
             gain = f"{o['gain_ms']} ms" if o.get("gain_ms") else f"{int(o['gain_octets']) // 1024} Ko"
-            signals.append(_signal(sev, "Performance", f"{o['titre']} (gain estimé {gain}, {r.get('strategie')})", o.get("exemples", [])[:3]))
+            signals.append(_signal(sev, "Performance", f"{o['titre']} (gain estimé {gain}, {r.get('strategie')})", o.get("exemples", [])[:3],
+                                   "lighthouse", f"{o['id']} {o['titre']}"))
         for cat, fails in (r.get("echecs_autres_categories") or {}).items():
             for f in fails:
                 key = cat + f
                 if key not in seen:
                     seen.add(key)
                     signals.append(_signal("moyenne", "Accessibilité" if cat == "accessibility" else "SEO technique" if cat == "seo" else "Bonnes pratiques",
-                                           f"Lighthouse : {f}", []))
+                                           f"Lighthouse : {f}", [], "lighthouse", f))
 
-    for path, dom_name in ((d / "securite/security-probe.md", "Sécurité"), (d / "http/http-checks.md", "Serveur / HTTP")):
+    for path, dom_name, source in ((d / "securite/security-probe.md", "Sécurité", "securite"), (d / "http/http-checks.md", "Serveur / HTTP", "http")):
         if path.exists():
             for line in path.read_text(encoding="utf-8").splitlines():
                 if "❌" in line:
-                    signals.append(_signal("haute", dom_name, line.strip("| ").replace(" | ", " · ")[:220], []))
+                    signals.append(_signal("haute", dom_name, line.strip("| ").replace(" | ", " · ")[:220], [], source, line.strip()))
                 elif "⚠️" in line and line.startswith("|"):
-                    signals.append(_signal("basse", dom_name, line.strip("| ").replace(" | ", " · ")[:220], []))
+                    signals.append(_signal("basse", dom_name, line.strip("| ").replace(" | ", " · ")[:220], [], source, line.strip()))
+
+    # Santé du projet (project_checks.sh) : lignes ❌ / ⚠️ et vulnérabilités critical/high/moderate.
+    path = d / "code/project-checks.md"
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            brute = line.strip()
+            sev = next((v for m, v in _VULN.items() if brute.startswith(m)), None) or ("haute" if "❌" in line else "basse" if "⚠️" in line else None)
+            if sev:
+                texte = brute.strip("| ").lstrip("- ").rstrip("| ").replace(" | ", " · ").replace("**", "")[:220]
+                signals.append(_signal(sev, "Code", texte, [], "projet", brute))
 
     signals.sort(key=lambda s: (ORDRE.get(s["severite"], 9), s["domaine"]))
     return signals

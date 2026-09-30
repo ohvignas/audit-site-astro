@@ -19,7 +19,80 @@ class TestSignaux(unittest.TestCase):
         rangs = [signaux.ORDRE[x["severite"]] for x in s]
         self.assertEqual(rangs, sorted(rangs))
         for x in s:
-            self.assertEqual(set(x), {"severite", "domaine", "texte", "exemples"})
+            self.assertEqual(set(x), {"severite", "domaine", "texte", "exemples", "source", "cle"})
+
+    def test_source_et_cle_coherentes(self):
+        import signaux
+        s = signaux.collecter(FIXTURE)
+        for x in s:
+            self.assertIn(x["source"], {"crawl", "geo", "code", "http", "securite", "lighthouse", "projet"})
+            self.assertTrue(x["cle"], x)
+        par = {}
+        for x in s:
+            par.setdefault(x["source"], []).append(x["cle"])
+        self.assertEqual(set(par), {"crawl", "geo", "code", "http", "securite", "lighthouse"})
+        # crawl : clé d'issue
+        self.assertIn("liens_casses", par["crawl"])
+        self.assertIn("title_manquant", par["crawl"])
+        # geo : texte du signal
+        self.assertIn("llms.txt absent : les assistants IA n'ont pas de résumé du site", par["geo"])
+        # code : texte du constat, sans la piste
+        self.assertIn("Image d'en-tête non optimisée (<img> au lieu de <Image>)", par["code"])
+        self.assertIn("Balise canonical absente du layout", par["code"])
+        # http / sécurité : ligne brute du fichier
+        self.assertIn("| /.git/config | ❌ EXPOSÉ (critique) |", par["securite"])
+        self.assertIn("| Server / X-Powered-By | nginx/1.24.0 / — | ⚠️ version exposée |", par["http"])
+        self.assertEqual(len(par["http"]), 2)
+        # lighthouse : "<id> <titre>" (opportunités) ou titre de l'échec
+        self.assertIn("render-blocking-resources Éliminer les ressources qui bloquent le rendu", par["lighthouse"])
+        self.assertIn("Les liens n'ont pas de nom discernable", par["lighthouse"])
+        self.assertIn("Le contraste des couleurs est insuffisant", par["lighthouse"])
+
+    def test_signaux_projet(self):
+        import signaux
+        with tempfile.TemporaryDirectory() as t:
+            copie = pathlib.Path(t, "audit")
+            shutil.copytree(FIXTURE, copie)
+            (copie / "data/code/project-checks.md").write_text(
+                "# Santé du projet — site\n\n"
+                "- Node : v18.0.0 — gestionnaire : npm 9\n"
+                "- \u26a0\ufe0f Node 18 : versions récentes d'Astro exigent Node \u2265 20 (LTS conseillée)\n\n"
+                "## Dépendances obsolètes\n\n"
+                "| Paquet | Installé | Compatible | Dernière | Saut majeur |\n|---|---|---|---|---|\n"
+                "| astro | 4.0.0 | 4.16.0 | 5.1.0 | \u26a0\ufe0f oui |\n"
+                "| zod | 3.22.0 | 3.23.0 | 3.23.8 | non |\n\n"
+                "## Vulnérabilités connues (dépendances de production)\n\n"
+                "- Total : high 1, moderate 1, low 2 (total 4)\n"
+                "- **critical** lodash — Prototype Pollution (correctif dispo)\n"
+                "- **high** vite — Path traversal (via vite@5.4.0)\n"
+                "- **moderate** esbuild — Dev server SSRF (pas de correctif)\n"
+                "- **low** foo — mineur (correctif dispo)\n\n"
+                "## astro check (types et diagnostics)\n\n"
+                "- Lignes d'erreur : 0 \u2014 avertissements : 0 (détail : astro-check.txt)\n"
+                "- \u274c astro check : 3 erreurs de types\n",
+                encoding="utf-8")
+            s = signaux.collecter(copie)
+        p = [x for x in s if x["source"] == "projet"]
+        par = {x["cle"]: x for x in p}
+        self.assertEqual(len(p), len(par))
+        self.assertEqual(len(p), 6)
+        for x in p:
+            self.assertEqual(x["domaine"], "Code")
+            self.assertEqual(x["exemples"], [])
+        ligne = "- **critical** lodash \u2014 Prototype Pollution (correctif dispo)"
+        self.assertEqual(par[ligne]["severite"], "critique")
+        self.assertEqual(par[ligne]["texte"], "critical lodash \u2014 Prototype Pollution (correctif dispo)")
+        self.assertEqual(par["- **high** vite \u2014 Path traversal (via vite@5.4.0)"]["severite"], "haute")
+        self.assertEqual(par["- **moderate** esbuild \u2014 Dev server SSRF (pas de correctif)"]["severite"], "moyenne")
+        ligne = "- \u274c astro check : 3 erreurs de types"
+        self.assertEqual(par[ligne]["severite"], "haute")
+        self.assertEqual(par[ligne]["texte"], "\u274c astro check : 3 erreurs de types")
+        ligne = "| astro | 4.0.0 | 4.16.0 | 5.1.0 | \u26a0\ufe0f oui |"
+        self.assertEqual(par[ligne]["severite"], "basse")
+        self.assertEqual(par[ligne]["texte"], "astro \u00b7 4.0.0 \u00b7 4.16.0 \u00b7 5.1.0 \u00b7 \u26a0\ufe0f oui")
+        self.assertIn("- \u26a0\ufe0f Node 18 : versions récentes d'Astro exigent Node \u2265 20 (LTS conseillée)", par)
+        rangs = [signaux.ORDRE[x["severite"]] for x in s]
+        self.assertEqual(rangs, sorted(rangs))
 
     def test_rapport_brut_inchange(self):
         """La sortie de rapport_brut.py doit être identique avant/après le refactor (référence commitée)."""
