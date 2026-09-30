@@ -28,6 +28,8 @@ jobs:
           set -e
           for f in plugins/audit-site-astro/skills/audit-complet/scripts/*.sh docker/*.sh; do bash -n "$f"; echo "ok $f"; done
           python3 -m py_compile plugins/audit-site-astro/skills/audit-complet/scripts/*.py
+      - name: Tests unitaires (Python 3.9)
+        run: python3 -m unittest discover -s tests/unit -t . -v
       - name: Manifestes JSON et frontmatter des skills
         run: |
           set -e
