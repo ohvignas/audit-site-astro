@@ -1,0 +1,8 @@
+---
+import Base from '../layouts/Base.astro';
+import { paragraphes } from '../data/texte';
+---
+<Base title="Devenir consultant en automatisation IA" description="Le métier de consultant en automatisation : missions, salaires, formation.">
+  <h1>Devenir consultant en automatisation</h1>
+  {paragraphes('consultant en automatisation').map((p) => <p>{p}</p>)}
+</Base>

@@ -1,0 +1,10 @@
+---
+export const prerender = false;
+import Base from '../../layouts/Base.astro';
+import { formations } from '../../data/formations';
+const f = formations.find((x) => x.slug === Astro.params.slug);
+---
+<Base title={f?.titre ?? 'Formation'} description={f?.description || undefined}>
+  <h1>{f?.titre}</h1>
+  {f?.texte.map((p) => <p>{p}</p>)}
+</Base>

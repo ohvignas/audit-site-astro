@@ -1,0 +1,10 @@
+User-agent: *
+Disallow: /_astro/
+
+User-agent: OAI-SearchBot
+Disallow: /
+
+User-agent: PerplexityBot
+Disallow: /
+
+Sitemap: /sitemap.xml

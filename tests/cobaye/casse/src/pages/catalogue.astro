@@ -1,0 +1,10 @@
+---
+import Base from '../layouts/Base.astro';
+import { formations } from '../data/formations';
+const onglet = Astro.url.searchParams.get('tab') ?? 'tout';
+---
+<Base title="Catalogue des formations no-code et IA" description="Toutes nos formations no-code et intelligence artificielle, par métier et par outil.">
+  <h1>Catalogue ({onglet})</h1>
+  <p><a href="/catalogue?tab=metiers">Par métier</a> · <a href="/catalogue?tab=outils">Par outil</a></p> {/* S36 */}
+  <ul>{formations.map((f) => <li><a href={`/formations/${f.slug}`}>{f.titre}</a></li>)}</ul>
+</Base>

@@ -1,0 +1,8 @@
+---
+import Base from '../../layouts/Base.astro';
+import { formations } from '../../data/formations';
+---
+<Base title="Nos formations professionnelles" description="Liste des formations professionnelles no-code et IA finançables.">
+  <h1>Nos formations</h1>
+  <ul>{formations.map((f) => <li><a href={`/formations/${f.slug}`}>{f.titre}</a></li>)}</ul>
+</Base>

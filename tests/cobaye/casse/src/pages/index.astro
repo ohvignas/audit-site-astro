@@ -1,0 +1,32 @@
+---
+import { Image, Picture } from 'astro:assets';
+import Base from '../layouts/Base.astro';
+import Avis from '../components/Avis.tsx';
+import hero from '../assets/hero.jpg';
+const message = Astro.url.searchParams.get('msg') ?? '<em>Bienvenue</em>';
+---
+<Base title="Accueil"> {/* S13 */}
+  <img src="/images/hero-4000.jpg" alt="Salle de formation" loading="lazy" /> {/* P01, P02, S26 */}
+  <h1>Formations no-code et IA</h1>
+  <h4>Nos points forts</h4> {/* A03 */}
+  <Image src={hero} alt="Atelier en groupe" priority /> {/* P03, P10, H12 */}
+  <Image src={hero} alt="Atelier individuel" priority /> {/* P03 */}
+  <Picture src={hero} alt="Vue de la salle" formats={['webp']} /> {/* P11 */}
+  <div set:html={message}></div> {/* C07 : XSS réfléchi via ?msg= */}
+  <Avis client:only="react" /> {/* G11 */}
+  <ul>
+    <li><a href="/formations/no-code?utm_source=accueil">No-code</a></li> {/* S23 */}
+    <li><a href="http://casse.cobaye.test/contact">Contact</a></li> {/* S24 */}
+    <li><a href="/ancienne-page">Ancienne page</a></li> {/* S08, S09 */}
+    <li><a href="/promo">Promo</a></li> {/* S10 */}
+    <li><a href="/ressources/guide-supprime">Guide gratuit</a></li> {/* S07 */}
+    <li><a href="/profond/1">Parcours</a></li> {/* S21 */}
+    <li><a href="/sans-sitemap">Hors sitemap</a></li> {/* S05 */}
+    <li><a href="/sans-head">Page brute</a></li>
+    <li><a href="/doublon-a">Tarifs A</a> <a href="/doublon-b">Tarifs B</a></li>
+    <li><a href="/sans-h1">Sans titre</a> <a href="/canonical-cassee">Canonical cassée</a> <a href="/canonical-http">Canonical http</a></li>
+    <li><a href="/lent">Page lente</a> <a href="/hreflang">English</a> <a href="/cachee">Cachée</a></li>
+    <li><a href="/blog/article-casse">Comparatif</a></li>
+    <li><a href="https://nx.cobaye.invalid/ressource">Partenaire</a></li> {/* E01 */}
+  </ul>
+</Base>
