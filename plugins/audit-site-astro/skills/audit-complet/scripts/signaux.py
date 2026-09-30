@@ -108,12 +108,23 @@ def collecter(audit):
     # Santé du projet (project_checks.sh) : lignes ❌ / ⚠️ et vulnérabilités critical/high/moderate.
     path = d / "code/project-checks.md"
     if path.exists():
+        majeurs = []  # lignes du tableau « Dépendances obsolètes » avec saut de version majeure : un seul signal agrégé
         for line in path.read_text(encoding="utf-8").splitlines():
             brute = line.strip()
+            if brute.startswith("|") and "⚠️ oui" in brute:
+                majeurs.append(brute)
+                continue
             sev = next((v for m, v in _VULN.items() if brute.startswith(m)), None) or ("haute" if "❌" in line else "basse" if "⚠️" in line else None)
             if sev:
                 texte = brute.strip("| ").lstrip("- ").rstrip("| ").replace(" | ", " · ").replace("**", "")[:220]
                 signals.append(_signal(sev, "Code", texte, [], "projet", brute))
+        if majeurs:
+            noms = [m.strip("| ").split("|")[0].strip() for m in majeurs]
+            reste = len(noms) - 10
+            liste = ", ".join(noms[:10]) + (f", … et {reste} autres" if reste > 0 else "")
+            exemples = [m.strip("| ").replace(" | ", " · ") for m in majeurs[:10]] + ([f"… et {reste} autres"] if reste > 0 else [])
+            signals.append(_signal("basse", "Code", f"{len(noms)} dépendance(s) avec saut de version majeure : {liste}", exemples,
+                                   "projet", "dépendances obsolètes saut majeur : " + ", ".join(noms)))
 
     signals.sort(key=lambda s: (ORDRE.get(s["severite"], 9), s["domaine"]))
     return signals

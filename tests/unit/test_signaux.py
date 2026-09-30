@@ -60,6 +60,8 @@ class TestSignaux(unittest.TestCase):
                 "## Dépendances obsolètes\n\n"
                 "| Paquet | Installé | Compatible | Dernière | Saut majeur |\n|---|---|---|---|---|\n"
                 "| astro | 4.0.0 | 4.16.0 | 5.1.0 | \u26a0\ufe0f oui |\n"
+                "| vite | 4.0.0 | 4.5.0 | 6.0.0 | \u26a0\ufe0f oui |\n"
+                "| tailwindcss | 3.4.0 | 3.4.1 | 4.0.0 | \u26a0\ufe0f oui |\n"
                 "| zod | 3.22.0 | 3.23.0 | 3.23.8 | non |\n\n"
                 "## Vulnérabilités connues (dépendances de production)\n\n"
                 "- Total : high 1, moderate 1, low 2 (total 4)\n"
@@ -68,28 +70,35 @@ class TestSignaux(unittest.TestCase):
                 "- **moderate** esbuild — Dev server SSRF (pas de correctif)\n"
                 "- **low** foo — mineur (correctif dispo)\n\n"
                 "## astro check (types et diagnostics)\n\n"
-                "- Lignes d'erreur : 0 \u2014 avertissements : 0 (détail : astro-check.txt)\n"
-                "- \u274c astro check : 3 erreurs de types\n",
+                "- Lignes d'erreur : 3 \u2014 avertissements : 2 (détail : astro-check.txt)\n"
+                "- \u274c astro check : 3 erreur(s) de diagnostic\n"
+                "- \u26a0\ufe0f astro check : 2 avertissement(s)\n",
                 encoding="utf-8")
             s = signaux.collecter(copie)
         p = [x for x in s if x["source"] == "projet"]
         par = {x["cle"]: x for x in p}
         self.assertEqual(len(p), len(par))
-        self.assertEqual(len(p), 6)
+        self.assertEqual(len(p), 7)
         for x in p:
             self.assertEqual(x["domaine"], "Code")
-            self.assertEqual(x["exemples"], [])
         ligne = "- **critical** lodash \u2014 Prototype Pollution (correctif dispo)"
         self.assertEqual(par[ligne]["severite"], "critique")
         self.assertEqual(par[ligne]["texte"], "critical lodash \u2014 Prototype Pollution (correctif dispo)")
         self.assertEqual(par["- **high** vite \u2014 Path traversal (via vite@5.4.0)"]["severite"], "haute")
         self.assertEqual(par["- **moderate** esbuild \u2014 Dev server SSRF (pas de correctif)"]["severite"], "moyenne")
-        ligne = "- \u274c astro check : 3 erreurs de types"
+        ligne = "- \u274c astro check : 3 erreur(s) de diagnostic"
         self.assertEqual(par[ligne]["severite"], "haute")
-        self.assertEqual(par[ligne]["texte"], "\u274c astro check : 3 erreurs de types")
-        ligne = "| astro | 4.0.0 | 4.16.0 | 5.1.0 | \u26a0\ufe0f oui |"
+        self.assertEqual(par[ligne]["texte"], "\u274c astro check : 3 erreur(s) de diagnostic")
+        ligne = "- \u26a0\ufe0f astro check : 2 avertissement(s)"
         self.assertEqual(par[ligne]["severite"], "basse")
-        self.assertEqual(par[ligne]["texte"], "astro \u00b7 4.0.0 \u00b7 4.16.0 \u00b7 5.1.0 \u00b7 \u26a0\ufe0f oui")
+        # sauts de version majeure : UN seul signal agrégé (pas de signal par ligne de tableau)
+        self.assertFalse([c for c in par if c.startswith("| astro") or c.startswith("| vite")])
+        agg = par["dépendances obsolètes saut majeur : astro, vite, tailwindcss"]
+        self.assertEqual(agg["severite"], "basse")
+        self.assertEqual(agg["texte"], "3 dépendance(s) avec saut de version majeure : astro, vite, tailwindcss")
+        self.assertEqual(agg["exemples"], ["astro \u00b7 4.0.0 \u00b7 4.16.0 \u00b7 5.1.0 \u00b7 \u26a0\ufe0f oui",
+                                           "vite \u00b7 4.0.0 \u00b7 4.5.0 \u00b7 6.0.0 \u00b7 \u26a0\ufe0f oui",
+                                           "tailwindcss \u00b7 3.4.0 \u00b7 3.4.1 \u00b7 4.0.0 \u00b7 \u26a0\ufe0f oui"])
         self.assertIn("- \u26a0\ufe0f Node 18 : versions récentes d'Astro exigent Node \u2265 20 (LTS conseillée)", par)
         rangs = [signaux.ORDRE[x["severite"]] for x in s]
         self.assertEqual(rangs, sorted(rangs))
@@ -103,6 +112,38 @@ class TestSignaux(unittest.TestCase):
             obtenu = (copie / "RAPPORT-BRUT.md").read_text(encoding="utf-8")
         attendu = (FIXTURE / "RAPPORT-BRUT.attendu.md").read_text(encoding="utf-8")
         self.assertEqual(obtenu, attendu)
+
+    def test_sauts_majeurs_plafonnes(self):
+        import signaux
+        with tempfile.TemporaryDirectory() as t:
+            copie = pathlib.Path(t, "audit")
+            shutil.copytree(FIXTURE, copie)
+            lignes = "".join(f"| pkg{i} | 1.0.0 | 1.0.1 | 2.0.0 | \u26a0\ufe0f oui |\n" for i in range(13))
+            (copie / "data/code/project-checks.md").write_text("## Dépendances obsolètes\n\n" + lignes, encoding="utf-8")
+            p = [x for x in signaux.collecter(copie) if x["source"] == "projet"]
+        self.assertEqual(len(p), 1)
+        self.assertTrue(p[0]["texte"].startswith("13 dépendance(s) avec saut de version majeure : pkg0, pkg1"))
+        self.assertTrue(p[0]["texte"].endswith("pkg9, … et 3 autres"))
+        self.assertEqual(len(p[0]["exemples"]), 11)
+        self.assertEqual(p[0]["exemples"][-1], "… et 3 autres")
+        self.assertEqual(p[0]["cle"], "dépendances obsolètes saut majeur : " + ", ".join(f"pkg{i}" for i in range(13)))
+
+    def test_project_checks_emet_les_lignes_astro_check(self):
+        """Le snippet de project_checks.sh produit exactement les lignes que signaux.py transforme en signaux."""
+        script = (SCRIPTS / "project_checks.sh").read_text(encoding="utf-8")
+        self.assertIn('echo "- ❌ astro check : ${errs} erreur(s) de diagnostic"', script)
+        self.assertIn('echo "- ⚠️ astro check : ${warns} avertissement(s)"', script)
+        debut = script.index("  errs=$(grep")
+        fin = script.index('  grep -q "@astrojs/check"')
+        with tempfile.TemporaryDirectory() as t:
+            pathlib.Path(t, "astro-check.txt").write_text("a.astro:1:1 - error ts(1): x\nb.astro:2:2 - error ts(2): y\nc.astro - warning: z\n", encoding="utf-8")
+            r = subprocess.run(["bash", "-c", "set -u\nOUT=" + t + "\n" + script[debut:fin] + "\ntrue"], capture_output=True, text=True, check=True)
+            sortie = r.stdout
+            pathlib.Path(t, "astro-check.txt").write_text("tout va bien\n", encoding="utf-8")
+            propre = subprocess.run(["bash", "-c", "set -u\nOUT=" + t + "\n" + script[debut:fin] + "\ntrue"], capture_output=True, text=True, check=True).stdout
+        self.assertIn("- ❌ astro check : 2 erreur(s) de diagnostic", sortie)
+        self.assertIn("- ⚠️ astro check : 1 avertissement(s)", sortie)
+        self.assertNotIn("astro check :", propre.replace("Lignes", ""))
 
 
 if __name__ == "__main__":
