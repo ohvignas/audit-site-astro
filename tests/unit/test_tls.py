@@ -63,9 +63,52 @@ class TestTlsNonVerifie(unittest.TestCase):
 class TestScriptsBash(unittest.TestCase):
     def test_chaque_script_curl_respecte_le_mode(self):
         scripts = RACINE / "plugins/audit-site-astro/skills/audit-complet/scripts"
+        expected_curl = 'curl() { if [ "${AUDIT_INSECURE_TLS:-}" = "1" ]; then command curl -k "$@"; else command curl "$@"; fi; }'
         for nom in ("http_checks.sh", "security_probe.sh", "collect_all.sh"):
-            self.assertIn('curl() { command curl ${AUDIT_INSECURE_TLS:+-k} "$@"; }', (scripts / nom).read_text(), nom)
+            self.assertIn(expected_curl, (scripts / nom).read_text(), nom)
         self.assertIn("--ignore-certificate-errors", (scripts / "lighthouse_run.sh").read_text())
+
+
+class TestHttpChecksRuntime(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), _Ok)
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+        cls.url = f"http://127.0.0.1:{cls.srv.server_port}/"
+        cls.script = RACINE / "plugins/audit-site-astro/skills/audit-complet/scripts/http_checks.sh"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+
+    def test_http_checks_with_insecure_tls_shows_warning(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            env = os.environ.copy()
+            env["AUDIT_INSECURE_TLS"] = "1"
+            result = subprocess.run(["bash", str(self.script), self.url, tmp.name],
+                                    env=env, timeout=180, capture_output=True, text=True)
+            report = pathlib.Path(tmp.name) / "http-checks.md"
+            self.assertTrue(report.exists(), f"Report not created: {result.stdout}\n{result.stderr}")
+            content = report.read_text()
+            self.assertIn("⚠️ TLS non vérifié", content, f"Warning not found in:\n{content[:500]}")
+        finally:
+            tmp.cleanup()
+
+    def test_http_checks_without_insecure_tls_no_warning(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            env = os.environ.copy()
+            env.pop("AUDIT_INSECURE_TLS", None)
+            result = subprocess.run(["bash", str(self.script), self.url, tmp.name],
+                                    env=env, timeout=180, capture_output=True, text=True)
+            report = pathlib.Path(tmp.name) / "http-checks.md"
+            self.assertTrue(report.exists(), f"Report not created: {result.stdout}\n{result.stderr}")
+            content = report.read_text()
+            self.assertNotIn("⚠️ TLS non vérifié", content, f"Unexpected warning found in:\n{content[:500]}")
+        finally:
+            tmp.cleanup()
 
 
 if __name__ == "__main__":

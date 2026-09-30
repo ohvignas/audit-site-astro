@@ -19,7 +19,7 @@ D="$AUDIT/data"
 mkdir -p "$D" "$AUDIT/rapports"
 LOG="$D/COLLECTE.md"
 FAILS=0
-curl() { command curl ${AUDIT_INSECURE_TLS:+-k} "$@"; }
+curl() { if [ "${AUDIT_INSECURE_TLS:-}" = "1" ]; then command curl -k "$@"; else command curl "$@"; fi; }
 
 echo "# Collecte — $URL — $(date '+%Y-%m-%d %H:%M')" > "$LOG"
 echo >> "$LOG"

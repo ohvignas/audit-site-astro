@@ -5,7 +5,7 @@
 # Usage : bash security_probe.sh https://exemple.fr [DOSSIER_SORTIE]
 # À n'utiliser que sur un site dont on est propriétaire ou pour lequel on a une autorisation écrite.
 set -u
-curl() { command curl ${AUDIT_INSECURE_TLS:+-k} "$@"; }
+curl() { if [ "${AUDIT_INSECURE_TLS:-}" = "1" ]; then command curl -k "$@"; else command curl "$@"; fi; }
 URL="${1:?usage: security_probe.sh https://site.tld [dossier_sortie]}"
 OUT="${2:-.}"
 mkdir -p "$OUT"
