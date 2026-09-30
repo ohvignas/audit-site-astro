@@ -124,6 +124,28 @@ class TestParseur(unittest.TestCase):
                        '</form>')
         self.assertEqual(p.champs_sans_libelle(), [])
 
+    def test_champs_masques_par_classe_ou_dialog_ferme(self):  # re-revue m2
+        p = self.parse('<label for="e">Email</label><input id="e" type="email">'
+                       '<input name="_hp" class="hidden">'
+                       '<div class="modal d-none"><input name="a"></div>'
+                       '<div class="is-hidden"><textarea></textarea></div>'
+                       '<p class="x invisible"><input name="i"></p>'
+                       '<dialog><form><input placeholder="Recherche"></form></dialog>')
+        self.assertEqual(p.champs_sans_libelle(), [])
+
+    def test_classes_voisines_et_sr_only_restent_signalees(self):
+        p = self.parse('<input class="sr-only" name="s">'              # masqué visuellement mais lu : libellé requis
+                       '<input class="unhidden" name="u">'             # jeton entier seulement
+                       '<div class="hidden-xs"><input name="x"></div>'
+                       '<div class="hidden md:block"><input name="r"></div>'  # visible dès md
+                       '<dialog open><input name="o"></dialog>')
+        self.assertEqual(len(p.champs_sans_libelle()), 5)
+
+    def test_pot_de_miel_strict(self):  # re-revue m3
+        p = self.parse('<input name="visible" tabindex="-1" placeholder="Code">'
+                       '<input name="piege" tabindex="-1" autocomplete="off">')
+        self.assertEqual(len(p.champs_sans_libelle()), 1, "tabindex=-1 seul ne suffit pas à ignorer un champ visible")
+
     def test_champ_visible_apres_un_bloc_masque_reste_signale(self):
         p = self.parse('<div hidden><div><input name="x"></div></div>'
                        '<footer><input type="email" placeholder="Votre email"></footer>')

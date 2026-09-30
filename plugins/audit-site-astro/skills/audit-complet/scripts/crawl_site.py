@@ -50,12 +50,21 @@ SKIP_TEXT_TAGS = {"script", "style", "noscript", "svg", "template"}
 # Éléments sans balise fermante (ne s'empilent pas) ; styles qui masquent un élément
 VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 STYLE_MASQUE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
+# Classes utilitaires qui masquent (Tailwind, Bootstrap, Bulma) : jetons entiers ; sr-only n'en fait PAS partie
+# (masqué visuellement mais lu par les lecteurs d'écran : un libellé reste requis)
+CLASSES_MASQUE = {"hidden", "d-none", "is-hidden", "invisible"}
+# « hidden md:block » : masqué sur mobile seulement, visible ensuite → pas masqué
+CLASSE_REAFFICHE = re.compile(r"^(sm|md|lg|xl|2xl):(block|inline|inline-block|flex|inline-flex|grid|inline-grid|table|contents|visible)$")
 
 
 def masque(tag, a):
-    """Élément absent de l'arbre d'accessibilité (ignoré par axe/Lighthouse) : hidden, aria-hidden, style, template."""
-    return (tag in ("template", "noscript") or "hidden" in a or a.get("aria-hidden", "").lower() == "true"
-            or bool(STYLE_MASQUE.search(a.get("style", ""))))
+    """Élément absent de l'arbre d'accessibilité (ignoré par axe/Lighthouse) : hidden, aria-hidden, style, classe
+    utilitaire de masquage, <template>, <noscript>, <dialog> fermé."""
+    classes = a.get("class", "").split()
+    par_classe = bool(CLASSES_MASQUE.intersection(classes)) and not any(CLASSE_REAFFICHE.match(c) for c in classes)
+    return (tag in ("template", "noscript") or (tag == "dialog" and "open" not in a) or "hidden" in a
+            or a.get("aria-hidden", "").lower() == "true" or bool(STYLE_MASQUE.search(a.get("style", "")))
+            or par_classe)
 
 
 ASSETS_RX = re.compile(r"\.(css|m?js)\b|wp-content/(themes|plugins)|wp-includes|/_astro\b|/_next/", re.I)
@@ -346,8 +355,10 @@ class PageParser(HTMLParser):
                 self.label_for.add(a["for"])
         elif tag in ("input", "select", "textarea"):
             kind = (a.get("type") or "text").lower() if tag == "input" else tag
-            # champs masqués, désactivés ou pièges à robots (honeypot : tabindex=-1) : hors de l'arbre d'accessibilité
-            invisible = self._masques or cache or "disabled" in a or a.get("tabindex", "").strip() == "-1"
+            # champs masqués ou désactivés : hors de l'arbre d'accessibilité. Piège à robots (honeypot) : tabindex=-1
+            # ET autocomplete=off (un champ visible avec tabindex=-1 seul reste un champ à libeller)
+            pot_de_miel = a.get("tabindex", "").strip() == "-1" and a.get("autocomplete", "").lower() == "off"
+            invisible = self._masques or cache or "disabled" in a or pot_de_miel
             if kind not in ("hidden", "submit", "button", "reset", "image") and not invisible:
                 self.fields.append({"id": a.get("id", ""), "dans_label": self._label_depth > 0,
                                     "nomme": any(a.get(k, "").strip() for k in ("aria-label", "aria-labelledby", "title"))})
