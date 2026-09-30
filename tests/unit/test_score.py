@@ -49,6 +49,19 @@ class TestMatchers(unittest.TestCase):
             self.assertIsNone(score.detecte({"type": "unitaire", "test": "x"}, a))
 
 
+class TestHosts(unittest.TestCase):
+    def test_matchers_independants_de_l_hote(self):
+        verite = json.loads((RACINE / "tests/cobaye/verite-terrain.json").read_text(encoding="utf-8"))
+        forbidden = ["casse.cobaye.test", "propre.cobaye.test"]
+        for defect in verite["defauts"]:
+            matcher = defect["matcher"]
+            for field in ["regex", "contient", "exemple_contient"]:
+                if field in matcher:
+                    value = matcher[field]
+                    for host in forbidden:
+                        self.assertNotIn(host, value, "matcher {0} field {1} contains hardcoded host '{2}'".format(defect["id"], field, host))
+
+
 class TestScore(unittest.TestCase):
     VERITE = {"defauts": [
         {"id": "S07", "domaine": "seo", "titre": "404", "phase": "base", "matcher": {"type": "crawl_issue", "cle": "http_4xx"}},
