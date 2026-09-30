@@ -66,6 +66,14 @@ class TestParseur(unittest.TestCase):
         self.assertEqual(p.tags["ul"], 2)
         self.assertEqual(p.tags_main["table"], 1)
 
+    def test_champs_sans_libelle(self):
+        p = self.parse('<input type="email" placeholder="Votre email">'
+                       '<input id="n"><label for="n">Nom</label>'
+                       '<label>Ville <input name="v"></label>'
+                       '<select title="Pays"></select><textarea aria-labelledby="t"></textarea>'
+                       '<input type="hidden"><input type="submit"><button>OK</button><textarea></textarea>')
+        self.assertEqual(len(p.champs_sans_libelle()), 2)
+
 
 class TestJsonLd(unittest.TestCase):
     def test_graph_et_erreurs(self):

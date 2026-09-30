@@ -110,7 +110,7 @@
     {"id": "A02", "domaine": "a11y", "titre": "Bouton sans nom", "phase": "base", "matcher": {"type": "lighthouse", "regex": "(boutons|buttons).*(nom|name)"}},
     {"id": "A03", "domaine": "a11y", "titre": "Titres sautés", "phase": "base", "matcher": {"type": "lighthouse", "regex": "(en-tête|heading).*(séquentiel|order)"}},
     {"id": "A04", "domaine": "a11y", "titre": "Lien sans texte", "phase": "base", "matcher": {"type": "lighthouse", "regex": "(liens|links).*(nom|name|discernible)"}},
-    {"id": "A05", "domaine": "a11y", "titre": "Champ sans label", "phase": "base", "matcher": {"type": "lighthouse", "regex": "(libellé|label)"}},
+    {"id": "A05", "domaine": "a11y", "titre": "Champ sans label", "phase": "base", "matcher": {"type": "crawl_issue", "cle": "form_no_label"}},
     {"id": "A06", "domaine": "a11y", "titre": "Zones tactiles trop petites", "phase": "base", "matcher": {"type": "lighthouse", "regex": "(zones cibles|target|tactile)"}},
 
     {"id": "R01", "domaine": "rgpd", "titre": "Analytics avant consentement", "phase": 2, "matcher": {"type": "texte", "fichier": "rendu/rendu.md", "regex": "avant consentement.*fake-analytics"}},

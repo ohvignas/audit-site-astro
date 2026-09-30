@@ -73,6 +73,12 @@ class TestCrawlLocal(unittest.TestCase):
         self.assertEqual([(e["url"].endswith("/canon-cassee"), e["statut_cible"]) for e in ex], [(True, 404)])
         self.assertNotIn("/supprimee", self.exemples("http_4xx"), "la cible n'est pas une page liée : pas de http_4xx")
 
+    # Tâche 3 : champ de formulaire sans libellé (placeholder seul), invisible pour Lighthouse (A05)
+    def test_champ_sans_libelle(self):
+        it = self.issues.get("form_no_label", {})
+        self.assertEqual(it.get("count"), 1)
+        self.assertTrue(it["examples"][0]["url"].endswith("/formulaire"))
+
 
 if __name__ == "__main__":
     unittest.main()

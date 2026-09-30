@@ -261,6 +261,15 @@ class PageParser(HTMLParser):
         self.tags = Counter()
         self.tags_main = Counter()
         self.has_author_link = False
+        self.fields = []        # champs de formulaire saisissables
+        self.label_for = set()  # id visés par <label for>
+        self._label_depth = 0
+
+    def champs_sans_libelle(self):
+        """Champs sans nom accessible fiable : ni <label for>, ni <label> englobant, ni aria-label(ledby), ni title.
+        Un placeholder seul ne compte pas (il disparaît à la saisie — WCAG 3.3.2), même si Lighthouse l'accepte."""
+        return [c for c in self.fields
+                if not (c["nomme"] or c["dans_label"] or (c["id"] and c["id"] in self.label_for))]
 
     def handle_starttag(self, tag, attrs):
         a = {k.lower(): (v or "") for k, v in attrs}
@@ -314,6 +323,15 @@ class PageParser(HTMLParser):
                 self._skip += 1
             if a.get("src"):
                 self.resources.append(a["src"])
+        elif tag == "label":
+            self._label_depth += 1
+            if a.get("for"):
+                self.label_for.add(a["for"])
+        elif tag in ("input", "select", "textarea"):
+            kind = (a.get("type") or "text").lower() if tag == "input" else tag
+            if kind not in ("hidden", "submit", "button", "reset", "image"):
+                self.fields.append({"id": a.get("id", ""), "dans_label": self._label_depth > 0,
+                                    "nomme": any(a.get(k, "").strip() for k in ("aria-label", "aria-labelledby", "title"))})
         elif tag in ("iframe", "source", "video", "audio", "embed"):
             if a.get("src"):
                 self.resources.append(a["src"])
@@ -337,6 +355,8 @@ class PageParser(HTMLParser):
                 self._skip -= 1
         elif tag in SKIP_TEXT_TAGS and self._skip:
             self._skip -= 1
+        elif tag == "label" and self._label_depth:
+            self._label_depth -= 1
         elif tag == "a" and self._a is not None:
             self._a["text"] = " ".join(" ".join(self._a["text"]).split())[:120]
             self.links.append(self._a)
@@ -504,6 +524,7 @@ def analyze_page(url, res):
         "jsonld_errors": jl_err,
         "microdata_items": parser.microdata,
         "tag_counts": dict(parser.tags),
+        "form_fields_no_label": len(parser.champs_sans_libelle()),
         "has_author_link": parser.has_author_link,
         "body_class": parser.body_class[:300],
         "astra": "ast-" in parser.body_class or "/themes/astra" in html,
@@ -811,6 +832,9 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
         if p.get("imgs_no_alt"):
             add("img_no_alt", "Images sans attribut alt", "moyenne", {"url": p["url"], "n": p["imgs_no_alt"]},
                 n=p["imgs_no_alt"])
+        if p.get("form_fields_no_label"):
+            add("form_no_label", "Champs de formulaire sans libellé (placeholder seul ou rien) — WCAG 1.3.1 / 3.3.2",
+                "moyenne", {"url": p["url"], "n": p["form_fields_no_label"]}, n=p["form_fields_no_label"])
         if p.get("imgs_no_dims"):
             add("img_no_dims", "Images sans width/height (risque de CLS)", "basse",
                 {"url": p["url"], "n": p["imgs_no_dims"]}, n=p["imgs_no_dims"])
