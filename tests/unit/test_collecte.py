@@ -59,6 +59,7 @@ class TestValidationDesEtapes(unittest.TestCase):
                 self.assertEqual(r.returncode, 1, r.stdout[-2000:])
         finally:
             srv.shutdown()
+            srv.server_close()
 
 
 if __name__ == "__main__":
