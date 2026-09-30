@@ -8,7 +8,7 @@ import { paragraphes } from '../../data/texte';
   <h1>Nos formations</h1>
   {paragraphes('professionnelle').map((p) => <p>{p}</p>)}
   <h2>Financement et modalités</h2>
-  {paragraphes('finançable').map((p) => <p>{p}</p>)}
+  {paragraphes('finançable').filter((_, i) => i !== 2 && i !== 4).map((p) => <p>{p}</p>)}
   <h2>Les formations proposées</h2>
   <ul>{formations.map((f) => <li><a href={`/formations/${f.slug}`}>{f.titre}</a></li>)}</ul>
 </Base>

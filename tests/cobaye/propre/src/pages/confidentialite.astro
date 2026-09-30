@@ -7,5 +7,5 @@ import { paragraphes } from '../data/texte';
   <h1>Confidentialité</h1>
   {paragraphes('de la confidentialité').map((p) => <p>{p}</p>)}
   <h2>Cookies et droits des personnes</h2>
-  {paragraphes('des données personnelles').map((p) => <p>{p}</p>)}
+  {paragraphes('des données personnelles').filter((_, i) => i !== 2 && i !== 4).map((p) => <p>{p}</p>)}
 </Base>

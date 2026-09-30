@@ -12,7 +12,7 @@ import { formations } from '../data/formations';
   <h2>Pourquoi choisir nos formations ?</h2>
   {paragraphes('no-code et IA').map((p) => <p>{p}</p>)}
   <h2>Un accompagnement de A à Z</h2>
-  {paragraphes('personnalisée').map((p) => <p>{p}</p>)}
+  {paragraphes('personnalisée').filter((_, i) => i !== 2 && i !== 4).map((p) => <p>{p}</p>)}
   <h2>Nos formations</h2>
   <ul>{formations.map((f) => <li><a href={`/formations/${f.slug}`}>{f.titre}</a></li>)}</ul>
 </Base>
