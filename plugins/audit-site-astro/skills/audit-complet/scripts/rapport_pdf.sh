@@ -9,6 +9,7 @@ AUDIT="${1:?usage: rapport_pdf.sh DOSSIER_AUDIT}"
 HTML="$AUDIT/RAPPORT.html"
 PDF="$AUDIT/RAPPORT.pdf"
 DIR="$(cd "$(dirname "$0")" && pwd)"
+rm -f "$PDF"   # jamais de PDF périmé, quelle que soit l'issue (codes 1, 2 ou 3 compris)
 
 if [ ! -f "$HTML" ]; then
   python3 "$DIR/rapport_html.py" "$AUDIT" || { echo "❌ RAPPORT.html absent et impossible à générer"; exit 1; }
@@ -45,8 +46,9 @@ URL=$(python3 -c "import pathlib,sys;print(pathlib.Path(sys.argv[1]).resolve().a
 PROFIL=$(mktemp -d)
 ERR="$PROFIL/chrome.err"
 trap 'rm -rf "$PROFIL"' EXIT
-rm -f "$PDF"   # ne jamais valider un PDF périmé
-"$CHROME_PATH" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --disable-extensions \
+LIMITE=()
+command -v timeout >/dev/null 2>&1 && LIMITE=(timeout 180)
+${LIMITE[@]+"${LIMITE[@]}"} "$CHROME_PATH" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --disable-extensions \
   --no-first-run --user-data-dir="$PROFIL" --no-pdf-header-footer --print-to-pdf="$PDF" \
   "$URL" >/dev/null 2>"$ERR"
 code=$?

@@ -28,6 +28,26 @@ class _JsonSeulement(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class _PageHtml(http.server.BaseHTTPRequestHandler):
+    PAGE = ("<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\"><title>Accueil de test</title>"
+            "<meta name=\"description\" content=\"Page de test\"></head><body><h1>Bonjour</h1></body></html>").encode()
+
+    def _repondre(self):
+        ok = self.path in ("/", "/index.html")
+        corps = self.PAGE if ok else b"introuvable"
+        self.send_response(200 if ok else 404)
+        self.send_header("Content-Type", "text/html; charset=utf-8" if ok else "text/plain")
+        self.send_header("Content-Length", str(len(corps)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(corps)
+
+    do_GET = do_HEAD = _repondre
+
+    def log_message(self, *args):
+        pass
+
+
 class _Erreur503(http.server.BaseHTTPRequestHandler):
     def _repondre(self):
         corps = b"indisponible"
@@ -94,6 +114,37 @@ class TestValidationDesEtapes(unittest.TestCase):
         finally:
             srv.shutdown()
             srv.server_close()
+
+
+class TestEtapePdf(unittest.TestCase):
+    def _lancer(self, handler, **env_extra):
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            url = f"http://127.0.0.1:{srv.server_port}/"
+            with tempfile.TemporaryDirectory() as d:
+                env = dict(os.environ, MAX_PAGES="3", **env_extra)
+                r = subprocess.run(["bash", str(SCRIPT), url, "", d], capture_output=True, text=True,
+                                   timeout=600, env=env)
+                return r, lire_collecte(d)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_chrome_absent_est_un_avertissement_pas_un_echec(self):
+        # SKIP_LIGHTHOUSE=1 évite tout navigateur ; FORCE_PDF=1 (tests) force quand même l'étape pdf.
+        r, collecte = self._lancer(_PageHtml, SKIP_LIGHTHOUSE="1", FORCE_PDF="1", CHROME_PATH="/inexistant",
+                                   AUDIT_NO_CHROME_DISCOVERY="1")
+        ligne = next(l for l in collecte.splitlines() if l.startswith("| pdf"))
+        self.assertIn("⚠️ PDF non généré : Chrome introuvable", ligne)
+        self.assertNotIn("❌", collecte, collecte)
+        self.assertEqual(r.returncode, 0, r.stdout[-2000:])
+
+    def test_skip_pdf_seul_ignore_l_etape(self):
+        r, collecte = self._lancer(_PageHtml, SKIP_LIGHTHOUSE="1", SKIP_PDF="1", FORCE_PDF="1")
+        ligne = next(l for l in collecte.splitlines() if l.startswith("| pdf"))
+        self.assertIn("⏭️", ligne)
+        self.assertEqual(r.returncode, 0, r.stdout[-2000:])
 
 
 if __name__ == "__main__":

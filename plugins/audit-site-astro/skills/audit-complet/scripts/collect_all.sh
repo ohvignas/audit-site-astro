@@ -6,7 +6,9 @@
 #   DOSSIER_AUDIT : défaut ~/audits-site/<hôte>/<AAAA-MM-JJ> — HORS du dossier servi par le serveur web
 # Variables : MAX_PAGES (500), LH_PAGES (5), RUNS (1), BUILD=1 (build d'audit), PSI_API_KEY (option),
 #             MIN_FREE_MB (1200), SKIP_LIGHTHOUSE=1, SKIP_PDF=1 (pas de RAPPORT.pdf ; implicite avec SKIP_LIGHTHOUSE=1),
-#             CHROME_PATH (Chrome pour le PDF), AUDIT_INSECURE_TLS=1 (tests uniquement : certificat auto-signé)
+#             CHROME_PATH (Chrome pour le PDF), AUDIT_INSECURE_TLS=1 (tests uniquement : certificat auto-signé),
+#             FORCE_PDF=1 (tests uniquement : imprime le PDF même avec SKIP_LIGHTHOUSE=1)
+# Un PDF impossible (Chrome absent, RAM insuffisante) est un avertissement ⚠️ et ne fait pas échouer la collecte.
 # Les étapes tournent UNE PAR UNE : l'empreinte mémoire reste < ~1 Go (Chrome pendant Lighthouse).
 #
 # Codes de sortie : 0 = tout est ✅/⚠️/⏭️ ; 1 = au moins une étape ❌ ; 2 = pré-vol en échec : site injoignable
@@ -140,10 +142,27 @@ fi
 
 python3 "$DIR/rapport_brut.py" "$AUDIT" 2>/dev/null && echo "| rapport brut | ✅ | | RAPPORT-BRUT.md |" >> "$LOG"
 step rapport-html "$AUDIT/RAPPORT.html" valid_aucun python3 "$DIR/rapport_html.py" "$AUDIT"
-if [ "${SKIP_PDF:-0}" = "1" ] || [ "${SKIP_LIGHTHOUSE:-0}" = "1" ]; then
+pdf_step() {  # cas particuliers de rapport_pdf.sh : Chrome absent (2) / RAM insuffisante (3) = avertissement
+  local out="$AUDIT/RAPPORT.pdf" t0 code st
+  t0=$(date +%s)
+  echo "▶ pdf…"
+  bash "$DIR/rapport_pdf.sh" "$AUDIT" > "$D/.log-pdf.txt" 2>&1
+  code=$?
+  case $code in
+    0) if [ -s "$out" ] && head -c 5 "$out" | grep -q '%PDF-'; then st="✅"
+       else st="❌ résultat vide ou inexploitable (voir data/.log-pdf.txt)"; fi;;
+    2) st="⚠️ PDF non généré : Chrome introuvable (CHROME_PATH)";;
+    3) st="⚠️ PDF non généré : RAM insuffisante";;
+    *) st="❌ impression PDF échouée, code $code (voir data/.log-pdf.txt)";;
+  esac
+  case "$st" in ❌*) FAILS=$((FAILS + 1));; esac
+  echo "| pdf | $st | $(( $(date +%s) - t0 )) s | RAPPORT.pdf |" >> "$LOG"
+  echo "  $st"
+}
+if [ "${SKIP_PDF:-0}" = "1" ] || { [ "${SKIP_LIGHTHOUSE:-0}" = "1" ] && [ "${FORCE_PDF:-0}" != "1" ]; }; then
   echo "| pdf | ⏭️ ignoré (SKIP_PDF=1 ou SKIP_LIGHTHOUSE=1) | | |" >> "$LOG"
 else
-  step pdf "$AUDIT/RAPPORT.pdf" valid_aucun bash "$DIR/rapport_pdf.sh" "$AUDIT"
+  pdf_step
 fi
 echo >> "$LOG"
 echo "Dossier d'audit : \`$AUDIT\`" >> "$LOG"

@@ -28,7 +28,7 @@ if [ "$code" = 2 ]; then
   echo "❌ Audit annulé : site injoignable ou page d'accueil en erreur 5xx (voir audits/$HOST/$(date +%F)/data/COLLECTE.md)"
 else
   echo "📄 Rapport : audits/$HOST/$(date +%F)/RAPPORT-BRUT.md"
-  echo "🌐 Page web : audits/$HOST/$(date +%F)/RAPPORT.html"
+  [ -f "$AUDIT/RAPPORT.html" ] && echo "🌐 Page web : audits/$HOST/$(date +%F)/RAPPORT.html"
   [ -f "$AUDIT/RAPPORT.pdf" ] && echo "📕 PDF : audits/$HOST/$(date +%F)/RAPPORT.pdf"
   echo "🤖 Rapport priorisé avec correctifs : ouvrir le dossier dans Claude Code et lancer /audit-site-astro:audit-complet"
 fi
