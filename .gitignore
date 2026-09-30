@@ -1,0 +1,5 @@
+audits/
+__pycache__/
+*.pyc
+.DS_Store
+*.skill

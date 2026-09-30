@@ -1,0 +1,91 @@
+name: Build & test
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  lint:
+    name: Vérifier scripts et skills
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"   # version minimale supportée : attrape les syntaxes trop récentes
+      - name: Syntaxe bash et Python
+        run: |
+          set -e
+          for f in plugins/audit-site-astro/skills/audit-complet/scripts/*.sh docker/*.sh; do bash -n "$f"; echo "ok $f"; done
+          python3 -m py_compile plugins/audit-site-astro/skills/audit-complet/scripts/*.py
+      - name: Manifestes JSON et frontmatter des skills
+        run: |
+          set -e
+          python3 -c "import json; json.load(open('.claude-plugin/marketplace.json')); json.load(open('plugins/audit-site-astro/.claude-plugin/plugin.json'))"
+          for s in plugins/audit-site-astro/skills/*/SKILL.md; do
+            head -1 "$s" | grep -q '^---$' || { echo "frontmatter manquant : $s"; exit 1; }
+            grep -q '^name: ' "$s" && grep -q '^description: ' "$s" || { echo "name/description manquant : $s"; exit 1; }
+            echo "ok $s"
+          done
+
+  docker:
+    name: Image Docker (amd64 + arm64)
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Connexion à GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=sha,prefix=sha-
+      - name: Build (test local amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: audit-site-astro:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Test de fumée — audit réel de example.com
+        run: |
+          mkdir -p audits
+          docker run --rm audit-site-astro:test --help
+          docker run --rm --memory=2g -e MAX_PAGES=3 -e LH_PAGES=1 -v "$PWD/audits:/audits" audit-site-astro:test https://example.com
+          test -f audits/example.com/*/RAPPORT-BRUT.md
+          test -f audits/example.com/*/data/crawl/pages.json
+          ls audits/example.com/*/data/perf/lighthouse/*.json
+          cat audits/example.com/*/data/COLLECTE.md
+      - name: Publication multi-architecture
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
