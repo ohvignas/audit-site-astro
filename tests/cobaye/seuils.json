@@ -1,1 +1,6 @@
-{ "rappel_min_global": 0.0, "rappel_min_par_domaine": {}, "faux_positifs_max": 99, "inattendus_max": 99 }
+{
+  "rappel_min_global": 0.89,
+  "rappel_min_par_domaine": {"a11y": 0.83, "code": 0.87, "geo": 0.91, "http": 0.88, "perf": 1.0, "securite": 0.8, "seo": 0.86},
+  "faux_positifs_max": 2,
+  "inattendus_max": 1
+}

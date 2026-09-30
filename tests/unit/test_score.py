@@ -206,5 +206,19 @@ class TestVeriteUnitaires(unittest.TestCase):
         self.assertGreater(vus, 0)
 
 
+class TestSeuils(unittest.TestCase):
+    def test_seuils_bien_formes(self):
+        seuils = json.loads((RACINE / "tests/cobaye/seuils.json").read_text(encoding="utf-8"))
+        self.assertGreaterEqual(seuils["rappel_min_global"], 0)
+        self.assertLessEqual(seuils["rappel_min_global"], 1)
+        domaines = seuils["rappel_min_par_domaine"]
+        self.assertEqual(sorted(domaines), ["a11y", "code", "geo", "http", "perf", "securite", "seo"])
+        for domaine, v in domaines.items():
+            self.assertTrue(0 <= v <= 1, "rappel {0} hors [0,1] : {1}".format(domaine, v))
+        for cle in ("faux_positifs_max", "inattendus_max"):
+            self.assertIsInstance(seuils[cle], int, cle)
+            self.assertGreaterEqual(seuils[cle], 0, cle)
+
+
 if __name__ == "__main__":
     unittest.main()

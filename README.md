@@ -193,6 +193,18 @@ Lighthouse lance Chrome (0,5 à 1 Go). Limitez Docker Desktop à 4 Go (*Settings
 C'est le test « réponse réelle » : votre pare-feu ou CDN (Cloudflare « Block AI bots », règles de l'hébergeur) renvoie 403 ou une page de challenge. Confirmez dans les logs du serveur : certains pare-feu bloquent les faux robots (le test simule le user-agent) mais laissent passer les vrais, dont l'IP est vérifiée.
 </details>
 
+## Banc d'essai (cobaye)
+
+![rappel cobaye](https://img.shields.io/badge/rappel%20cobaye-89%25-yellow)
+
+Deux sites Astro de test (`tests/cobaye/casse`, avec des défauts étiquetés, et `tests/cobaye/propre`, son jumeau corrigé) mesurent à chaque PR ce que l'audit détecte et ce qu'il signale à tort.
+
+Score actuel (2026-09-30) : **89 % des défauts connus détectés, 2 faux positifs**. Les seuils ne peuvent que monter.
+
+Détail et pistes : [docs/cobaye-baseline.md](docs/cobaye-baseline.md) · fonctionnement : [tests/cobaye/README.md](tests/cobaye/README.md).
+
+---
+
 ## 🤝 Contribuer
 
 Issues et pull requests bienvenues : nouveaux contrôles, faux positifs à corriger, support d'autres adapters (Vercel, Netlify, Cloudflare) ou backends.
