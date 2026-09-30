@@ -79,7 +79,7 @@ Pour chaque `getUrl` : le fichier est-il **public par nature** (logo, image d'ar
      handler: async (ctx, args) => {
        const id = ctx.db.normalizeId('documents', args.id);
        if (id === null) return null;
-       const doc = await ctx.db.get('documents', id);
+       const doc = await ctx.db.get(id); // convex ≥ 1.31 accepte aussi ctx.db.get('documents', id)
        return doc !== null && doc.proprietaire === args.tokenIdentifier ? doc : null;
      },
    });

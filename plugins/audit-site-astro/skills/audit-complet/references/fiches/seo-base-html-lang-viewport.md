@@ -9,7 +9,7 @@ declencheurs:
   - "crawl:viewport_missing"
   - "code:Layout .* : balises absentes du <head>"
   - "code:Pas de favicon dans public/"
-  - "lighthouse:viewport"
+  - "lighthouse:\\[viewport\\]|width.{0,3} ou .{0,3}initial-scale"
 sources:
   - https://docs.astro.build/en/basics/layouts/
   - https://developer.mozilla.org/en-US/docs/Web/HTML/Viewport_meta_tag

@@ -20,24 +20,25 @@ case "$URL" in http://*|https://*) ;; *) URL="https://$URL";; esac
 PROJ=""
 [ -f /projet/package.json ] && PROJ=/projet
 HOST=$(printf '%s' "$URL" | awk -F/ '{print $3}')
-AUDIT="/audits/$HOST/$(date +%F)"
+JOUR=$(date +%F)  # une seule fois : un audit qui passe minuit reste annoncé dans le bon dossier
+AUDIT="/audits/$HOST/$JOUR"
 export AUDIT_DANS_DOCKER=1  # corrections.py : commande de relance au format « docker run » (les chemins du conteneur sont inutilisables sur l'hôte)
 bash /app/scripts/collect_all.sh "$URL" "$PROJ" "$AUDIT"
 code=$?
 echo
 if [ "$code" = 2 ]; then
-  echo "❌ Audit annulé : site injoignable ou page d'accueil en erreur 5xx (voir audits/$HOST/$(date +%F)/data/COLLECTE.md)"
+  echo "❌ Audit annulé : site injoignable ou page d'accueil en erreur 5xx (voir audits/$HOST/$JOUR/data/COLLECTE.md)"
 else
-  echo "📄 Rapport : audits/$HOST/$(date +%F)/RAPPORT-BRUT.md"
-  [ -f "$AUDIT/RAPPORT.html" ] && echo "🌐 Page web : audits/$HOST/$(date +%F)/RAPPORT.html"
-  [ -f "$AUDIT/RAPPORT.pdf" ] && echo "📕 PDF : audits/$HOST/$(date +%F)/RAPPORT.pdf"
+  echo "📄 Rapport : audits/$HOST/$JOUR/RAPPORT-BRUT.md"
+  [ -f "$AUDIT/RAPPORT.html" ] && echo "🌐 Page web : audits/$HOST/$JOUR/RAPPORT.html"
+  [ -f "$AUDIT/RAPPORT.pdf" ] && echo "📕 PDF : audits/$HOST/$JOUR/RAPPORT.pdf"
   # CORRECTIONS/ ou, si un suivi y est commencé (ou .garder), CORRECTIONS-<horodatage>/.
   # Le nom réellement écrit est dans data/corrections-dossier.txt (validé) ; à défaut, on retombe sur le tri alphabétique.
   CORR=""
   P=$(head -n 1 "$AUDIT/data/corrections-dossier.txt" 2>/dev/null | head -c 64)
   if printf '%s\n' "$P" | grep -Eq '^CORRECTIONS(-[0-9TZ:-]+)?$' && [ -f "$AUDIT/$P/LISEZ-MOI.md" ]; then CORR="$P"; fi
   [ -z "$CORR" ] && for c in "$AUDIT"/CORRECTIONS*/; do [ -f "${c}LISEZ-MOI.md" ] && CORR=$(basename "$c"); done
-  [ -n "$CORR" ] && echo "🛠️ Corrections : audits/$HOST/$(date +%F)/$CORR/"
+  [ -n "$CORR" ] && echo "🛠️ Corrections : audits/$HOST/$JOUR/$CORR/"
   [ -f "/audits/$HOST/index.html" ] && echo "📈 Historique : audits/$HOST/index.html"
   echo "🤖 Rapport priorisé avec correctifs : ouvrir le dossier dans Claude Code et lancer /audit-site-astro:audit-complet"
 fi

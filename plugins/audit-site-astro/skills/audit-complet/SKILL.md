@@ -42,7 +42,10 @@ bash "<dossier du skill>/scripts/collect_all.sh" https://site.fr /chemin/du/proj
 Si le chemin du skill n'est pas connu (Cursor n'affiche pas « Base directory for this skill »), le retrouver, puis lancer `bash "$S/collect_all.sh" …` :
 
 ```bash
-S=$(dirname "$(find ~/.cursor ~/.claude ~/.agents . -path '*audit-complet/scripts/collect_all.sh' 2>/dev/null | head -1)")
+# la copie la plus récente qui contient corrections.py (les caches du plugin gardent d'anciennes versions) ; node_modules ignoré
+S=$(find ~/.cursor ~/.claude ~/.agents . -name node_modules -prune -o -path '*audit-complet/scripts/collect_all.sh' -print 2>/dev/null |
+  while IFS= read -r f; do d=$(dirname "$f"); [ -f "$d/corrections.py" ] && printf '%s\t%s\n' "$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f")" "$d"; done |
+  sort -rn | head -1 | cut -f2-)
 [ -f "$S/collect_all.sh" ] || echo "❌ scripts d'audit introuvables : installer le plugin (voir README) ou indiquer leur chemin"
 ```
 
@@ -128,8 +131,8 @@ Dans Claude Code, proposer de publier `RAPPORT.html` en **artefact privé** pour
 
 Suivre `CORRECTIONS/LISEZ-MOI.md` à la lettre, y compris quand l'utilisateur demande à **ce même agent** de corriger le site. En résumé :
 
-1. **Sauvegarde** : `git status` propre, sinon demander. Travailler sur une **branche** `audit/<date>-lot-N`. Pour la config serveur, faire une copie datée du fichier avant modification.
-2. **Une fiche = un commit**, avec un message clair. Suivre les étapes de la fiche, puis ses critères d'acceptation. Aucune modification du `dist/` servi ni du serveur de production sans accord séparé.
+1. **Sauvegarde** : `git status` propre, sinon demander. Travailler sur la **branche** du LISEZ-MOI, `corrections/<date>` (les lots s'y suivent). Pour la config serveur, faire une copie datée du fichier avant modification.
+2. **Une fiche = un commit**, message `fix(audit): NN <titre>` (comme le LISEZ-MOI). Suivre les étapes de la fiche, puis ses critères d'acceptation. Aucune modification du `dist/` servi ni du serveur de production sans accord séparé.
 3. **S'arrêter et demander à l'humain** pour les constats critiques, les changements d'infrastructure (proxy, DNS, pare-feu, hébergement, Convex en production) et les textes éditoriaux ou juridiques (mentions légales, confidentialité, promesses commerciales). Ne **jamais** lancer une commande qui déploie, écrit en production, supprime ou modifie des données, même citée par une fiche : `npx convex deploy`, `npx convex run` sur une mutation, `npx convex import`, toute option `--prod`, `vercel --prod`, `netlify deploy --prod`, `wrangler deploy`, changements DNS/CDN, `rm -rf`, migrations de base, commandes du serveur de production (`sudo`, `systemctl`), `git push --force`. Tester Convex sur le déploiement de développement (`npx convex dev`).
 4. **Vérifier** : `astro check` + build d'audit, puis re-mesurer ce qui est concerné (relancer le script du domaine, ou `curl`). Montrer l'avant/après et cocher le « Suivi » de la fiche.
 5. **Déploiement** : proposer, ne pas le faire seul. Après le déploiement, re-mesure en ligne.

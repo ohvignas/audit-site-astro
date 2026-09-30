@@ -144,6 +144,8 @@ git clone https://github.com/ohvignas/audit-site-astro.git
 bash audit-site-astro/plugins/audit-site-astro/skills/audit-complet/scripts/collect_all.sh https://votre-site.fr [/chemin/du/projet]
 ```
 
+Sans Docker, l'audit est écrit par défaut dans `~/audits-site/votre-site.fr/AAAA-MM-JJ/` : même contenu que ci-dessous, avec `~/audits-site/` à la place de `audits/`. Un troisième argument choisit un autre dossier.
+
 ---
 
 ## 📂 Ce que vous obtenez

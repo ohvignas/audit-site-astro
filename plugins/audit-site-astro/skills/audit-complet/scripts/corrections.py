@@ -426,7 +426,9 @@ def rendre_lisez_moi(audit, site, date, projet, avec_rapport_audit, url):
             "1. **Vérifier en local** : build, prévisualisation (`astro build` puis `astro preview`) et les commandes de chaque fiche.",
             "2. **L'humain relit les commits et déploie.** L'agent ne déploie pas.",
             "3. **Seulement ensuite**, relancer l'audit sur la production avec la commande ci-dessous : elle crée un **nouveau dossier pour le jour** "
-            "(sans toucher à celui-ci si sa date est différente). Si le dossier du jour existe déjà et que son `CORRECTIONS/` contient des cases "
+            "(sans toucher à celui-ci si sa date est différente ; relancé **le même jour**, il réécrit les données, `RAPPORT-BRUT.md` et "
+            "`RAPPORT.html` de cet audit, et l'« avant » est perdu : relancer un autre jour, ou copier ce dossier avant). "
+            "Si le dossier du jour existe déjà et que son `CORRECTIONS/` contient des cases "
             "cochées ou un suivi rempli, ce dossier est **conservé** : les nouveaux fichiers sont écrits dans `CORRECTIONS-<horodatage>/`.", "",
             "```bash"]
     cmd = commande_reaudit(audit, url, projet)
@@ -438,8 +440,9 @@ def rendre_lisez_moi(audit, site, date, projet, avec_rapport_audit, url):
             out += ["", f"Remplacer `{PROJET_DOCKER}` par le chemin du projet sur la machine de l'humain."]
         out.append("")
     if nom_dossier_date(audit):
-        out += ["Puis comparer avec les audits précédents dans l'historique du site, `../../index.html`, régénéré par l'audit "
-                "(notes par domaine, constats fermés, nouveaux, régressions).", ""]
+        out += ["Puis comparer : l'historique du site, `../../index.html`, régénéré par l'audit, montre la note globale et les notes par "
+                "domaine de chaque audit ; les constats fermés, nouveaux ou en régression se lisent en comparant `00-PLAN.md` (ou `index.json`) "
+                "de `CORRECTIONS/` dans les deux dossiers d'audit.", ""]
     else:
         out += ["Puis comparer les notes et les constats avec ceux de cet audit.", ""]
     out += ["---", "",

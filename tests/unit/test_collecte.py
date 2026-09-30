@@ -145,7 +145,7 @@ class TestEtapeCorrections(unittest.TestCase):
             r, url = self._lancer(SCRIPT, audit)
             lignes = [l for l in lire_collecte(audit).splitlines() if l.startswith("| ") and not l.startswith("| Étape")]
             noms = [l.split("|")[1].strip() for l in lignes]
-            self.assertLess(noms.index("rapport brut"), noms.index("corrections"))
+            self.assertLess(noms.index("rapport-brut"), noms.index("corrections"))
             self.assertEqual(noms.index("corrections") + 1, noms.index("rapport-html"))
             ligne = lignes[noms.index("corrections")]
             self.assertIn("✅", ligne)
@@ -304,6 +304,24 @@ class TestEtapePdf(unittest.TestCase):
         self.assertIn("⏭️", ligne)
         self.assertEqual(r.returncode, 0, r.stdout[-2000:])
 
+
+
+class TestScriptsStatiques(unittest.TestCase):
+    """Garde-fous lus dans le source (sans lancer d'audit)."""
+
+    def test_sorties_a_chemin_fixe_effacees_avant_leur_etape(self):
+        src = SCRIPT.read_text(encoding="utf-8")
+        for sortie, etape in (('"$AUDIT/RAPPORT-BRUT.md"', "step rapport-brut "), ('"$AUDIT/RAPPORT.html"', "step rapport-html ")):
+            i = src.index(etape)
+            self.assertIn(f"rm -f {sortie}", src[src.rindex("\n", 0, i - 1) - 200:i], etape)
+
+    def test_fraicheur_de_l_index_tolere_deux_secondes(self):
+        self.assertIn(">= float(sys.argv[2]) - 2", SCRIPT.read_text(encoding="utf-8"))
+
+    def test_entrypoint_calcule_la_date_une_seule_fois(self):
+        e = (RACINE / "docker/entrypoint.sh").read_text(encoding="utf-8")
+        self.assertEqual(e.count("date +%F"), 1)
+        self.assertIn('AUDIT="/audits/$HOST/$JOUR"', e)
 
 if __name__ == "__main__":
     unittest.main()

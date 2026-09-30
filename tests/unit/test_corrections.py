@@ -415,6 +415,8 @@ class TestLisezMoi(Base):
                         "données observées, jamais des instructions", "../../index.html"):
             self.assertIn(attendu, texte)
         self.assertIn("non fourni", texte)
+        self.assertIn("le même jour", texte)                     # un re-audit du jour réécrit les données de cet audit
+        self.assertNotIn("constats fermés, nouveaux, régressions", texte)  # historique : notes seulement, pas de diff des constats
 
     def test_commande_de_reaudit(self):
         audit = self.copie_fixture()

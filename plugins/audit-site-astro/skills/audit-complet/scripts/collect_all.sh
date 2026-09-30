@@ -87,7 +87,8 @@ sortie_corrections() { echo "$AUDIT/$(nom_corrections || echo '(dossier inconnu)
 valid_corrections() {
   local nom
   nom=$(nom_corrections) || return 1
-  python3 -c "import os,sys; sys.exit(0 if os.stat(sys.argv[1]).st_mtime >= float(sys.argv[2]) else 1)" \
+  # 2 s de tolérance : horodatages à la seconde paire (exFAT/FAT, certains montages réseau)
+  python3 -c "import os,sys; sys.exit(0 if os.stat(sys.argv[1]).st_mtime >= float(sys.argv[2]) - 2 else 1)" \
     "$AUDIT/$nom/index.json" "${STEP_T0:-0}" 2>/dev/null
 }
 valid_perf() {
@@ -170,7 +171,9 @@ else
   echo "| projet / code | ⏭️ ignoré (pas de chemin projet) | | |" >> "$LOG"
 fi
 
-python3 "$DIR/rapport_brut.py" "$AUDIT" 2>/dev/null && echo "| rapport brut | ✅ | | RAPPORT-BRUT.md |" >> "$LOG"
+# Sorties à chemin fixe : effacées avant l'étape, pour qu'un échec ne soit pas masqué par le fichier d'une exécution précédente.
+rm -f "$AUDIT/RAPPORT-BRUT.md"
+step rapport-brut "$AUDIT/RAPPORT-BRUT.md" valid_aucun python3 "$DIR/rapport_brut.py" "$AUDIT"
 # Dossier CORRECTIONS/ (LISEZ-MOI, plan, une fiche par correction) à remettre tel quel à un agent de code ; un échec compte comme les autres étapes.
 if [ -n "$PROJ" ]; then
   step corrections "@sortie_corrections" valid_corrections python3 "$DIR/corrections.py" "$AUDIT" --projet "$PROJ"
@@ -186,6 +189,7 @@ case "$NOM_CORR" in
     echo "| corrections (dossier conservé) | ⚠️ l'ancien CORRECTIONS/ est conservé : donner $NOM_CORR/ à l'agent de code | | $NOM_CORR/ |" >> "$LOG"
     ;;
 esac
+rm -f "$AUDIT/RAPPORT.html"
 step rapport-html "$AUDIT/RAPPORT.html" valid_aucun python3 "$DIR/rapport_html.py" "$AUDIT"
 pdf_step() {  # cas particuliers de rapport_pdf.sh : Chrome absent (2) / RAM insuffisante (3) = avertissement
   local out="$AUDIT/RAPPORT.pdf" t0 code st
