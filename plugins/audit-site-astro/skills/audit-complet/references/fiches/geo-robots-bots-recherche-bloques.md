@@ -75,7 +75,7 @@ Sitemap: https://exemple.fr/sitemap-index.xml
 
    Adapter `Disallow: /api/` aux chemins réellement privés du site (le retirer s'il n'y en a pas). `site` doit être défini dans `astro.config.mjs` (`site: 'https://exemple.fr'`). Le nom `sitemap-index.xml` est celui produit par `@astrojs/sitemap` ; adapter s'il y a un sitemap personnalisé. En rendu à la demande (adapter Node), ajouter `export const prerender = true;` pour que le fichier soit figé au build.
 5. Si vous voulez bloquer certains robots d'entraînement, ajouter leurs groupes **séparément** (voir la fiche dédiée) sans toucher aux robots de recherche.
-6. Redéployer, puis contrôler le fichier public (et non le dépôt).
+6. Faire redéployer par l'humain, puis contrôler le fichier public (et non le dépôt).
 
 ## Critères d'acceptation
 

@@ -103,7 +103,7 @@ Vérifier aussi dans la Search Console : « Inspection d'URL » → « Explorer 
 - La règle la plus **spécifique** l'emporte : `Allow: /_astro/` peut débloquer un sous-chemin d'un `Disallow` plus large.
 - Un groupe `User-agent: Googlebot` remplace le groupe `*` pour Googlebot (il ne cumule pas) : recopier les règles utiles dans chaque groupe.
 - Ne jamais compter sur robots.txt pour cacher des données sensibles : le fichier est public.
-- Retour arrière : restaurer la version précédente du fichier (Git) et redéployer immédiatement.
+- Retour arrière : restaurer la version précédente du fichier (Git) et demander à l'humain de redéployer immédiatement.
 
 ## Pour aller plus loin
 

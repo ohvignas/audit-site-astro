@@ -138,7 +138,7 @@ npx convex dev --once
 
 - Une URL `getUrl` déjà distribuée reste valable tant que le fichier existe : pour la révoquer, supprimer le fichier (`ctx.storage.delete`) ou le re-téléverser sous un nouvel identifiant.
 - Un contrôle d'accès basé sur l'e-mail ou un identifiant fourni par le client est contournable : n'utiliser que `ctx.auth`.
-- Retour arrière : `git revert` puis `npx convex deploy` ; ne pas rétablir un `generateUploadUrl` anonyme.
+- Retour arrière : `git revert` puis `npx convex dev --once` ; si la version fautive est déjà en production, le déploiement en production (`npx convex deploy`) est fait par l'humain, pas par l'agent ; ne pas rétablir un `generateUploadUrl` anonyme.
 
 ## Pour aller plus loin
 

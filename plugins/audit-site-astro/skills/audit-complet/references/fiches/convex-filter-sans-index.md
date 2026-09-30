@@ -66,7 +66,7 @@ Tableau de bord Convex → onglet « Logs » / « Functions » : une fonction do
    - Filtrer en TypeScript (`documents.filter(...)`) donne la même performance que `.filter()` de Convex et est plus lisible, mais pas plus rapide : il faut quand même réduire la lecture avec un index.
    - Recherche de texte : `searchIndex` et `.withSearchIndex()`, pas `.filter()`.
 5. Supprimer les index redondants : si `by_equipe` existe et que `by_equipe_et_utilisateur` couvre déjà les mêmes préfixes, garder seulement le second (chaque index recopie la table et compte dans le stockage), sauf besoin de tri différent.
-6. Déployer : `npx convex dev --once` (développement) puis `npx convex deploy`. Sur une grosse table, créer l'index en mode « staged » pour éviter de bloquer le déploiement pendant le remplissage, et l'activer une fois prêt.
+6. Tester sur le **déploiement de développement** : `npx convex dev --once` (pousse le schéma et les index vers le déploiement de développement, jamais vers la production). Le déploiement en production (`npx convex deploy`) est fait **par l'humain**, après relecture : ne pas le lancer. Sur une grosse table, signaler à l'humain qu'il peut créer l'index en mode « staged » pour ne pas bloquer le déploiement pendant le remplissage, puis l'activer une fois prêt.
 
 ## Critères d'acceptation
 
@@ -86,7 +86,7 @@ python3 scripts/astro_scan.py . --out /tmp/verif   # le constat « .filter() san
 
 - Une requête `.withIndex('by_email', ...)` avec un nom d'index absent du schéma échoue au déploiement (et aux types) : toujours déclarer avant d'utiliser.
 - L'ordre des champs d'un index composite est déterminant : `['equipe', 'utilisateur']` sert « équipe » seule ou « équipe + utilisateur », pas « utilisateur » seul.
-- Retour arrière : `git revert` du commit et `npx convex deploy` ; les index créés en trop peuvent rester sans danger.
+- Retour arrière : `git revert` du commit, puis `npx convex dev --once` ; si la version fautive est déjà en production, le déploiement en production (`npx convex deploy`) est fait par l'humain, pas par l'agent. Les index créés en trop peuvent rester sans danger.
 
 ## Pour aller plus loin
 

@@ -74,7 +74,7 @@ Présent : 200 sur la `.map` ou une ligne `//# sourceMappingURL=...`. Corrigé :
    @maps path *.map
    respond @maps 404
    ```
-4. Reconstruisez, redéployez, videz le cache du CDN s'il y en a un.
+4. Reconstruisez ; l'humain redéploie et vide le cache du CDN s'il y en a un.
 5. Si des secrets sont apparus dans le code source exposé, faites-les tourner : `secu-secret-dans-js-client`.
 
 ## Critères d'acceptation

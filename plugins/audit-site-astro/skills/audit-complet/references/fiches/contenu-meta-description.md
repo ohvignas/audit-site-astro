@@ -119,7 +119,7 @@ export const setSeo = mutation({
 });
 ```
 
-   Côté Astro (rendu à la demande ou au build) : `const client = new ConvexHttpClient(import.meta.env.PUBLIC_CONVEX_URL); const page = await client.query(api.pages.getBySlug, { slug });` (`ConvexHttpClient` de `convex/browser`, `api` de `convex/_generated/api`), puis `<BaseLayout title={page.seoTitle ?? page.titre} description={page.seoDescription ?? resume(page.contenu)}>` (`resume` est la fonction de l'étape 6). Pour compléter beaucoup de documents d'un coup, utiliser une `internalMutation` lancée avec `npx convex run`, jamais une mutation publique sans authentification.
+   Côté Astro (rendu à la demande ou au build) : `const client = new ConvexHttpClient(import.meta.env.PUBLIC_CONVEX_URL); const page = await client.query(api.pages.getBySlug, { slug });` (`ConvexHttpClient` de `convex/browser`, `api` de `convex/_generated/api`), puis `<BaseLayout title={page.seoTitle ?? page.titre} description={page.seoDescription ?? resume(page.contenu)}>` (`resume` est la fonction de l'étape 6). Pour compléter beaucoup de documents d'un coup, utiliser une `internalMutation`, jamais une mutation publique sans authentification ; la tester avec `npx convex run` sur le déploiement de développement uniquement (`CONVEX_DEPLOYMENT` en `dev:`, pas de `CONVEX_DEPLOY_KEY`). En production, la modification des données est lancée par l'humain, après relecture des descriptions.
 6. **Repli automatique** (dernier recours pour les pages générées) : premier paragraphe nettoyé, coupé à 155 caractères sur une limite de mot.
 
 ```ts

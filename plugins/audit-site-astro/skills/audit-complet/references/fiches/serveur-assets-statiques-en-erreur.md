@@ -43,9 +43,9 @@ Problème présent : des codes 404, 403 ou 5xx. Corrigé : que des 200.
    - 403 → droits de fichiers (utilisateur du service sans lecture sur `dist/`) ou règle de blocage du proxy trop large (par exemple une règle qui bloque les chemins contenant un point ou un underscore).
    - 5xx → le serveur Node est arrêté ou redémarre au moment de la requête.
 
-2. **Purger le HTML en cache** (CDN, `proxy_cache`) après chaque déploiement, ou lui donner une durée courte (voir la fiche du cache HTML). Cloudflare : « Purge Everything » ou par préfixe ; nginx : supprimer le contenu de `proxy_cache_path` puis recharger.
+2. **Purger le HTML en cache** (CDN, `proxy_cache`) après chaque déploiement, ou lui donner une durée courte (voir la fiche du cache HTML). Cloudflare : « Purge Everything » ou par préfixe ; nginx : supprimer le contenu de `proxy_cache_path` puis recharger (sur le serveur de production : à faire par l'humain, ou avec son accord explicite).
 
-3. **Déployer de façon atomique** (SSR Node) : construire dans un nouveau dossier, puis basculer un lien symbolique et redémarrer le process, plutôt que de réécrire `dist/` en place.
+3. **Déployer de façon atomique** (SSR Node) : construire dans un nouveau dossier, puis basculer un lien symbolique et redémarrer le process, plutôt que de réécrire `dist/` en place. Le script ci-dessous est à proposer à l'humain, qui déploie : l'agent ne l'exécute pas sur le serveur.
 
 ```bash
 # Exemple de déploiement atomique, sur le serveur (adapter les chemins)

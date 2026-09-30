@@ -55,7 +55,7 @@ location /_image {
 }
 ```
 
-Créer le dossier (`sudo mkdir -p /var/cache/nginx/astro_img && sudo chown www-data /var/cache/nginx/astro_img`, utilisateur à adapter), puis `sudo nginx -t && sudo systemctl reload nginx`.
+Créer le dossier (`sudo mkdir -p /var/cache/nginx/astro_img && sudo chown www-data /var/cache/nginx/astro_img`, utilisateur à adapter), puis `sudo nginx -t && sudo systemctl reload nginx` (sur le serveur de production : à faire par l'humain, ou avec son accord explicite ; sinon, remettre la configuration exacte à l'humain).
 3. **Avec un CDN** (Cloudflare, Bunny, Fastly…) devant le site : créer une règle de cache pour le chemin `/_image*`, avec une durée longue et la chaîne de requête dans la clé de cache.
 4. **Caddy** ne met pas en cache par défaut : passer par un CDN, ou ajouter un module de cache (plugin à compiler), ou prérendre.
 5. **Réduire le travail** : moins de tailles générées (`image.breakpoints` réduit, voir `perf-images-responsives`) et des sources déjà raisonnables (pas d'originaux de 6000 px).

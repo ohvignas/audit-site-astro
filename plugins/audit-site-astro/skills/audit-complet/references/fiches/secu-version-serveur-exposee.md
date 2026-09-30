@@ -77,7 +77,7 @@ bash scripts/http_checks.sh https://exemple.fr/ /tmp/verif-http && grep 'Server 
 
 - Masquer une version ne protège pas contre une faille : la mise à jour reste l'action principale.
 - Une page d'erreur nginx affiche aussi la version dans son corps si `server_tokens` est actif : le réglage la retire.
-- Retour arrière : supprimer les lignes ajoutées et recharger (`nginx -s reload`, `caddy reload`).
+- Retour arrière : supprimer les lignes ajoutées et recharger (`nginx -s reload`, `caddy reload`, sur le serveur de production : à faire par l'humain, ou avec son accord explicite).
 
 ## Pour aller plus loin
 

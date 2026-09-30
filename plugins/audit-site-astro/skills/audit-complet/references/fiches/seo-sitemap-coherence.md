@@ -71,7 +71,7 @@ export default defineConfig({
 const publies = articles.filter((a) => a.publie && !a.noindex);
 ```
 
-7. Rebuilder et redéployer ; le sitemap doit refléter l'état réel du site à chaque déploiement.
+7. Rebuilder, puis faire redéployer par l'humain ; le sitemap doit refléter l'état réel du site à chaque déploiement.
 
 ## Critères d'acceptation
 

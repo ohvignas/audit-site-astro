@@ -57,7 +57,7 @@ grep -n "lock" .gitignore                                                       
 ## Vérification après correction
 
 ```bash
-rm -rf node_modules && npm ci && npm run build
+npm ci && npm run build   # npm ci supprime lui-même node_modules et réinstalle depuis le lockfile
 python3 scripts/astro_scan.py . --out /tmp/verif   # le constat « Aucun lockfile » doit disparaître
 ```
 

@@ -92,7 +92,7 @@ python3 scripts/astro_scan.py . --out /tmp/verif   # le constat « .collect() no
 - Un nombre d'éléments par page trop grand recrée le problème ; rester à quelques dizaines.
 - Une requête paginée est réactive : la taille d'une page peut varier quand des données sont ajoutées ou supprimées.
 - Le curseur est opaque : ne jamais le fabriquer à la main, seulement le repasser tel que reçu.
-- Retour arrière : `git revert` puis `npx convex deploy`.
+- Retour arrière : `git revert` puis `npx convex dev --once` ; si la version fautive est déjà en production, le déploiement en production (`npx convex deploy`) est fait par l'humain, pas par l'agent.
 
 ## Pour aller plus loin
 

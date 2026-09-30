@@ -41,7 +41,7 @@ Présent : 200 avec du JavaScript (`import.meta.hot`) pour `/@vite/client`, `PHP
 
 ## Correction
 
-1. **Serveur de développement en production** : arrêtez-le (`systemctl stop`, `pm2 delete`, `docker compose down`) et remplacez la commande de démarrage par le build de production.
+1. **Serveur de développement en production** : faites-le arrêter (`systemctl stop`, `pm2 delete`, `docker compose down`, sur le serveur de production : à faire par l'humain, ou avec son accord explicite) et remplacez la commande de démarrage par le build de production.
 
    ```bash
    npm run build                       # produit dist/

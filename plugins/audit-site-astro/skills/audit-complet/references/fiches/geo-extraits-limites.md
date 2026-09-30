@@ -62,7 +62,7 @@ const robots = noindex
 ```
 
    `data-nosnippet` fonctionne sur `span`, `div` et `section` ; le code HTML doit être valide.
-6. Redéployer ; Google peut mettre des jours à des semaines à recrawler (demander une nouvelle indexation depuis Search Console pour les pages clés).
+6. Faire redéployer par l'humain ; Google peut mettre des jours à des semaines à recrawler (demander une nouvelle indexation depuis Search Console pour les pages clés).
 
 ## Critères d'acceptation
 

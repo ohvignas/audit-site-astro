@@ -90,7 +90,7 @@ Cette politique de départ est volontairement large (`'unsafe-inline'`) pour ne 
 
 ### Déploiement par étapes (les deux voies)
 
-1. Déployer en `Report-Only` (voie B) ou tester en préproduction (voie A).
+1. Faire déployer par l'humain en `Report-Only` (voie B), ou tester en préproduction (voie A).
 2. Parcourir les pages clés avec la console ouverte : chaque « Refused to ... » signale une source à autoriser (police, image externe, iframe YouTube dans `frame-src`, analytics dans `script-src` et `connect-src`).
 3. Corriger la liste, retester, puis renommer l'en-tête en `Content-Security-Policy` (voie B).
 4. Vérifier une seule CSP effective par cause ; si les deux voies coexistent, le navigateur applique les deux (cumul).
@@ -114,7 +114,7 @@ bash scripts/http_checks.sh https://exemple.fr/ /tmp/verif-http && grep -i 'cont
 - Une CSP stricte sans phase de test casse silencieusement des fonctions (formulaire tiers, paiement, chat). Toujours observer d'abord.
 - Les scripts injectés par des extensions du navigateur provoquent des violations parasites : ne pas les prendre en compte.
 - Convex utilise WebSocket : `connect-src` doit contenir `wss://` en plus de `https://` pour le domaine de déploiement.
-- Retour arrière : retirer la directive `security.csp` (redéployer) ou supprimer la ligne d'en-tête du proxy.
+- Retour arrière : retirer la directive `security.csp` (redéploiement par l'humain) ou supprimer la ligne d'en-tête du proxy.
 
 ## Pour aller plus loin
 

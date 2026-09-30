@@ -83,7 +83,7 @@ Présent : le webhook répond 200 sans signature ; l'en-tête CORS renvoie `*` o
 
    export default http;
    ```
-   Le secret se définit côté Convex, jamais dans le dépôt (`npx convex env set WEBHOOK_SECRET <valeur>`), et se change là après une rotation chez le fournisseur.
+   Le secret se définit côté Convex, jamais dans le dépôt (`npx convex env set WEBHOOK_SECRET <valeur>` sur le déploiement de développement ; en production, c'est l'humain qui le définit, avec `--prod` ou dans le tableau de bord), et se change là après une rotation chez le fournisseur.
 2. **Stripe** : ne pas réécrire la vérification, utiliser la bibliothèque officielle dans une action Node (`"use node"` en première ligne du fichier, qui ne doit contenir aucune query ni mutation) :
    ```ts
    // convex/stripeWebhook.ts
@@ -151,7 +151,7 @@ npx convex dev --once
 - Vérifier la signature sur le texte **brut** : re-sérialiser le JSON change les octets et invalide la signature.
 - Un fichier `"use node"` ne peut pas contenir de `query` ni de `mutation`, et ne peut pas être importé par un fichier du runtime standard.
 - Voir aussi `secu-cors-ouvert` (CORS des pages Astro).
-- Retour arrière : `git revert` puis `npx convex deploy` ; ne pas retirer la vérification de signature en production.
+- Retour arrière : `git revert` puis `npx convex dev --once` ; si la version fautive est déjà en production, le déploiement en production (`npx convex deploy`) est fait par l'humain, pas par l'agent ; ne pas retirer la vérification de signature en production.
 
 ## Pour aller plus loin
 

@@ -116,7 +116,7 @@ Le script ne reconnaît que certains noms de helper (`requireAdmin`, `requireAut
 
 - Passer une fonction en `internal*` casse les appels `api.fichier.nom` existants (client, Astro) : chercher toutes les références avant (`grep -rn "api\.leads" src convex`).
 - Une `query` publique qui renvoie des données personnelles doit aussi être protégée (l'audit automatique ne signale que les mutations et actions).
-- Retour arrière : `git revert` puis `npx convex deploy` ; les données modifiées entre-temps ne reviennent pas seules (exporter une sauvegarde avant : `npx convex export --path sauvegarde.zip`).
+- Retour arrière : `git revert` puis `npx convex dev --once` ; si la version fautive est déjà en production, le déploiement en production (`npx convex deploy`) est fait par l'humain, pas par l'agent. Les données modifiées entre-temps ne reviennent pas seules : proposer à l'humain d'exporter une sauvegarde de la production avant de déployer (`npx convex export --prod --path sauvegarde.zip`, lancé par l'humain).
 
 ## Pour aller plus loin
 

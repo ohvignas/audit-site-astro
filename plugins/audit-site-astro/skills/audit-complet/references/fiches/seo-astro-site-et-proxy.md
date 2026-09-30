@@ -112,7 +112,7 @@ Relancer ensuite le crawl : `python3 scripts/crawl_site.py https://SITE/ --out /
 - Une variable `SITE_URL` absente en production retombe sur la valeur par défaut : vérifier qu'elle vaut bien l'adresse publique, pas celle de la préproduction.
 - Avec `allowedDomains`, une requête dont l'hôte n'est pas listé est traitée comme si l'en-tête n'existait pas : ne pas oublier `www.` si ce domaine sert du contenu.
 - Changer `site` change toutes les canonicals : tester sur une branche Git avant de déployer.
-- Retour arrière : `git revert` du commit de config, reconstruire, redéployer.
+- Retour arrière : `git revert` du commit de config, reconstruire ; l'humain redéploie.
 
 ## Pour aller plus loin
 

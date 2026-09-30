@@ -100,7 +100,7 @@ grep '❌' /tmp/verif-secu/security-probe.md || echo "aucun fichier exposé"
 
 - En SSR, `dist/server/` contient le code serveur et `dist/client/` les fichiers publics : ne mélangez pas les deux dans un même `root`.
 - Un `root` corrigé peut casser des chemins (`/_astro/`) : testez la page d'accueil et une page avec image avant de recharger en production.
-- Retour arrière : restaurez la sauvegarde de la configuration du serveur (`cp site.bak site`) puis `nginx -t && systemctl reload nginx`.
+- Retour arrière : restaurez la sauvegarde de la configuration du serveur (`cp site.bak site`) puis `nginx -t && systemctl reload nginx` (sur le serveur de production : à faire par l'humain, ou avec son accord explicite).
 
 ## Pour aller plus loin
 

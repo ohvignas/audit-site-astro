@@ -94,7 +94,7 @@ bash scripts/http_checks.sh https://SITE/ /tmp/verif           # section 1 : var
 - Ne pas créer de boucle (A → B → A) : tester chaque règle avec `curl -sIL`.
 - Garder les redirections d'anciennes URL au moins un an (recommandation de Google pour les changements d'adresse).
 - Ne pas rediriger massivement vers l'accueil : Google le traite comme une erreur douce ; viser la page équivalente.
-- Retour arrière : retirer la règle (`redirects`, nginx, Caddy), recharger le serveur, redéployer.
+- Retour arrière : retirer la règle (`redirects`, nginx, Caddy), recharger le serveur et redéployer (par l'humain, ou avec son accord explicite).
 
 ## Pour aller plus loin
 

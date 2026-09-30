@@ -48,7 +48,7 @@ Problème présent : TLSv1.0 / TLSv1.1 listés, ou `notAfter` à moins de 30 jou
    ssl_prefer_server_ciphers off;
    ```
 
-   Pour la liste de suites de chiffrement, utilisez le profil « Intermediate » du générateur de configuration Mozilla plutôt qu'une liste écrite à la main. Rechargez : `sudo nginx -t && sudo systemctl reload nginx`. Vérifiez qu'aucun autre fichier (`/etc/nginx/conf.d/`, `options-ssl-nginx.conf` de Certbot) ne redéclare `ssl_protocols` avec TLSv1 / TLSv1.1.
+   Pour la liste de suites de chiffrement, utilisez le profil « Intermediate » du générateur de configuration Mozilla plutôt qu'une liste écrite à la main. Rechargez : `sudo nginx -t && sudo systemctl reload nginx` (sur le serveur de production : à faire par l'humain, ou avec son accord explicite). Vérifiez qu'aucun autre fichier (`/etc/nginx/conf.d/`, `options-ssl-nginx.conf` de Certbot) ne redéclare `ssl_protocols` avec TLSv1 / TLSv1.1.
 2. **Caddy** : par défaut il n'accepte que TLS 1.2 et 1.3. Si votre Caddyfile contient une directive `protocols` ou un bloc `tls` personnalisé, remplacez-la ou supprimez-la.
 
    ```caddy
@@ -65,9 +65,9 @@ Problème présent : TLSv1.0 / TLSv1.1 listés, ou `notAfter` à moins de 30 jou
 
 4. Vérifier le **renouvellement automatique**.
    - Caddy : automatique (ports 80 et 443 joignables depuis Internet). Regardez les journaux : `journalctl -u caddy | grep -i -E 'certificate|renew|error'`.
-   - Certbot : `systemctl list-timers | grep certbot` (une minuterie doit exister), puis test à blanc `sudo certbot renew --dry-run`. En cas d'échec : port 80 bloqué, nom de domaine qui ne pointe plus vers le serveur, règle de blocage qui inclut `/.well-known/` (voir `secu-fichiers-caches-exposes`).
+   - Certbot : `systemctl list-timers | grep certbot` (une minuterie doit exister), puis test à blanc `sudo certbot renew --dry-run` (sur le serveur de production : à faire par l'humain, ou avec son accord explicite). En cas d'échec : port 80 bloqué, nom de domaine qui ne pointe plus vers le serveur, règle de blocage qui inclut `/.well-known/` (voir `secu-fichiers-caches-exposes`).
    - Certificat acheté manuellement : remplacez par Let's Encrypt (gratuit et automatique) ou mettez un rappel de calendrier à 45 jours de l'échéance.
-5. **Certificat déjà expiré** : `sudo certbot renew --force-renewal` puis rechargement de nginx ; sous Caddy, `sudo systemctl restart caddy` après avoir corrigé la cause.
+5. **Certificat déjà expiré** : `sudo certbot renew --force-renewal` puis rechargement de nginx ; sous Caddy, `sudo systemctl restart caddy` après avoir corrigé la cause (sur le serveur de production : à faire par l'humain, ou avec son accord explicite).
 6. Ajoutez une **alerte d'expiration** (supervision, ou un contrôle planifié avec `echo | openssl s_client -servername exemple.fr -connect exemple.fr:443 2>/dev/null | openssl x509 -noout -checkend 2592000` qui retourne un code d'erreur si l'échéance est dans moins de 30 jours).
 
 ## Critères d'acceptation

@@ -54,7 +54,7 @@ git log --all --oneline -- .env .env.local .env.production | head   # présent :
    git add .gitignore .env.example
    git commit -m "Retirer .env du suivi Git, ajouter .env.example"
    ```
-5. **Purger l'historique** si le dépôt est partagé, distant ou peut le devenir (réécrit l'historique : prévenez l'équipe). Avec `git-filter-repo` (outil à installer, voir sa page) :
+5. **Purger l'historique** si le dépôt est partagé, distant ou peut le devenir (réécrit l'historique : prévenez l'équipe). Étape irréversible sur le dépôt distant : la proposer à l'humain, qui la lance lui-même ; l'agent ne pousse jamais avec `--force`. Avec `git-filter-repo` (outil à installer, voir sa page) :
 
    ```bash
    git clone --mirror git@github.com:organisation/depot.git depot-purge.git

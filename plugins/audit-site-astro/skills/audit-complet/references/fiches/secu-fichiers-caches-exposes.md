@@ -59,7 +59,7 @@ curl -s https://exemple.fr/.git/HEAD | head -1     # présent : "ref: refs/heads
    respond @masques 404
    ```
 
-   Rechargez : `sudo nginx -t && sudo systemctl reload nginx` ou `caddy reload --config /etc/caddy/Caddyfile`.
+   Rechargez : `sudo nginx -t && sudo systemctl reload nginx` ou `caddy reload --config /etc/caddy/Caddyfile` (sur le serveur de production : à faire par l'humain, ou avec son accord explicite).
 3. **Corriger la cause**, sinon le problème reviendra :
    - Le serveur web pointe sur la racine du projet (`root /var/www/monsite;` où se trouve le dépôt). Il doit pointer sur `dist/client` (Astro en SSR avec `@astrojs/node`) ou `dist` (site statique). En SSR Node, mieux : `proxy_pass` / `reverse_proxy` vers `127.0.0.1:4321` et aucun `root`.
    - Un fichier sensible a été mis dans `public/` : tout ce qui est dans `public/` est publié tel quel. Déplacez-le hors du projet ou supprimez-le.

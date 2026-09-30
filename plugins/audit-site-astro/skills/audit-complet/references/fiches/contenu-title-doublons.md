@@ -73,7 +73,7 @@ const title = page.currentPage === 1 ? "Blog formation et emploi" : `Blog format
 ---
 ```
 
-4. **Convex** : si le titre vient d'un champ du document (`seoTitle`), lister les documents sans titre propre ou avec un titre en double, puis les compléter. Requête de contrôle (à lancer avec `npx convex run seoAudit:doublonsTitres`) :
+4. **Convex** : si le titre vient d'un champ du document (`seoTitle`), lister les documents sans titre propre ou avec un titre en double, puis les compléter. Requête de contrôle, en lecture seule (à lancer avec `npx convex run seoAudit:doublonsTitres`) ; le complément des documents, lui, modifie des données : le tester sur le déploiement de développement, et en production, c'est l'humain qui le lance après relecture des titres :
 
 ```ts
 // convex/seoAudit.ts

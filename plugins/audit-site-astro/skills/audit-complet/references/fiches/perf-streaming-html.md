@@ -82,7 +82,7 @@ location / {
 ```
 
    Alternative sans toucher à nginx : envoyer l'en-tête `X-Accel-Buffering: no` depuis l'application. Avec Caddy : `reverse_proxy 127.0.0.1:4321 { flush_interval -1 }` (mode faible latence).
-5. Recharger le proxy (`sudo nginx -t && sudo systemctl reload nginx`), redéployer, puis remesurer.
+5. Faire recharger le proxy (`sudo nginx -t && sudo systemctl reload nginx`, sur le serveur de production : à faire par l'humain, ou avec son accord explicite) et redéployer par l'humain, puis remesurer.
 
 ## Critères d'acceptation
 

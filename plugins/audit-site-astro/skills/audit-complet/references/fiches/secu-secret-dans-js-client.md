@@ -74,7 +74,7 @@ Présent : au moins un motif trouvé, ou une variable sans `PUBLIC_` lue dans un
    ```
 4. **Déclarer la variable comme secret serveur** pour que toute future fuite fasse échouer le build : voir `secu-astro-env-schema`.
 5. **Secret déjà dans l'historique Git** : la rotation de l'étape 1 reste obligatoire ; voir aussi `secu-env-versionne-git` pour la purge.
-6. Reconstruisez, redéployez, et relancez la vérification. Ajoutez un contrôle automatique (GitHub secret scanning, `gitleaks` en intégration continue).
+6. Reconstruisez, faites redéployer par l'humain, et relancez la vérification. Ajoutez un contrôle automatique (GitHub secret scanning, `gitleaks` en intégration continue).
 
 ## Critères d'acceptation
 

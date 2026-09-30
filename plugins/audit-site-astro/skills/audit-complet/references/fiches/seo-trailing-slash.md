@@ -94,7 +94,7 @@ python3 scripts/crawl_site.py https://SITE/ --out /tmp/verif                    
 
 - En développement, avec `'always'` ou `'never'`, le serveur `astro dev` affiche un avertissement sur les URL qui ne respectent pas le réglage.
 - Les endpoints (`sitemap.xml.ts`, `robots.txt.ts`) et fichiers avec extension ne prennent pas de slash final : les exclure de la règle.
-- Un changement de forme demande de tout redéployer et de laisser les redirections en place au moins un an.
+- Un changement de forme demande de tout redéployer (par l'humain) et de laisser les redirections en place au moins un an.
 - Retour arrière : remettre les valeurs précédentes dans `astro.config.mjs` et la règle du serveur.
 
 ## Pour aller plus loin

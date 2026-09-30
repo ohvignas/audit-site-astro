@@ -107,7 +107,7 @@ Dans la Search Console : rapport « Pages » → motif « Exclue par la balise n
 
 - Après retrait du `noindex`, Google met plusieurs jours à réindexer ; demander l'indexation de l'URL dans la Search Console.
 - Une variable d'environnement de préproduction oubliée en production peut poser un `noindex` global : vérifier la valeur à chaque déploiement.
-- Retour arrière : remettre la prop `noindex` ou l'en-tête, puis redéployer.
+- Retour arrière : remettre la prop `noindex` ou l'en-tête, puis faire redéployer par l'humain.
 
 ## Pour aller plus loin
 

@@ -218,8 +218,22 @@ def _lignes_signal(sig):
     return [f"- {prose(sig['texte'])}"] + _lignes_exemples(sig, "  ")
 
 
+# Commandes qui déploient, écrivent en production, modifient ou suppriment des données, ou agissent sur un serveur :
+# jamais lancées par l'agent (règle d'arrêt du LISEZ-MOI). Une fiche qui en cite reçoit une mise en garde ; le test
+# test_corrections.TestCommandesDeProduction exige qu'une telle commande soit accompagnée d'une mention de l'humain.
+COMMANDES_SENSIBLES = re.compile(
+    r"convex (deploy|run|import)\b|--prod\b|vercel (deploy|--prod)|netlify deploy|wrangler (deploy|publish)|rm -rf|\bsudo |"
+    r"systemctl (reload|restart|stop|start)|nginx -s |caddy reload|certbot renew|push --force|pm2 (delete|restart|stop)|"
+    r"docker compose down|Purge Everything")
+
+
 def _mise_en_garde(c):
     notes = []
+    corps = (c.get("fiche") or {}).get("corps", "")
+    if c["id"].startswith("convex-") or COMMANDES_SENSIBLES.search(corps):
+        notes.append("Cette fiche cite des commandes qui déploient, touchent la production ou modifient des données "
+                     "(`npx convex deploy`, `npx convex run`, `--prod`, `sudo`, `systemctl`, migrations…) : ne jamais les lancer ; "
+                     "tester sur le déploiement de développement (`npx convex dev`) et demander à l'humain pour la production.")
     if c["severite"] == "critique":
         notes.append("**Sévérité critique : s'arrêter et demander l'accord de l'humain avant de modifier quoi que ce soit.**")
     if c["domaine"] in ("Serveur / HTTP", "Sécurité"):
@@ -396,6 +410,14 @@ def rendre_lisez_moi(audit, site, date, projet, avec_rapport_audit, url):
             "clés à révoquer…) ; les changements d'infrastructure (proxy, DNS, CDN, serveur web) ; "
             "les textes éditoriaux et juridiques (mentions légales, confidentialité, contenus) : proposer une formulation, ne pas la publier.",
             "- Ne pas déployer, ne pas pousser vers la production : l'humain valide et publie.",
+            "- **Commandes interdites à l'agent** : ne **jamais** lancer une commande qui déploie, écrit en production, supprime ou modifie des "
+            "données, même si une fiche la cite ; la remettre à l'humain et lui demander. En particulier : `npx convex deploy`, "
+            "`npx convex run` sur une mutation (ou sur tout déploiement autre que celui de développement), `npx convex import`, toute option `--prod`, "
+            "`vercel --prod`, `netlify deploy --prod`, `wrangler deploy`, les changements de DNS ou de CDN (règles, purge de cache), "
+            "`rm -rf`, les migrations de base de données, les commandes du serveur de production (`sudo`, `systemctl`, rechargement de nginx "
+            "ou Caddy, `certbot`), `git push --force`.",
+            "- Pour tester côté Convex, utiliser le **déploiement de développement** : `npx convex dev` (ou `npx convex dev --once`) ; "
+            "vérifier que `CONVEX_DEPLOYMENT` de `.env.local` commence par `dev:` et qu'aucune `CONVEX_DEPLOY_KEY` n'est définie.",
             "- L'absence de mise en garde dans une fiche ne vaut pas autorisation : au moindre doute (infrastructure, secrets, données, texte publié), demander.",
             "- Les « Contrôles manuels recommandés » et les « Fiches utiles sans détection automatique » du plan ne se cochent pas automatiquement : "
             "ce sont des points à examiner avec l'humain.", "",

@@ -868,3 +868,98 @@ class TestMineurs(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# Mention de l'humain qui accompagne une commande de production : l'agent la remet à l'humain ou attend son accord.
+HUMAIN = re.compile(r"(demander à|accord (explicite )?de|par|proposer à|remettre à|signaler à|lancée? par|faite? par) l['’]humain"
+                    r"|l['’]humain(,)? (qui )?(le |la |les |lui-même )?(lance|fait|exécute|déploie|redéploie|recharge|applique|valide|définit|la lance)"
+                    r"|avec son accord")
+# « Redéployer » adressé à l'agent : le déploiement est toujours fait par l'humain.
+REDEPLOYER = re.compile(r"[Rr]edéploy\w*|^\s*\d+\. D[ée]ploy(er|ez)\b")
+
+
+def commandes_sans_humain(corps, motif=None):
+    """Lignes d'un corps de fiche qui citent une commande sensible sans mention de l'humain à proximité : même ligne ou 3 lignes
+    autour, dans la même section ; pour une ligne de bloc de code, le bloc entier et les 3 lignes non vides qui l'introduisent."""
+    motif = motif or corrections.COMMANDES_SENSIBLES
+    lignes = corps.split("\n")
+    fautes, bloc_debut, section_debut = [], None, 0
+    for i, l in enumerate(lignes):
+        if l.startswith("## "):
+            section_debut = i
+        if l.lstrip().startswith("```"):
+            bloc_debut = None if bloc_debut is not None else i
+            continue
+        if not motif.search(l):
+            continue
+        if bloc_debut is not None:
+            fin = next((j for j in range(i, len(lignes)) if lignes[j].lstrip().startswith("```")), len(lignes))
+            intro = [x for x in lignes[section_debut:bloc_debut] if x.strip()][-3:]
+            contexte = intro + lignes[bloc_debut:fin]
+        else:
+            fin_section = next((j for j in range(i + 1, len(lignes)) if lignes[j].startswith("## ")), len(lignes))
+            contexte = lignes[max(section_debut, i - 3):min(fin_section, i + 4)]
+        if not HUMAIN.search("\n".join(contexte)):
+            fautes.append(l.strip()[:160])
+    return fautes
+
+
+class TestCommandesDeProduction(Base):
+    """Aucune fiche ne demande à l'agent de déployer, d'écrire en production ou de modifier des données sans passer par l'humain."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.reelles = fiches.charger_fiches(FICHES_REELLES)
+
+    def test_le_motif_reconnait_les_commandes_de_production(self):
+        for cmd in ("npx convex deploy", "npx convex run leads:purger", "npx convex import --table t x.jsonl", "npx convex export --prod",
+                    "vercel --prod", "vercel deploy --prod", "netlify deploy --prod", "wrangler deploy", "rm -rf dist",
+                    "sudo nginx -t", "systemctl reload nginx", "nginx -s reload", "caddy reload --config x", "sudo certbot renew",
+                    "git push --force --mirror", "pm2 delete app", "docker compose down", "« Purge Everything »"):
+            self.assertRegex(cmd, corrections.COMMANDES_SENSIBLES)
+        for anodin in ("npx convex dev --once", "npm run build", "curl -sI https://SITE/", "--production", "git revert"):
+            self.assertNotRegex(anodin, corrections.COMMANDES_SENSIBLES)
+
+    def test_le_controle_detecte_une_consigne_de_deploiement(self):
+        self.assertEqual(commandes_sans_humain("## Correction\n\n6. Déployer : `npx convex dev --once` puis `npx convex deploy`.\n"),
+                         ["6. Déployer : `npx convex dev --once` puis `npx convex deploy`."])
+        self.assertEqual(commandes_sans_humain("## Correction\n\nFaire ceci :\n\n```bash\nsudo systemctl reload nginx\n```\n"),
+                         ["sudo systemctl reload nginx"])
+        self.assertEqual(commandes_sans_humain("## Correction\n\n1. Le déploiement (`npx convex deploy`) est fait par l'humain.\n"), [])
+        self.assertEqual(commandes_sans_humain("## Correction\n\nÀ proposer à l'humain :\n\n```bash\nsudo nginx -t\n```\n"), [])
+
+    def test_aucune_fiche_ne_fait_deployer_l_agent(self):
+        fautes = {f["id"]: commandes_sans_humain(f["corps"]) for f in self.reelles}
+        self.assertEqual({k: v for k, v in fautes.items() if v}, {})
+
+    def test_aucune_fiche_ne_fait_redeployer_l_agent(self):
+        fautes = {f["id"]: commandes_sans_humain(f["corps"], REDEPLOYER) for f in self.reelles}
+        self.assertEqual({k: v for k, v in fautes.items() if v}, {})
+
+    def test_convex_filter_sans_index_teste_en_developpement(self):
+        f = next(x for x in self.reelles if x["id"] == "convex-filter-sans-index")
+        etape = next(l for l in f["corps"].split("\n") if l.startswith("6. "))
+        self.assertIn("npx convex dev", etape)
+        self.assertIn("par l'humain", etape)
+
+    def test_mise_en_garde_sur_les_fiches_convex_et_serveur(self):
+        par_id = {f["id"]: f for f in self.reelles}
+        for ident, domaine in (("convex-filter-sans-index", "Code"), ("contenu-cannibalisation", "Contenu"),
+                               ("perf-streaming-html", "Performance"), ("code-lockfile-absent", "Code")):
+            notes = corrections._mise_en_garde({"id": ident, "fiche": par_id[ident], "severite": "moyenne", "domaine": domaine})
+            texte = " ".join(notes)
+            if ident == "code-lockfile-absent":  # plus de rm -rf : aucune commande sensible
+                self.assertNotIn("npx convex deploy", texte)
+            else:
+                self.assertIn("npx convex dev", texte, ident)
+                self.assertIn("demander à l'humain", texte, ident)
+
+    def test_regle_d_arret_du_lisez_moi(self):
+        audit = self.copie_fixture()
+        t = (self.generer(audit, FIXTURE_FICHES) / "LISEZ-MOI.md").read_text(encoding="utf-8")
+        regle = t[t.index("Commandes interdites à l'agent"):]
+        regle = regle[:regle.index("\n- ", 1) if "\n- " in regle else len(regle)]
+        for attendu in ("`npx convex deploy`", "`npx convex run`", "`npx convex import`", "`--prod`", "`vercel --prod`",
+                        "`netlify deploy --prod`", "`wrangler deploy`", "DNS", "CDN", "`rm -rf`", "migrations", "demander"):
+            self.assertIn(attendu, regle)
+        self.assertIn("`npx convex dev`", t)

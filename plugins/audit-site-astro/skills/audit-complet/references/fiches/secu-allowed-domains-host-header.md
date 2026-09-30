@@ -82,7 +82,7 @@ Problème présent : pas de `allowedDomains`, canonicals en `http://localhost:43
    ---
    <link rel="canonical" href={canonical} />
    ```
-5. Redéployez, puis contrôlez canonical, `og:url`, sitemap et redirections.
+5. Faites redéployer par l'humain, puis contrôlez canonical, `og:url`, sitemap et redirections.
 
 ## Critères d'acceptation
 

@@ -66,7 +66,7 @@ Problème présent : 200 avec une image, ou `hostname: '**'`, motif sans `hostna
    ```
 
    (la ligne `limit_req_zone` va dans le contexte `http`.)
-6. Reconstruisez, redéployez, retestez.
+6. Reconstruisez, faites redéployer par l'humain, retestez.
 
 ## Critères d'acceptation
 
@@ -86,7 +86,7 @@ bash scripts/security_probe.sh https://exemple.fr/ /tmp/verif-secu && grep '_ima
 
 - Restreindre trop fort casse l'affichage des images d'un CMS : listez chaque domaine réel (regardez les URL dans le HTML, `grep -oE 'https://[^/"]+' dist -r | sort -u`).
 - Une image affichée par une balise `<img>` brute n'est pas concernée : elle ne passe pas par `/_image`.
-- Retour arrière : remettre l'ancienne liste (Git), reconstruire, redéployer.
+- Retour arrière : remettre l'ancienne liste (Git), reconstruire ; l'humain redéploie.
 
 ## Pour aller plus loin
 

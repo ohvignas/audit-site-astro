@@ -72,7 +72,7 @@ map $http_user_agent $bloque_entrainement {
 if ($bloque_entrainement) { return 403; }
 ```
 
-5. Redéployer/appliquer, patienter quelques minutes (propagation des règles), puis relancer le test.
+5. Faire appliquer les règles par l'humain (changement de CDN ou de pare-feu : c'est lui qui le fait), patienter quelques minutes (propagation des règles), puis relancer le test.
 
 ## Critères d'acceptation
 

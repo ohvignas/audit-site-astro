@@ -47,7 +47,7 @@ Problème présent : aucune ligne `content-encoding`, et les deux tailles sont i
 
 1. Repérer qui répond devant Node : `curl -sI https://SITE/ | grep -iE '^(server|via|x-powered-by|cf-ray|x-vercel-id|x-nf-request-id)'`. Appliquer ensuite **une seule** des variantes ci-dessous (ne pas compresser à deux niveaux).
 
-2. **nginx** (SSR Node derrière nginx). Dans `/etc/nginx/conf.d/compression.conf` (contexte `http`), puis `nginx -t && systemctl reload nginx` :
+2. **nginx** (SSR Node derrière nginx). Dans `/etc/nginx/conf.d/compression.conf` (contexte `http`), puis `nginx -t && systemctl reload nginx` (sur le serveur de production : à faire par l'humain, ou avec son accord explicite) :
 
 ```nginx
 gzip on;
@@ -62,7 +62,7 @@ gzip_types text/plain text/css text/javascript application/javascript applicatio
 
 `text/html` est toujours compressé. Lister **à la fois** `text/javascript` et `application/javascript` : selon la version de nginx et du fichier `mime.types`, les `.js` sortent avec l'un ou l'autre. Pour brotli il faut le module tiers `ngx_brotli` (non inclus par défaut) : `brotli on; brotli_comp_level 5; brotli_types <mêmes types>;`. Sinon gzip suffit largement.
 
-3. **Caddy** (dans le bloc du site du `Caddyfile`, puis `caddy reload --config /etc/caddy/Caddyfile`) :
+3. **Caddy** (dans le bloc du site du `Caddyfile`, puis `caddy reload --config /etc/caddy/Caddyfile`, sur le serveur de production : à faire par l'humain, ou avec son accord explicite) :
 
 ```caddy
 exemple.fr {

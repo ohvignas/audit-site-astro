@@ -80,7 +80,7 @@ python3 scripts/astro_scan.py . --out /tmp/verif   # le constat « sans validate
 - La validation est stricte : un objet contenant des propriétés non déclarées est refusé. Un appel client qui envoie un champ en trop échouera : ajuster l'appelant ou le validateur.
 - Rendre un argument obligatoire casse les appels qui ne le fournissent pas : passer par `v.optional` le temps de migrer.
 - Les fonctions `internal*` gagnent aussi à être validées, même si le risque est moindre.
-- Retour arrière : `git revert` puis `npx convex deploy`.
+- Retour arrière : `git revert` puis `npx convex dev --once` ; si la version fautive est déjà en production, le déploiement en production (`npx convex deploy`) est fait par l'humain, pas par l'agent.
 
 ## Pour aller plus loin
 

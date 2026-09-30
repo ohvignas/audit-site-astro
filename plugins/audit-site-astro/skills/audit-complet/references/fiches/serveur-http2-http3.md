@@ -102,7 +102,7 @@ bash scripts/http_checks.sh https://SITE/ /tmp/verif       # §2 : colonne HTTP 
 
 - HTTP/3 annoncé (`Alt-Svc`) alors que le port UDP 443 est fermé : le navigateur essaie, échoue, puis retombe sur HTTP/2 avec un léger retard. N'annoncer `Alt-Svc` qu'une fois UDP 443 ouvert.
 - Ne pas exposer directement le port 4321 de Node : il reste en HTTP/1.1 et sans TLS.
-- Retour arrière : retirer `http2 on;` / `http3 on;` / `Alt-Svc` puis `nginx -t && systemctl reload nginx`.
+- Retour arrière : retirer `http2 on;` / `http3 on;` / `Alt-Svc` puis `nginx -t && systemctl reload nginx` (sur le serveur de production : à faire par l'humain, ou avec son accord explicite).
 
 ## Pour aller plus loin
 

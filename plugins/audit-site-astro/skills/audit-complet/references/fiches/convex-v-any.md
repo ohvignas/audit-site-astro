@@ -43,9 +43,11 @@ Chaque ligne est un candidat. Pour chacune, demander : quelles formes de valeur 
    ```
    Autres cas : objet libre à clés inconnues → `v.record(v.string(), v.string())` ; tableau → `v.array(v.string())` ; structure imbriquée → `v.object({...})` ; absence possible → `v.optional(...)` ; deux formes → `v.union(...)`.
 3. **Si des documents existants ne respectent pas le nouveau validateur**, le déploiement du schéma échoue (Convex vérifie les données existantes). Procéder ainsi :
-   - passer d'abord temporairement le champ en `v.optional(...)` ou en union large, déployer ;
-   - corriger les documents avec une migration (mutation interne qui parcourt la table par lots avec `.paginate()`, voir le skill `convex-migration-helper`) ;
+   - passer d'abord temporairement le champ en `v.optional(...)` ou en union large, et le pousser sur le déploiement de développement (`npx convex dev --once`) ;
+   - corriger les documents avec une migration (mutation interne qui parcourt la table par lots avec `.paginate()`, voir le skill `convex-migration-helper`), mise au point sur le déploiement de développement ;
    - resserrer ensuite le validateur.
+
+   En production, chaque étape (déploiement du schéma, exécution de la migration, qui modifie des données) est lancée **par l'humain**, dans cet ordre et après sauvegarde : lui remettre la liste des commandes, ne pas les exécuter.
 4. Cas où `v.any()` reste légitime (charge utile JSON de webhook stockée telle quelle) : le limiter au champ de stockage, ne jamais l'utiliser dans `args` d'une fonction publique, et parser/valider avant usage.
 
 ## Critères d'acceptation
@@ -65,9 +67,9 @@ python3 scripts/astro_scan.py . --out /tmp/verif
 
 ## Pièges et retour arrière
 
-- Un validateur plus strict fait échouer le déploiement si la base contient déjà des valeurs qui n'y correspondent pas : exporter une sauvegarde (`npx convex export --path sauvegarde.zip`) avant.
+- Un validateur plus strict fait échouer le déploiement si la base contient déjà des valeurs qui n'y correspondent pas : demander à l'humain d'exporter une sauvegarde de la production (`npx convex export --prod --path sauvegarde.zip`) avant.
 - Les types TypeScript changent : les appelants qui passaient une valeur libre doivent être corrigés.
-- Retour arrière : restaurer le validateur précédent (`git revert`) et redéployer.
+- Retour arrière : restaurer le validateur précédent (`git revert`) et le pousser sur le déploiement de développement ; la production est redéployée par l'humain.
 
 ## Pour aller plus loin
 
