@@ -16,6 +16,16 @@ ORDER = {"critique": 0, "haute": 1, "moyenne": 2, "basse": 3, "info": 4}
 ICON = {"critique": "🟥", "haute": "🟧", "moyenne": "🟨", "basse": "🟦", "info": "⬜"}
 
 
+def severite_opportunite(ms, octets):
+    """Sévérité d'un gain Lighthouse : le temps OU le poids économisé (6 Mo d'images = haute même sans ms estimées)."""
+    ms, octets = ms or 0, octets or 0
+    if ms >= 1000 or octets >= 1000000:
+        return "haute"
+    if ms >= 300 or octets >= 250000:
+        return "moyenne"
+    return "basse"
+
+
 def load(p):
     try:
         return json.loads(Path(p).read_text(encoding="utf-8"))
@@ -65,8 +75,9 @@ def main():
             if key in seen or not (o.get("gain_ms") or o.get("gain_octets")):
                 continue
             seen.add(key)
-            sev = "haute" if (o.get("gain_ms") or 0) >= 1000 else "moyenne" if (o.get("gain_ms") or 0) >= 300 else "basse"
-            gain = f"{o['gain_ms']} ms" if o.get("gain_ms") else f"{int(o['gain_octets']) // 1024} Ko"
+            sev = severite_opportunite(o.get("gain_ms"), o.get("gain_octets"))
+            gain = " + ".join(g for g in (f"{o['gain_ms']} ms" if o.get("gain_ms") else "",
+                                          f"{int(o['gain_octets']) // 1024} Ko" if o.get("gain_octets") else "") if g)
             signals.append((sev, "Performance", f"{o['titre']} (gain estimé {gain}, {r.get('strategie')})", o.get("exemples", [])[:3]))
         for cat, fails in (r.get("echecs_autres_categories") or {}).items():
             for f in fails:
