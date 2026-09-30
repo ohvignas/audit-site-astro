@@ -26,6 +26,19 @@ class TestEchantillonGeo(unittest.TestCase):
         self.assertEqual(echantillon[0], home)
         self.assertEqual(sum("/blog/" in u for u in echantillon), 1, echantillon)
 
+    def test_pages_isolees_cles_gardees_malgre_beaucoup_de_gabarits(self):  # revue finale M9
+        home = "https://ex.fr/"
+        familles = ["tag", "categorie", "auteur", "en", "formations", "blog", "cours", "outils", "cas", "guides"]
+        pages = [p(home, 50)] + [p("https://ex.fr/{0}/{1}".format(f, i), 5) for f in familles for i in "ab"] + \
+                [p("https://ex.fr/contact", 3), p("https://ex.fr/tarifs", 2)]
+        with tempfile.TemporaryDirectory() as d:
+            f = pathlib.Path(d, "pages.json")
+            f.write_text(json.dumps({"pages": pages}), encoding="utf-8")
+            echantillon, _ = geo_check.pick_sample(str(f), home, 12)
+        self.assertEqual(len(echantillon), 12)
+        self.assertIn("https://ex.fr/contact", echantillon)
+        self.assertIn("https://ex.fr/tarifs", echantillon)
+
 
 if __name__ == "__main__":
     unittest.main()

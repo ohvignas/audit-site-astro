@@ -152,7 +152,8 @@ def check_llms(origin, timeout):
 def pick_sample(crawl_path, home, n):
     """Échantillon : la home, puis un représentant par gabarit (1er segment d'URL). Les segments qui regroupent
     plusieurs pages (blog/…, formations/… : un gabarit partagé) passent avant les pages isolées, pour qu'un gabarit
-    d'article ne soit jamais évincé par des pages uniques très liées ; puis complément par liens entrants."""
+    d'article ne soit jamais évincé par des pages uniques très liées, mais dans la limite de la moitié de
+    l'échantillon (les pages isolées clés restent : contact, tarifs…) ; puis complément par liens entrants."""
     if not crawl_path or not Path(crawl_path).exists():
         return [home], []
     data = json.load(open(crawl_path, encoding="utf-8"))
@@ -164,14 +165,22 @@ def pick_sample(crawl_path, home, n):
         return (urlparse(p["url"]).path.strip("/").split("/") or [""])[0]
 
     taille = Counter(seg(p) for p in idx)
-    chosen, segs = [home], set()
-    for p in sorted(idx, key=lambda p: (-min(taille[seg(p)], 2), -(p.get("inlinks") or 0))):
+    representants, segs = [], set()
+    for p in idx:  # déjà triés par liens entrants
         s = seg(p)
         if p["url"] != home and s not in segs:
-            chosen.append(p["url"])
+            representants.append(p)
             segs.add(s)
+    gabarits = [p for p in representants if taille[seg(p)] >= 2]
+    isolees = [p for p in representants if taille[seg(p)] < 2]
+    # au plus la moitié de l'échantillon pour les gabarits d'abord : les pages isolées clés (contact, tarifs…)
+    # ne sont pas évincées par un site riche en familles (tag/, categorie/, auteur/…) ; puis le reste des gabarits
+    quota = max(1, (n - 1) // 2)
+    chosen = [home]
+    for p in gabarits[:quota] + isolees + gabarits[quota:]:
         if len(chosen) >= n:
             break
+        chosen.append(p["url"])
     for p in idx:
         if len(chosen) >= n:
             break
