@@ -27,7 +27,9 @@ bash $S/security_probe.sh https://site.fr/ "$AUDIT/data/securite"
 
 ### 2. En-têtes et transport
 - HSTS (`max-age` ≥ 1 an, `includeSubDomains` si tous les sous-domaines sont en https ; `preload` seulement en connaissance de cause), `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`, anti-clickjacking (`frame-ancestors` dans la CSP ou `X-Frame-Options`).
-- **CSP** : présente ? `script-src` avec nonce/hash + `'strict-dynamic'` = très bien. `'unsafe-inline'` sans nonce ou `'unsafe-eval'` = faible. Astro 5 propose une CSP intégrée (option `security.csp` selon la version : vérifier la documentation de la version installée). Toute nouvelle CSP passe d'abord en `Content-Security-Policy-Report-Only`.
+- **CSP** : présente ? `script-src` avec nonce/hash + `'strict-dynamic'` = très bien. `'unsafe-inline'` sans nonce ou `'unsafe-eval'` = faible. Astro ≥ 6 : `security.csp` (stable) génère une balise meta CSP avec les hashes des scripts et styles (`scriptDirective`, `styleDirective`, `directives`, `algorithm`). Si une CSP par nonce existe déjà via un middleware, ne pas en empiler une deuxième. Toute nouvelle CSP passe d'abord en `Content-Security-Policy-Report-Only`.
+- **Host header derrière un proxy** : `security.allowedDomains` (≥ 5.14.2) protège contre l'injection d'en-tête `X-Forwarded-Host` et permet à `Astro.url` d'être juste. À configurer si le site est en rendu à la demande.
+- **Secrets typés** : `env.schema` avec `envField.string({ context: 'server', access: 'secret' })` (`astro:env`, ≥ 5.0). Un secret importé côté client provoque alors une erreur de build au lieu d'une fuite.
 - TLS 1.2+ seulement, certificat valide et renouvelé automatiquement, redirection http → https en 1 saut.
 - En-têtes qui trahissent des versions (`Server: nginx/1.x`, `X-Powered-By`) → masquer.
 - Cookies de session : `Secure`, `HttpOnly`, `SameSite=Lax` ou `Strict` (`curl -sI` sur une page qui pose un cookie ; ne rien afficher de sa valeur).

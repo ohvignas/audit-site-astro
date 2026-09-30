@@ -351,6 +351,210 @@ def scan_src(root, report):
     report["middleware"] = rel(mw, root) if mw else None
 
 
+# --------------------------------------------------------------------------- fonctionnalités Astro (doc officielle)
+# Chaque contrôle est conditionné à la version installée : on ne recommande que ce qui existe dans cette version.
+# Sources : docs.astro.build — guides/images, reference/modules/astro-assets, guides/fonts, guides/caching,
+# reference/configuration-reference, reference/experimental-flags, integrations-guide/node.
+
+DOC = "https://docs.astro.build/en"
+
+
+def astro_version(root):
+    """Version installée (node_modules) sinon plage du package.json → tuple (maj, min, patch) ou None."""
+    for src in (root / "node_modules/astro/package.json", root / "package.json"):
+        if not src.exists():
+            continue
+        data = json.loads(read(src) or "{}")
+        v = data.get("version") if src.parent.name == "astro" else \
+            {**data.get("dependencies", {}), **data.get("devDependencies", {})}.get("astro")
+        m = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", v or "")
+        if m:
+            return tuple(int(x or 0) for x in m.groups())
+    return None
+
+
+def latest_astro():
+    try:
+        import urllib.request
+        with urllib.request.urlopen("https://registry.npmjs.org/astro/latest", timeout=6) as r:
+            m = re.search(r"(\d+)\.(\d+)\.(\d+)", json.load(r).get("version", ""))
+            return tuple(int(x) for x in m.groups()) if m else None
+    except Exception:
+        return None
+
+
+def scan_astro_features(root, report):
+    cfg = next((root / f for f in ("astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts")
+                if (root / f).exists()), None)
+    t = read(cfg) if cfg else ""
+    cname = rel(cfg, root) if cfg else "astro.config"
+    v = astro_version(root) or (0, 0, 0)
+    latest = latest_astro()
+    at_least = lambda *x: v >= x  # noqa: E731
+    report["astro_version"] = {"installee": ".".join(map(str, v)), "derniere": ".".join(map(str, latest)) if latest else None}
+    if latest and v[0] and v[0] < latest[0]:
+        add("moyenne", "code", f"Astro {v[0]}.x installé, dernière version {latest[0]}.x : optimisations récentes "
+                               f"indisponibles (images responsives, cache de routes, API fonts, CSP…)", [cname],
+            f"planifier la montée de version en suivant {DOC}/guides/upgrade-to/v{latest[0]}/ (une majeure à la fois)")
+
+    src = root / "src"
+    files = list(iter_files(src, {".astro", ".mdx", ".md", ".ts", ".tsx", ".jsx"})) if src.exists() else []
+    texts = {f: read(f) for f in files}
+    astro_like = {f: tx for f, tx in texts.items() if f.suffix in (".astro", ".mdx")}
+    image_tags = []  # (fichier, ligne, balise)
+    for f, tx in astro_like.items():
+        for m in re.finditer(r"<(Image|Picture)\b[^>]*?/?>", tx, re.S):
+            image_tags.append((rel(f, root), tx.count("\n", 0, m.start()) + 1, m.group(0)))
+    report["images_astro"] = {"balises": len(image_tags)}
+
+    # --- service d'images
+    if "passthroughImageService" in t:
+        add("haute", "performance", "image.service = passthroughImageService : AUCUNE image n'est optimisée "
+                                    "(ni redimensionnée, ni convertie)", [cname],
+            f"revenir au service sharp par défaut (retirer image.service) si l'hébergeur le permet — {DOC}/guides/images/")
+    # --- images responsives (5.10+)
+    uses_layout = "layout" in t and re.search(r"image\s*:\s*\{[^}]*layout", t, re.S)
+    tag_layout = sum(1 for _, _, tag in image_tags if re.search(r"\blayout\s*=", tag))
+    tag_sizes = sum(1 for _, _, tag in image_tags if re.search(r"\b(widths|densities|sizes)\s*=", tag))
+    if image_tags and at_least(5, 10) and not uses_layout and tag_layout == 0 and tag_sizes < len(image_tags) / 2:
+        add("moyenne", "performance", f"Images responsives non activées : {len(image_tags) - tag_sizes} <Image>/<Picture> "
+                                      f"sans srcset (une seule taille servie à tous les écrans)",
+            [f"{a}:{b}" for a, b, _ in image_tags[:10]],
+            "astro.config : image: { layout: 'constrained', responsiveStyles: true } → srcset et sizes générés "
+            f"automatiquement ; layout=\"full-width\" pour les visuels pleine largeur — {DOC}/guides/images/#responsive-image-behavior")
+    elif image_tags and not at_least(5, 10) and tag_sizes < len(image_tags) / 2:
+        add("moyenne", "performance", "Images sans widths/sizes : une seule taille servie à tous les écrans",
+            [f"{a}:{b}" for a, b, _ in image_tags[:10]], "ajouter widths={[400, 800, 1200]} et sizes=\"…\"")
+    # --- priority (5.10+) sur l'image LCP
+    prio = [f"{a}:{b}" for a, b, tag in image_tags if re.search(r"\bpriority\b", tag)]
+    manual = [f"{a}:{b}" for a, b, tag in image_tags if "fetchpriority" in tag and "priority" not in tag.replace("fetchpriority", "")]
+    if image_tags and at_least(5, 10) and not prio:
+        add("moyenne", "performance", "Aucune <Image> marquée `priority` : l'image LCP (hero) est chargée comme les autres"
+            + (f" ({len(manual)} avec fetchpriority manuel, sans decoding=\"sync\")" if manual else ""),
+            manual[:5], "ajouter la prop `priority` sur l'image principale au-dessus de la ligne de flottaison "
+                        "(loading=eager + decoding=sync + fetchpriority=high) — et seulement sur elle")
+    if len(prio) > 2:
+        add("basse", "performance", f"{len(prio)} images en `priority` : la priorité perd son effet si elle est partout", prio[:8])
+    # --- Picture sans AVIF
+    pic_no_avif = [f"{a}:{b}" for a, b, tag in image_tags if tag.startswith("<Picture") and "avif" not in tag]
+    if pic_no_avif:
+        add("basse", "performance", f"{len(pic_no_avif)} <Picture> sans AVIF (format le plus léger)", pic_no_avif[:8],
+            "formats={['avif', 'webp']}")
+    # --- images de public/ passées en chaîne
+    pub_imgs = [f"{a}:{b}" for a, b, tag in image_tags if re.search(r"\bsrc\s*=\s*[\"']/(?!_astro)", tag)]
+    for f, tx in astro_like.items():
+        for i, line in enumerate(tx.splitlines(), 1):
+            if re.search(r"<img\b[^>]*\bsrc=[\"']/[^\"']+\.(jpe?g|png|webp|gif|avif)", line, re.I):
+                pub_imgs.append(f"{rel(f, root)}:{i}")
+    if pub_imgs:
+        add("moyenne", "performance", f"{len(pub_imgs)} image(s) servie(s) depuis public/ : « servies telles quelles, "
+                                      f"sans aucun traitement » (doc Astro)", pub_imgs[:12],
+            "déplacer dans src/assets/ et importer : import hero from '../assets/hero.jpg' → <Image src={hero} … />")
+    # --- Markdown / MDX : images de public/
+    md_pub = []
+    for f, tx in texts.items():
+        if f.suffix in (".md", ".mdx"):
+            for i, line in enumerate(tx.splitlines(), 1):
+                if re.search(r"!\[[^\]]*\]\(/[^)]+\)", line):
+                    md_pub.append(f"{rel(f, root)}:{i}")
+    if md_pub:
+        add("moyenne", "performance", f"{len(md_pub)} image(s) Markdown pointant vers public/ : jamais optimisées",
+            md_pub[:12], "chemins relatifs vers des fichiers de src/ (ex. ![alt](./images/x.jpg)) pour qu'Astro les optimise")
+    # --- collections de contenu : image() plutôt que z.string()
+    for cc in (root / "src/content.config.ts", root / "src/content/config.ts", root / "src/content.config.mjs"):
+        if cc.exists():
+            ct = read(cc)
+            bad = [f"{rel(cc, root)}:{i}" for i, l in lines_matching(ct, re.compile(
+                r"\b(image|images|cover|thumbnail|hero|heroImage|avatar|photo|visuel|banner)\s*:\s*z\.string\(\)"))]
+            if bad:
+                add("moyenne", "performance", "Champs image des collections typés z.string() : Astro ne peut ni valider "
+                                              "ni optimiser ces images", bad,
+                    "schema: ({ image }) => z.object({ cover: image() }) puis <Image src={entry.data.cover} … />")
+    # --- endpoint /_image en SSR
+    ssr = "output: 'server'" in t or 'output: "server"' in t or any("prerender = false" in tx for tx in texts.values())
+    if ssr and image_tags:
+        add("info", "performance", "Rendu à la demande + <Image> : les images des pages non prérendues passent par "
+                                   "l'endpoint /_image, transformées à la requête (sharp) — coût CPU et latence si "
+                                   "rien ne les met en cache côté serveur", [cname],
+            "vérifier dans data/http/http-checks.md (§ /_image) ; prérendre les pages concernées, ou mettre /_image "
+            "en cache au proxy/CDN (les réponses portent déjà Cache-Control public)")
+
+    # --- polices : API Fonts (v6+)
+    gfonts = any(re.search(r"fonts\.googleapis\.com|@fontsource", tx) for tx in texts.values())
+    has_fonts_api = bool(re.search(r"\bfonts\s*:\s*\[", t))
+    if at_least(6, 0) and not has_fonts_api:
+        if gfonts or any("@font-face" in tx for tx in texts.values()):
+            add("moyenne", "performance", "Polices chargées sans l'API Fonts d'Astro (v6+)", [cname],
+                "fonts: [{ provider: fontProviders.google() | fontsource() | local(), name, cssVariable, weights, subsets }] "
+                f"+ <Font cssVariable=\"--font-x\" preload /> : auto-hébergement, preload, fallbacks ajustés (moins de CLS) — {DOC}/guides/fonts/")
+    if has_fonts_api and not any(re.search(r"<Font\b[^>]*\bpreload", tx) for tx in texts.values()):
+        add("basse", "performance", "API Fonts configurée mais aucune <Font preload> : la police du texte principal "
+                                    "arrive tard (FOUT / LCP texte)", [cname], "<Font cssVariable=\"…\" preload /> dans le <head>")
+
+    # --- cache de routes (v7) / en-têtes de cache
+    uses_cache_api = any("Astro.cache" in tx or "context.cache" in tx for tx in texts.values())
+    has_cache_cfg = bool(re.search(r"\b(cache\s*:\s*\{|routeRules\s*:)", t))
+    cc_headers = any(re.search(r"Cache-Control", tx) for tx in texts.values())
+    report["cache"] = {"ssr": ssr, "config_cache": has_cache_cfg, "Astro.cache": uses_cache_api, "Cache-Control_manuel": cc_headers}
+    if ssr and at_least(7, 0) and not (has_cache_cfg or uses_cache_api):
+        add("haute", "performance", "Rendu à la demande sans cache de routes (Astro 7) : chaque visite re-rend la page "
+                                    "et refait les requêtes backend", [cname],
+            "cache: { provider: memoryCache() } + routeRules: { '/blog/[...slug]': { maxAge: 300, swr: 60 }, … } ; "
+            "Astro.cache.set({ maxAge, swr, tags }) et cache.invalidate({ tags }) à la publication — "
+            f"{DOC}/guides/caching/")
+    elif ssr and not at_least(7, 0) and not cc_headers:
+        add("moyenne", "performance", "Rendu à la demande sans en-têtes de cache : ni navigateur ni proxy/CDN ne peuvent "
+                                      "réutiliser les pages", [cname],
+            "Astro.response.headers.set('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600') sur les "
+            "pages publiques + cache au proxy ; ou prérendre (export const prerender = true)")
+    if ssr and not any("server:defer" in tx for tx in texts.values()) and \
+            any("Astro.cookies" in tx or "Astro.locals" in tx for f, tx in texts.items() if "/components/" in str(f)):
+        add("info", "performance", "Des composants lisent cookies/session : les isoler en server islands (server:defer) "
+                                   "permettrait de prérendre ou de mettre en cache le reste de la page",
+            fix=f"<UserMenu server:defer><Fallback slot=\"fallback\" /></UserMenu> — {DOC}/guides/server-islands/")
+
+    # --- SVG
+    svg_imports = sum(len(re.findall(r"import\s+\w+\s+from\s+['\"][^'\"]+\.svg['\"]", tx)) for tx in texts.values())
+    if svg_imports >= 5 and "svgOptimizer" not in t and at_least(5, 16):
+        add("basse", "performance", f"{svg_imports} composants SVG importés, sans optimisation SVGO", [cname],
+            "experimental: { svgOptimizer: svgoOptimizer() } (import depuis 'astro/config', build uniquement)")
+
+    # --- préchargement
+    if "clientPrerender" not in t and re.search(r"prefetch\s*:", t):
+        add("info", "performance", "prefetch actif : experimental.clientPrerender (Speculation Rules) peut prérendre "
+                                   "les pages liées dans le navigateur", [cname])
+
+    # --- proxy / URL : security.allowedDomains (5.14.2+)
+    if ssr and at_least(5, 14) and "allowedDomains" not in t:
+        add("moyenne", "seo", "Serveur derrière un proxy sans security.allowedDomains : Astro ignore X-Forwarded-Host/"
+                              "Proto et Astro.url reflète l'hôte interne (souvent en http://) — cause typique de "
+                              "canonicals/sitemap en http", [cname],
+            "security: { allowedDomains: [{ hostname: 'mondomaine.fr', protocol: 'https' }] } + le proxy transmet "
+            "X-Forwarded-Host et X-Forwarded-Proto ; et construire les URL publiques avec Astro.site")
+
+    # --- sécurité : CSP intégrée (v6+) et astro:env
+    mw_csp = any("Content-Security-Policy" in tx for tx in texts.values())
+    if at_least(6, 0) and not re.search(r"\bcsp\s*:", t) and not mw_csp:
+        add("basse", "securite", "Aucune Content-Security-Policy (ni security.csp d'Astro ≥ 6, ni en-tête via middleware)",
+            [cname], "security: { csp: true } (hashes des scripts/styles générés automatiquement), tester d'abord en préproduction")
+    secret_env = any(RX["env_private"].search(tx) for f, tx in texts.items() if f.suffix != ".md")
+    if secret_env and not re.search(r"\benv\s*:\s*\{[^}]*schema", t, re.S):
+        add("basse", "securite", "Variables d'environnement sans schéma astro:env : un secret peut finir côté client "
+                                 "sans erreur de build", [cname],
+            "env: { schema: { CLE: envField.string({ context: 'server', access: 'secret' }) } } puis import depuis astro:env/server")
+
+    # --- divers perf
+    if re.search(r"inlineStylesheets\s*:\s*['\"]always", t):
+        add("basse", "performance", "build.inlineStylesheets: 'always' : tout le CSS est répété dans chaque page HTML "
+                                    "(pas de cache navigateur)", [cname], "revenir à 'auto' (défaut)")
+    if re.search(r"experimentalDisableStreaming\s*:\s*true", t):
+        add("moyenne", "performance", "Streaming HTML désactivé (@astrojs/node) : le navigateur attend la page entière",
+            [cname], "retirer experimentalDisableStreaming sauf contrainte du proxy")
+    if any("<ClientRouter" in tx or "<ViewTransitions" in tx for tx in texts.values()):
+        add("info", "performance", "View Transitions (ClientRouter) actives : routeur côté client chargé sur chaque page ; "
+                                   "vérifier qu'elles servent réellement l'expérience")
+
+
 # --------------------------------------------------------------------------- Convex
 
 FN_RX = re.compile(r"export\s+const\s+(\w+)\s*=\s*(query|mutation|action|internalQuery|internalMutation|internalAction|"
@@ -480,6 +684,7 @@ def main():
     scan_package(root, report)
     scan_astro_config(root, report)
     scan_src(root, report)
+    scan_astro_features(root, report)
     scan_convex(root, report)
     scan_dist(root, a.dist, report)
     scan_repo(root, report)
@@ -490,7 +695,9 @@ def main():
 
     pk = report.get("package", {}) or {}
     cf = report.get("astro_config", {}) or {}
+    av = report.get("astro_version", {})
     md = [f"# Scan du code Astro — {root.name}", "",
+          f"- Version Astro : installée {av.get('installee')} — dernière {av.get('derniere') or 'inconnue (hors ligne)'}",
           f"- Astro {pk.get('astro')} — adapter : {', '.join(pk.get('adapters') or []) or 'aucun (statique)'} — "
           f"UI : {', '.join(pk.get('frameworks_ui') or []) or 'aucun'} — Convex : {pk.get('convex') or 'non'}",
           f"- Config ({cf.get('fichier')}) : site={cf.get('site')}, output={cf.get('output')}, "

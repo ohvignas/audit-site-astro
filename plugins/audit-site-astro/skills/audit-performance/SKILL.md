@@ -37,8 +37,9 @@ Si l'élément LCP est un **texte (H1)** et que le LCP reste élevé : regarder 
 - **Compression** : HTML, CSS, JS et SVG doivent sortir en `br` ou `gzip`. L'adapter `@astrojs/node` en mode standalone **ne compresse pas** : il faut le faire au proxy (Caddy `encode zstd gzip` ; nginx `gzip on` + `gzip_types` ; Traefik middleware `compress`) ou au CDN. C'est souvent le gain n°1 : Lighthouse le chiffre en Kio et en ms.
 - **TTFB avec vs sans cache** : aucun écart + TTFB > 0,5 s = chaque page est rendue à la volée. Pistes, dans l'ordre :
   1. passer en `export const prerender = true` les pages qui ne dépendent ni de la requête (cookies, session, paramètres) ni de données qui changent à la minute ;
-  2. cache HTTP : `Cache-Control: public, s-maxage=…, stale-while-revalidate=…` via `Astro.response.headers` ou un middleware, avec un proxy/CDN qui cache ;
-  3. paralléliser les appels Convex au rendu (`Promise.all`) et vérifier leurs index.
+  2. **Astro ≥ 7 : cache de routes intégré** : `cache: { provider: memoryCache() }` + `routeRules: { '/blog/[...slug]': { maxAge: 300, swr: 60, tags: ['blog'] } }`, `Astro.cache.set(…)` dans les pages, `cache.invalidate({ tags })` au moment de publier (depuis l'admin ou une action Convex qui appelle un endpoint). Avant la v7 : `Cache-Control: public, s-maxage=…, stale-while-revalidate=…` via `Astro.response.headers` + un proxy/CDN qui cache ;
+  3. isoler les morceaux personnalisés en **server islands** (`server:defer`) pour que le reste de la page soit prérendu ou mis en cache ;
+  4. paralléliser les appels Convex au rendu (`Promise.all`) et vérifier leurs index.
 - **Assets `/_astro/`** : hashés, donc `Cache-Control: public, max-age=31536000, immutable`. Les fichiers de `public/` ne sont pas hashés : cache plus court, ou versionnement.
 - **HTTP/2 ou 3, TLS 1.3, un seul saut de redirection** vers l'URL canonique.
 - Si l'utilisateur a accès au serveur : `uptime`, `free -m`, `nproc`, charge du process Node (`ps aux --sort=-%cpu | head`) et, si Convex est auto-hébergé, les ressources de ce conteneur.
@@ -50,8 +51,17 @@ Si l'élément LCP est un **texte (H1)** et que le LCP reste élevé : regarder 
 - **Scripts tiers** (analytics, chat, vidéo) : après consentement, à l'interaction, façade pour YouTube et Vimeo (`lite-youtube`), Partytown pour les tags analytics.
 - **DOM** > 1 500 nœuds : SVG inline répétés (icônes → sprite ou `<img>`), listes longues non paginées, menu desktop et mobile tous deux dans le DOM.
 
-### C. Images
-- **`<img>` brut vs `<Image>`/`<Picture>`** (`astro_scan.py`) : sans `astro:assets`, pas de redimensionnement, pas d'AVIF/WebP, pas de `srcset`.
+### C. Images (checklist complète, versions : `../audit-complet/references/astro-optimisations.md`)
+Données : `code-scan.md` (config, balises, collections, Markdown) + `http-checks.md` §4 bis (mesure en ligne de `/_image` et des images prioritaires) + Lighthouse (« Dimensionnez correctement les images », « formats nouvelle génération », élément LCP).
+- **Service d'images** : `passthroughImageService` = aucune optimisation (critique pour la perf si des images lourdes sont servies).
+- **Images responsives** (Astro ≥ 5.10) : `image: { layout: 'constrained', responsiveStyles: true }` dans la config (ou la prop `layout` par image ; `full-width` pour les visuels pleine largeur) → `srcset` + `sizes` automatiques. Sans cela et sans `widths`/`sizes`, un mobile télécharge l'image desktop.
+- **`priority`** (≥ 5.10) sur l'image LCP **et elle seule** (eager + `decoding="sync"` + `fetchpriority="high"`). Plusieurs images prioritaires (carrousel, logo) = constat : garder la seule vraiment visible en premier, et ne pas mettre le logo en priorité.
+- **`<Picture formats={['avif', 'webp']}>`** pour les grands visuels ; `quality` (`mid` suffit souvent pour les photos).
+- **Images de `public/`** (balises ou Markdown `![](/…)`) : jamais optimisées → `src/assets/` + import.
+- **Collections de contenu** : champs image en `image()` et non `z.string()`.
+- **`/_image` en rendu à la demande** : transformation sharp à chaque requête si rien ne cache. Si §4 bis montre un TTFB > 0,3 s aux deux appels : prérendre la page (les images sont alors générées au build), ou mettre `/_image` en cache au proxy/CDN (la réponse porte déjà `Cache-Control: public`). Le cache de routes (v7) ne remplace pas ce point.
+- **`<img>` brut vs `<Image>`/`<Picture>`** (`astro_scan.py`) : sans `astro:assets`, pas de redimensionnement, pas d'AVIF/WebP, pas de `srcset`. Dans un composant React, passer l'image optimisée depuis le `.astro` parent (`getImage()` ou slot).
+- **SVG** : beaucoup de composants SVG importés → `experimental.svgOptimizer: svgoOptimizer()` (≥ 5.16) ; un SVG inline répété (icônes dans une liste) gonfle le DOM.
 - **Images servies depuis le storage Convex** (`/api/storage/…`) : c'est le fichier original. Lighthouse le montre sous « Dimensionnez correctement les images » et « formats nouvelle génération », souvent en Mo. Deux solutions :
   1. autoriser le domaine Convex dans `image.remotePatterns` (ou `image.domains`) et rendre ces images avec `<Image src={url} width height inferSize?>` / `getImage()`. Le service d'images d'Astro (sharp) les redimensionne en SSR via `/_image` ;
   2. générer des variantes redimensionnées en WebP/AVIF à l'upload (action Convex + sharp) et stocker plusieurs tailles.
@@ -62,14 +72,17 @@ Si l'élément LCP est un **texte (H1)** et que le LCP reste élevé : regarder 
 
 ### D. CSS et polices
 - **CSS bloquant** : un seul gros `BaseLayout.*.css`, c'est normal avec Tailwind. Vérifier qu'il reste < 50 Ko gzip. `build.inlineStylesheets: 'auto'` (défaut) inline les petites feuilles.
-- **Polices** : auto-hébergées, woff2, `font-display: swap`, 1 ou 2 fichiers préchargés maximum (ceux du texte au-dessus de la ligne de flottaison), sous-ensemble latin. L'API fonts d'Astro ou `@fontsource` gèrent cela. Google Fonts via `fonts.googleapis.com` = requêtes tierces en plus (et question RGPD).
+- **Polices** : auto-hébergées, woff2, `font-display: swap`, 1 ou 2 fichiers préchargés maximum (ceux du texte au-dessus de la ligne de flottaison), sous-ensemble latin. Astro ≥ 6 : **API Fonts** (`fonts: [{ provider: fontProviders.google(), name: 'Inter', cssVariable: '--font-inter', weights: [400, 700], subsets: ['latin'] }]` + `<Font cssVariable="--font-inter" preload />`), qui génère aussi des polices de repli ajustées (moins de CLS). Google Fonts via `fonts.googleapis.com` = requêtes tierces en plus (et question RGPD).
 
 ### E. CLS et INP
 - CLS : éléments listés dans « Éléments qui bougent » ; causes typiques : images ou iframes sans dimensions, polices, bannière de consentement insérée au-dessus du contenu, îlot qui s'hydrate avec une hauteur différente.
 - INP (terrain seulement ; en labo, TBT sert d'indicateur) : gestionnaires d'événements lourds, hydratation au moment de l'interaction, re-rendus React de listes longues.
 
 ### F. Navigation
-- `prefetch` (config Astro) sur les liens clés ; View Transitions uniquement si c'est utile (elles ajoutent du JS).
+- `prefetch` (config Astro) sur les liens clés ; `experimental.clientPrerender` (Speculation Rules) pour aller plus loin ; View Transitions (`<ClientRouter />`) uniquement si c'est utile (elles ajoutent du JS).
+
+### G. Version d'Astro
+Beaucoup de ces leviers dépendent de la version (images responsives 5.10, API Fonts et CSP 6.0, cache de routes 7.0). `code-scan.md` affiche la version installée et la dernière. Si le retard est d'une version majeure ou plus, en faire un constat avec la liste des gains concrets qu'apporte la montée de version pour CE site, et renvoyer au guide de migration.
 
 ## Correctifs types (à adapter après lecture du fichier concerné)
 

@@ -69,6 +69,8 @@ Pour chaque domaine, charger le skill correspondant et suivre sa checklist **en 
 
 Si des sous-agents sont disponibles, lancer les 7 domaines **en parallèle**. Chacun reçoit le chemin de son skill, le dossier d'audit et l'URL, et ne fait que lire et écrire son rapport. Sinon, les traiter dans l'ordre du tableau.
 
+**Options Astro : se caler sur la version installée.** `references/astro-optimisations.md` recense les leviers d'optimisation vérifiés dans la documentation officielle (images responsives, `priority`, API Fonts, cache de routes, `allowedDomains`, CSP…) avec leur version d'apparition. Ne recommander que ce qui existe dans la version du projet. Sinon, en faire un argument pour la montée de version.
+
 **Vérifier avant d'affirmer.** Les scripts produisent des *indices*. Avant de les écrire comme constats, confirmer les plus importants à la main : un `curl -sI`, l'ouverture du fichier signalé, la lecture de la page. Exemple : un « .filter sans index » sur une table de 20 lignes est une remarque basse, pas une urgence. Écarter les faux positifs et dire pourquoi.
 
 ## 4. Format commun des constats

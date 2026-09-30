@@ -17,7 +17,8 @@ python3 $S/astro_scan.py /chemin/projet --out "$AUDIT/data/code" --dist "$AUDIT/
 ## Checklist
 
 ### 1. Socle
-- **Versions** : Astro (majeure actuelle ?), adapters, intégrations, Convex, Node (LTS ≥ 20). Montées de version majeures à planifier : lire le guide de migration officiel avant de proposer.
+- **Versions** : Astro (installée vs dernière, dans `code-scan.md`), adapters, intégrations, Convex, Node (LTS ≥ 20). Montées de version majeures à planifier : lire le guide de migration officiel avant de proposer, et lister les gains concrets pour ce site (tableau des versions dans `../audit-complet/references/astro-optimisations.md`). Points de vigilance v7 : compilateur Rust (HTML invalide refusé), Vite 8, `compressHTML: 'jsx'` (espaces entre éléments inline supprimés), Markdown via Sätteri (plugins remark/rehype → installer `@astrojs/markdown-remark`), `src/fetch.ts` réservé.
+- **Fonctionnalités de la version installée non exploitées** : images responsives et `priority` (5.10), API Fonts et `security.csp` (6.0), cache de routes `cache`/`routeRules` (7.0), `security.allowedDomains` (5.14.2), `astro:env` (5.0), server islands (5.0). Chacune est détectée par `astro_scan.py` ; confirmer en lisant le code.
 - **`npm audit`** (production) : critiques et hautes d'abord ; vérifier que la vulnérabilité touche un chemin réellement utilisé.
 - **`astro check`** : erreurs TypeScript et diagnostics. 0 erreur attendu avant toute mise en prod.
 - **Build** : réussi ? Avertissements (images non optimisables, dépendances circulaires, chunks trop gros, routes dupliquées) ? Durée ?

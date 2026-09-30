@@ -30,7 +30,8 @@ Ces cas ont tous été trouvés sur de vrais sites. Cet outil les détecte autom
 
 | Domaine | Exemples de contrôles |
 |---|---|
-| ⚡ **Performance** | Lighthouse mobile + desktop, élément LCP, TBT, CLS, TTFB avec et sans cache, compression, cache des assets `/_astro/`, îlots `client:*`, poids du bundle, images, polices, scripts tiers |
+| ⚡ **Performance** | Lighthouse mobile + desktop, élément LCP, TBT, CLS, TTFB avec et sans cache, compression, cache des assets `/_astro/`, îlots `client:*`, poids du bundle, polices (API Fonts), cache de routes Astro 7, scripts tiers |
+| 🖼️ **Images Astro** | `<Image>`/`<Picture>` vs `<img>` brut, images responsives (`image.layout`), prop `priority` sur l'image LCP (et une seule), AVIF, images de `public/` et du Markdown jamais optimisées, schéma `image()` des collections, domaines distants autorisés, `/_image` recalculé à chaque requête (mesuré en ligne), service passthrough, SVGO |
 | 🔎 **SEO technique** | Crawl complet (jusqu'à 500+ pages), statuts, redirections, canonicals, sitemap vs pages réelles, orphelines, profondeur, robots.txt, soft 404, données structurées, variantes http/www |
 | ✍️ **Contenu** | Titles, metas, H1, contenus faibles, cannibalisation, maillage et ancres, E-E-A-T, pages légales |
 | 🤖 **GEO / IA** | Accès de 19 robots IA (GPTBot, OAI-SearchBot, ClaudeBot, PerplexityBot, Google-Extended…) dans robots.txt **et** en conditions réelles (WAF/CDN), llms.txt, entités schema.org, contenu « citable », pages de confiance |
@@ -150,6 +151,10 @@ Extrait réel de `RAPPORT-BRUT.md` :
 - Performance — Réduisez les ressources JavaScript inutilisées (426 Ko) — ChatBubble.js
 - SEO technique — Directive Sitemap relative dans robots.txt (Google exige une URL absolue)
 ```
+
+## 📚 Calé sur la documentation officielle
+
+Les contrôles Astro suivent [docs.astro.build](https://docs.astro.build) (Astro 7). Chaque recommandation tient compte de la **version installée** : l'outil ne propose jamais une option qui n'existe pas dans votre version. Il indique plutôt ce que la montée de version apporterait. Détail et versions : [`astro-optimisations.md`](plugins/audit-site-astro/skills/audit-complet/references/astro-optimisations.md).
 
 ## 🛡️ Principes
 

@@ -118,6 +118,50 @@ grep -oE '(src|href)="[^"]+\.(js|css|woff2?|webp|avif|png|jpe?g|svg)(\?[^"]*)?"'
 done
 echo
 
+echo "## 4 bis. Images optimisées par Astro (/_image) et image LCP"
+echo
+IMGS=$(grep -oE '/_image\?[^" ]+' "$TMP/body.html" | sed 's/&amp;/\&/g' | awk '!s[$0]++' | head -3)
+if [ -z "$IMGS" ]; then
+  echo "- Aucune URL /_image dans la page : images prérendues au build (idéal) ou non optimisées par Astro (voir code-scan)."
+else
+  echo "| Image | Appel 1 (TTFB) | Appel 2 (TTFB) | Taille | Format | Cache-Control | Verdict |"
+  echo "|---|---|---|---|---|---|---|"
+  for u in $IMGS; do
+    r1=$(curl -s -o /dev/null -A "$UA" -w '%{time_starttransfer}|%{size_download}|%{content_type}' --max-time 30 "$BASE$u")
+    r2=$(curl -s -o /dev/null -D "$TMP/h_img" -A "$UA" -w '%{time_starttransfer}' --max-time 30 "$BASE$u")
+    t1=${r1%%|*}; rest=${r1#*|}; sz=${rest%%|*}; ct=${rest#*|}
+    icc=$(hv cache-control "$TMP/h_img")
+    v="✅"
+    awk -v a="$t1" -v b="$r2" 'BEGIN{exit !(a>0.3 && b>0.3)}' && v="⚠️ transformée à chaque requête (pas de cache serveur) : prérendre la page ou cacher /_image au proxy/CDN"
+    [ "$sz" -gt 250000 ] 2>/dev/null && v="$v ; ⚠️ > 250 Ko"
+    echo "| $(printf '%s' "$u" | cut -c1-60)… | ${t1}s | ${r2}s | $((sz / 1024)) Ko | ${ct#image/} | ${icc:-absent} | $v |"
+  done
+fi
+grep -oE '<img[^>]*fetchpriority="high"[^>]*>' "$TMP/body.html" > "$TMP/prio.txt"
+nprio=$(wc -l < "$TMP/prio.txt" | tr -d ' ')
+echo
+if [ "$nprio" -eq 0 ]; then
+  echo "- ⚠️ Aucune image avec fetchpriority=\"high\" : si l'élément LCP est une image, elle n'est pas priorisée (prop \`priority\` d'<Image>)."
+else
+  echo "**Images en priorité haute : $nprio** $([ "$nprio" -gt 1 ] && echo '— ⚠️ une seule devrait l'"'"'être (l'"'"'image LCP) : sinon elles se disputent la bande passante')"
+  echo
+  echo "| # | Source | Optimisée par Astro | srcset | decoding | Verdict |"
+  echo "|---|---|---|---|---|---|"
+  i=0
+  while IFS= read -r tag; do
+    i=$((i + 1)); [ $i -gt 6 ] && break
+    src=$(printf '%s' "$tag" | grep -oE ' src="[^"]+"' | head -1 | cut -d'"' -f2 | sed 's/&amp;/\&/g')
+    opt=$(printf '%s' "$src" | grep -q '/_image\|/_astro/' && echo oui || echo "non (brute)")
+    ss=$(printf '%s' "$tag" | grep -q 'srcset=' && echo oui || echo non)
+    dec=$(printf '%s' "$tag" | grep -oE 'decoding="[^"]+"' | cut -d'"' -f2)
+    v=""
+    [ "$opt" != "oui" ] && v="⚠️ fichier original servi tel quel (autoriser le domaine dans image.remotePatterns et passer par <Image>)"
+    [ "$ss" = "non" ] && v="$v ⚠️ pas de srcset"
+    [ "$dec" = "async" ] && v="$v ℹ️ prop \`priority\` → decoding=sync"
+    echo "| $i | $(printf '%s' "$src" | cut -c1-70) | $opt | $ss | ${dec:-—} | ${v:-✅} |"
+  done < "$TMP/prio.txt"
+fi
+echo
 echo "## 5. TLS / certificat"
 echo
 if command -v openssl >/dev/null; then
