@@ -9,6 +9,7 @@
 #             CHROME_PATH (Chrome pour le PDF), AUDIT_INSECURE_TLS=1 (tests uniquement : certificat auto-signé),
 #             FORCE_PDF=1 (tests uniquement : imprime le PDF même avec SKIP_LIGHTHOUSE=1)
 # Un PDF impossible (Chrome absent, RAM insuffisante) est un avertissement ⚠️ et ne fait pas échouer la collecte.
+# Étape « corrections » : écrit <dossier d'audit>/CORRECTIONS/ (voir corrections.py ; CORRECTIONS/.garder = ne pas l'écraser).
 # Dernière étape « historique » : régénère <dossier du site>/index.html (évolution des notes de tous les audits AAAA-MM-JJ du site).
 # Les étapes tournent UNE PAR UNE : l'empreinte mémoire reste < ~1 Go (Chrome pendant Lighthouse).
 #
@@ -142,6 +143,12 @@ else
 fi
 
 python3 "$DIR/rapport_brut.py" "$AUDIT" 2>/dev/null && echo "| rapport brut | ✅ | | RAPPORT-BRUT.md |" >> "$LOG"
+# Dossier CORRECTIONS/ (LISEZ-MOI, plan, une fiche par correction) à remettre tel quel à un agent de code ; un échec compte comme les autres étapes.
+if [ -n "$PROJ" ]; then
+  step corrections "$AUDIT/CORRECTIONS/LISEZ-MOI.md" valid_aucun python3 "$DIR/corrections.py" "$AUDIT" --projet "$PROJ"
+else
+  step corrections "$AUDIT/CORRECTIONS/LISEZ-MOI.md" valid_aucun python3 "$DIR/corrections.py" "$AUDIT"
+fi
 step rapport-html "$AUDIT/RAPPORT.html" valid_aucun python3 "$DIR/rapport_html.py" "$AUDIT"
 pdf_step() {  # cas particuliers de rapport_pdf.sh : Chrome absent (2) / RAM insuffisante (3) = avertissement
   local out="$AUDIT/RAPPORT.pdf" t0 code st

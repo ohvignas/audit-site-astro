@@ -1,6 +1,7 @@
 import http.server
 import os
 import pathlib
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -107,6 +108,10 @@ class TestValidationDesEtapes(unittest.TestCase):
                 self.assertIn("❌", ligne_crawl)
                 self.assertIn("⏭️", next(l for l in collecte.splitlines() if l.startswith("| lighthouse")))
                 self.assertIn("✅", next(l for l in collecte.splitlines() if l.startswith("| rapport-html")))
+                # dossier CORRECTIONS/ produit même sans donnée exploitable (plan vide), étape entre « rapport brut » et « rapport-html »
+                self.assertIn("✅", next(l for l in collecte.splitlines() if l.startswith("| corrections")))
+                self.assertTrue(pathlib.Path(d, "CORRECTIONS", "LISEZ-MOI.md").exists())
+                self.assertTrue(pathlib.Path(d, "CORRECTIONS", "00-PLAN.md").exists())
                 self.assertIn("⏭️", next(l for l in collecte.splitlines() if l.startswith("| pdf")))
                 # dossier d'audit non daté : le parent n'est pas un dossier de site, rien n'y est écrit
                 self.assertIn("⏭️", next(l for l in collecte.splitlines() if l.startswith("| historique")))
@@ -117,6 +122,50 @@ class TestValidationDesEtapes(unittest.TestCase):
         finally:
             srv.shutdown()
             srv.server_close()
+
+
+class TestEtapeCorrections(unittest.TestCase):
+    def _lancer(self, script, d):
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _PageHtml)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            url = f"http://127.0.0.1:{srv.server_port}/"
+            env = dict(os.environ, MAX_PAGES="3", SKIP_LIGHTHOUSE="1")
+            r = subprocess.run(["bash", str(script), url, "", str(d)], capture_output=True, text=True, timeout=600, env=env)
+            return r, url
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_etape_entre_rapport_brut_et_rapport_html(self):
+        with tempfile.TemporaryDirectory() as t:
+            audit = pathlib.Path(t, "site.exemple.fr", "2026-09-30")
+            r, url = self._lancer(SCRIPT, audit)
+            lignes = [l for l in lire_collecte(audit).splitlines() if l.startswith("| ") and not l.startswith("| Étape")]
+            noms = [l.split("|")[1].strip() for l in lignes]
+            self.assertLess(noms.index("rapport brut"), noms.index("corrections"))
+            self.assertEqual(noms.index("corrections") + 1, noms.index("rapport-html"))
+            ligne = lignes[noms.index("corrections")]
+            self.assertIn("✅", ligne)
+            self.assertIn("CORRECTIONS/LISEZ-MOI.md", ligne)
+            corr = audit / "CORRECTIONS"
+            self.assertTrue((corr / "LISEZ-MOI.md").exists() and (corr / "00-PLAN.md").exists() and (corr / "index.json").exists())
+            self.assertIn(url, (corr / "LISEZ-MOI.md").read_text(encoding="utf-8"))
+            self.assertIn("2026-09-30", (corr / "LISEZ-MOI.md").read_text(encoding="utf-8"))
+            self.assertEqual(r.returncode, 0, r.stdout[-2000:])
+
+    def test_echec_de_l_etape_compte_comme_les_autres(self):
+        # copie des scripts sans references/fiches : corrections.py ne trouve pas ses fiches -> ❌ et code de sortie 1
+        with tempfile.TemporaryDirectory() as t:
+            scripts = pathlib.Path(t, "skill", "scripts")
+            shutil.copytree(SCRIPT.parent, scripts, ignore=shutil.ignore_patterns("__pycache__"))
+            audit = pathlib.Path(t, "audit")
+            r, _ = self._lancer(scripts / "collect_all.sh", audit)
+            ligne = next(l for l in lire_collecte(audit).splitlines() if l.startswith("| corrections"))
+            self.assertIn("❌", ligne)
+            self.assertFalse((audit / "CORRECTIONS").exists())
+            self.assertIn("✅", next(l for l in lire_collecte(audit).splitlines() if l.startswith("| rapport-html")))
+            self.assertEqual(r.returncode, 1, r.stdout[-2000:])
 
 
 class TestEtapePdf(unittest.TestCase):
