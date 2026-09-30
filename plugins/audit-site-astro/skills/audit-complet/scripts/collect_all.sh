@@ -9,7 +9,8 @@
 #             CHROME_PATH (Chrome pour le PDF), AUDIT_INSECURE_TLS=1 (tests uniquement : certificat auto-signé),
 #             FORCE_PDF=1 (tests uniquement : imprime le PDF même avec SKIP_LIGHTHOUSE=1)
 # Un PDF impossible (Chrome absent, RAM insuffisante) est un avertissement ⚠️ et ne fait pas échouer la collecte.
-# Étape « corrections » : écrit <dossier d'audit>/CORRECTIONS/ (voir corrections.py ; CORRECTIONS/.garder = ne pas l'écraser).
+# Étape « corrections » : écrit <dossier d'audit>/CORRECTIONS/ (voir corrections.py ; CORRECTIONS/.garder = ne pas l'écraser, le nouveau
+# dossier est alors CORRECTIONS-<horodatage>/) et note son nom dans data/corrections-dossier.txt, que rapport_html.py et l'étape relisent.
 # Dernière étape « historique » : régénère <dossier du site>/index.html (évolution des notes de tous les audits AAAA-MM-JJ du site).
 # Les étapes tournent UNE PAR UNE : l'empreinte mémoire reste < ~1 Go (Chrome pendant Lighthouse).
 #
@@ -65,17 +66,43 @@ valid_geo() {
   python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if any(p.get('status')==200 for p in d['pages']) else 1)" \
     "$D/geo/geo.json" 2>/dev/null
 }
+# Étape corrections : le dossier à contrôler est celui que corrections.py a écrit (data/corrections-dossier.txt : une ligne,
+# CORRECTIONS ou CORRECTIONS-<horodatage>, sans séparateur), et son index.json doit dater du début de l'étape (STEP_T0) :
+# un ancien dossier conservé (.garder, suivi commencé) ou l'index d'une exécution précédente ne valide pas l'étape.
+nom_corrections() {  # affiche le nom du dossier désigné par le pointeur, ou rien (code 1) s'il est absent ou invalide
+  python3 - "$AUDIT" 2>/dev/null <<'PY'
+import os, re, sys
+try:
+    with open(os.path.join(sys.argv[1], "data", "corrections-dossier.txt"), encoding="utf-8") as f:
+        nom = f.read(256)
+except (OSError, ValueError):
+    sys.exit(1)
+nom = nom[:-1] if nom.endswith("\n") else nom
+if len(nom) > 64 or not re.fullmatch(r"CORRECTIONS(-[0-9TZ:-]+)?", nom):
+    sys.exit(1)
+print(nom)
+PY
+}
+sortie_corrections() { echo "$AUDIT/$(nom_corrections || echo '(dossier inconnu)')/LISEZ-MOI.md"; }
+valid_corrections() {
+  local nom
+  nom=$(nom_corrections) || return 1
+  python3 -c "import os,sys; sys.exit(0 if os.stat(sys.argv[1]).st_mtime >= float(sys.argv[2]) else 1)" \
+    "$AUDIT/$nom/index.json" "${STEP_T0:-0}" 2>/dev/null
+}
 valid_perf() {
   python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if any(not r.get('erreur') for r in d) else 1)" \
     "$D/perf/pagespeed.json" 2>/dev/null
 }
 
-step() {  # $1 nom, $2 sortie principale, $3 validateur, reste = commande
+step() {  # $1 nom, $2 sortie principale ("@fonction" : nom de fonction qui l'affiche une fois la commande finie), $3 validateur, reste = commande
   local name="$1" out="$2" check="$3"; shift 3
   local t0; t0=$(date +%s)
+  STEP_T0=$t0
   echo "▶ ${name}…"
   "$@" > "$D/.log-${name}.txt" 2>&1
   local code=$?
+  case "$out" in @*) out=$("${out#@}");; esac
   local st="✅"
   [ $code -ne 0 ] && st="⚠️ code $code (voir data/.log-${name}.txt)"
   if [ -n "$out" ] && [ ! -e "$out" ]; then
@@ -145,10 +172,19 @@ fi
 python3 "$DIR/rapport_brut.py" "$AUDIT" 2>/dev/null && echo "| rapport brut | ✅ | | RAPPORT-BRUT.md |" >> "$LOG"
 # Dossier CORRECTIONS/ (LISEZ-MOI, plan, une fiche par correction) à remettre tel quel à un agent de code ; un échec compte comme les autres étapes.
 if [ -n "$PROJ" ]; then
-  step corrections "$AUDIT/CORRECTIONS/LISEZ-MOI.md" valid_aucun python3 "$DIR/corrections.py" "$AUDIT" --projet "$PROJ"
+  step corrections "@sortie_corrections" valid_corrections python3 "$DIR/corrections.py" "$AUDIT" --projet "$PROJ"
 else
-  step corrections "$AUDIT/CORRECTIONS/LISEZ-MOI.md" valid_aucun python3 "$DIR/corrections.py" "$AUDIT"
+  step corrections "@sortie_corrections" valid_corrections python3 "$DIR/corrections.py" "$AUDIT"
 fi
+# Ancien dossier conservé (.garder ou suivi commencé) : le signaler à l'écran (step range stderr dans un log) et dans COLLECTE.md.
+NOM_CORR=""
+valid_corrections && NOM_CORR=$(nom_corrections)  # STEP_T0 = début de l'étape corrections : un pointeur périmé ne déclenche rien
+case "$NOM_CORR" in
+  CORRECTIONS-*)
+    grep -E '^\[(attention|info)\]' "$D/.log-corrections.txt" 2>/dev/null | sed 's/^/  ⚠️  /'
+    echo "| corrections (dossier conservé) | ⚠️ l'ancien CORRECTIONS/ est conservé : donner $NOM_CORR/ à l'agent de code | | $NOM_CORR/ |" >> "$LOG"
+    ;;
+esac
 step rapport-html "$AUDIT/RAPPORT.html" valid_aucun python3 "$DIR/rapport_html.py" "$AUDIT"
 pdf_step() {  # cas particuliers de rapport_pdf.sh : Chrome absent (2) / RAM insuffisante (3) = avertissement
   local out="$AUDIT/RAPPORT.pdf" t0 code st

@@ -391,6 +391,123 @@ class TestRapportHtmlCorrections(unittest.TestCase):
         self.assertIn('id="correction-01"', (self.audit / "RAPPORT.html").read_text(encoding="utf-8"))
 
 
+class TestRapportHtmlDossierPointe(TestRapportHtmlCorrections):
+    """Le rapport suit data/corrections-dossier.txt (dossier réellement écrit) et retombe sur CORRECTIONS/ si le pointeur est absent ou hostile."""
+    HORODATE = "CORRECTIONS-20260930-101500"
+
+    def dossier_horodate(self, titre="Nouveau plan"):
+        """CORRECTIONS/ = ancien plan (conservé) ; CORRECTIONS-<horodatage>/ = nouveau plan ; renvoie le dossier du nouveau."""
+        self.corrections([("01", "Ancien plan", [])])
+        self.dossier = self.audit / self.HORODATE
+        self.corrections([("01", titre, [("code", CLE_CODE)]), ("02", "Deuxieme", [])])
+        return self.dossier
+
+    def pointeur(self, contenu):
+        chemin = self.audit / "data/corrections-dossier.txt"
+        chemin.parent.mkdir(exist_ok=True)
+        chemin.write_bytes(contenu if isinstance(contenu, bytes) else contenu.encode("utf-8"))
+
+    def test_le_pointeur_designe_le_nouveau_plan(self):
+        self.dossier_horodate()
+        self.pointeur(self.HORODATE + "\n")
+        h, err = self.page()
+        self.assertEqual(err, "")
+        self.assertIn("Nouveau plan", h)
+        self.assertNotIn("Ancien plan", h)
+        self.assertEqual(re.findall(r'id="(correction-[^"]*)"', h), ["correction-01", "correction-02"])
+        self.assertIn("Comment corriger", h)
+
+    def test_la_mention_montre_le_dossier_reel(self):
+        self.dossier_horodate()
+        self.pointeur(self.HORODATE + "\n")
+        h, _ = self.page()
+        self.assertEqual(h.count(f"Le dossier {self.HORODATE}/ contient ces mêmes fiches"), 2)
+        self.assertNotIn("Le dossier CORRECTIONS/ contient", h)
+
+    def test_mention_inchangee_avec_corrections_simple(self):
+        self.corrections([("01", "A", [])])
+        self.pointeur("CORRECTIONS\n")
+        h, err = self.page()
+        self.assertEqual(err, "")
+        self.assertEqual(h.count("Le dossier CORRECTIONS/ contient ces mêmes fiches"), 2)
+
+    def test_sans_pointeur_lit_corrections(self):
+        self.dossier_horodate()
+        h, _ = self.page()
+        self.assertIn("Ancien plan", h)
+        self.assertNotIn("Nouveau plan", h)
+
+    def test_pointeur_sans_retour_a_la_ligne_final_accepte(self):
+        self.dossier_horodate()
+        self.pointeur(self.HORODATE)
+        h, _ = self.page()
+        self.assertIn("Nouveau plan", h)
+
+    def test_pointeurs_hostiles_retombent_sur_corrections(self):
+        self.dossier_horodate()
+        hostiles = ["../x\n", "/etc\n", "/etc/passwd", "..\n", ".\n", "CORRECTIONS/..\n", "CORRECTIONS/../CORRECTIONS-20260930-101500\n",
+                    self.HORODATE + "\nautre\n", "\n" + self.HORODATE + "\n", self.HORODATE + "\n\n", self.HORODATE + "\r\n",
+                    "CORRECTIONS-\n", "CORRECTIONS-a\n", "corrections\n", " CORRECTIONS\n", "CORRECTIONS \n", "C:\\x\n", "",
+                    "\n", "\x00", "CORRECTIONS\x00\n", "CORRECTIONS-1/../..\n", "CORRECTIONS-" + "1" * 300 + "\n"]
+        for hostile in hostiles:
+            with self.subTest(hostile=hostile):
+                self.pointeur(hostile)
+                h, err = self.page()
+                self.assertIn("Ancien plan", h)
+                self.assertNotIn("Nouveau plan", h)
+                self.assertNotIn("/etc", h)
+
+    def test_pointeur_binaire_ou_illisible_ignore(self):
+        self.dossier_horodate()
+        self.pointeur(b"\xff\xfe\x80")
+        h, _ = self.page()
+        self.assertIn("Ancien plan", h)
+        (self.audit / "data/corrections-dossier.txt").unlink()
+        (self.audit / "data/corrections-dossier.txt").mkdir()  # un dossier à la place du fichier
+        h, _ = self.page()
+        self.assertIn("Ancien plan", h)
+
+    def test_pointeur_hostile_avertit_sans_le_suivre(self):
+        self.dossier_horodate()
+        # un dossier voisin valide hors du motif : jamais lu
+        voisin = self.audit.parent / "x"
+        voisin.mkdir()
+        (voisin / "index.json").write_text(json.dumps({"version": 1, "corrections": []}), encoding="utf-8")
+        self.pointeur("../x\n")
+        h, err = self.page()
+        self.assertIn("corrections-dossier.txt invalide", err)
+        self.assertIn("Ancien plan", h)
+
+    def test_pointeur_vers_un_dossier_absent_ne_ressort_pas_l_ancien_plan(self):
+        self.corrections([("01", "Ancien plan", [])])
+        self.pointeur("CORRECTIONS-20991231-000000\n")
+        h, err = self.page()
+        self.assertNotIn("Ancien plan", h)
+        self.assertNotIn("Guides de correction", h)
+        self.assertIn("CORRECTIONS-20991231-000000/", err)
+
+    def test_pointeur_vers_un_lien_symbolique_refuse(self):
+        self.corrections([("01", "Ancien plan", [])])
+        ailleurs = self.audit.parent / "ailleurs"
+        shutil.copytree(self.dossier, ailleurs)
+        try:
+            os.symlink(str(ailleurs), str(self.audit / self.HORODATE))
+        except (OSError, NotImplementedError):
+            self.skipTest("liens symboliques indisponibles")
+        self.pointeur(self.HORODATE + "\n")
+        h, err = self.page()
+        self.assertNotIn("Guides de correction", h)
+        self.assertIn(self.HORODATE, err)
+
+    def test_cli_suit_le_pointeur(self):
+        self.dossier_horodate()
+        self.pointeur(self.HORODATE + "\n")
+        subprocess.run([sys.executable, str(SCRIPTS / "rapport_html.py"), str(self.audit)], check=True, capture_output=True, text=True)
+        h = (self.audit / "RAPPORT.html").read_text(encoding="utf-8")
+        self.assertIn("Nouveau plan", h)
+        self.assertNotIn("Ancien plan", h)
+
+
 FICHES_REELLES = SCRIPTS.parent / "references/fiches"
 
 

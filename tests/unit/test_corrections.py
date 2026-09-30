@@ -1,5 +1,6 @@
 import ast
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -7,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 RACINE = pathlib.Path(__file__).resolve().parents[2]
 SCRIPTS = RACINE / "plugins/audit-site-astro/skills/audit-complet/scripts"
@@ -55,6 +57,10 @@ def lire_arbre(dossier):
 
 class Base(unittest.TestCase):
     def setUp(self):
+        env = mock.patch.dict(os.environ)  # hermétique : AUDIT_DANS_DOCKER hérité de l'environnement change le LISEZ-MOI
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("AUDIT_DANS_DOCKER", None)
         self._tmp = tempfile.TemporaryDirectory()
         self.t = pathlib.Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
@@ -319,6 +325,75 @@ class TestIdempotence(Base):
         self.assertEqual(lire_arbre(audit / "CORRECTIONS"), premier)
 
 
+class TestPointeur(Base):
+    """data/corrections-dossier.txt : une ligne, le nom du dossier réellement écrit (lu par rapport_html.py et collect_all.sh)."""
+    MOTIF = re.compile(r"CORRECTIONS(-[0-9TZ:-]+)?")
+
+    def pointeur(self, audit):
+        return (audit / "data/corrections-dossier.txt").read_text(encoding="utf-8")
+
+    def test_dossier_normal(self):
+        audit = self.copie_fixture()
+        self.generer(audit, FIXTURE_FICHES)
+        self.assertEqual(self.pointeur(audit), "CORRECTIONS\n")
+        self.assertFalse((audit / "data/corrections-dossier.txt.tmp").exists())
+
+    def test_garder_pointe_sur_le_dossier_horodate(self):
+        audit = self.copie_fixture()
+        cible = self.generer(audit, FIXTURE_FICHES)
+        (cible / ".garder").write_text("", encoding="utf-8")
+        nouveau = self.generer(audit, FIXTURE_FICHES)
+        self.assertNotEqual(nouveau, cible)
+        self.assertEqual(self.pointeur(audit), nouveau.name + "\n")
+        self.assertRegex(self.pointeur(audit), r"^CORRECTIONS-\d{8}-\d{6}(-\d+)?\n$")
+
+    def test_suivi_commence_pointe_sur_le_dossier_horodate(self):
+        audit = self.copie_fixture()
+        cible = self.generer(audit, FIXTURE_FICHES)
+        plan = cible / "00-PLAN.md"
+        plan.write_text(plan.read_text(encoding="utf-8") + "\n- [x] 01 fait\n", encoding="utf-8")
+        nouveau, _, raison = corrections.generer(audit, FIXTURE_FICHES)
+        self.assertEqual(raison, "suivi")
+        self.assertEqual(self.pointeur(audit), nouveau.name + "\n")
+
+    def test_retour_a_corrections_apres_un_dossier_horodate(self):
+        audit = self.copie_fixture()
+        cible = self.generer(audit, FIXTURE_FICHES)
+        (cible / ".garder").write_text("", encoding="utf-8")
+        self.generer(audit, FIXTURE_FICHES)
+        (cible / ".garder").unlink()
+        self.generer(audit, FIXTURE_FICHES)
+        self.assertEqual(self.pointeur(audit), "CORRECTIONS\n")
+
+    def test_une_ligne_sans_separateur_de_chemin(self):
+        audit = self.copie_fixture()
+        r = subprocess.run([sys.executable, str(SCRIPTS / "corrections.py"), str(audit), "--fiches", str(FIXTURE_FICHES)],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        brut = self.pointeur(audit)
+        self.assertTrue(brut.endswith("\n") and brut.count("\n") == 1)
+        self.assertRegex(brut[:-1], self.MOTIF.pattern)
+        self.assertNotIn("/", brut)
+
+    def test_un_echec_laisse_le_pointeur_intact(self):
+        audit = self.copie_fixture()
+        self.generer(audit, FIXTURE_FICHES)
+        avant = self.pointeur(audit)
+        mauvaises = self.t / "mauvaises"
+        mauvaises.mkdir()
+        (mauvaises / "x.md").write_text("pas de frontmatter", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            corrections.generer(audit, mauvaises)
+        self.assertEqual(self.pointeur(audit), avant)
+
+    def test_nom_refuse_ne_s_ecrit_jamais(self):
+        audit = self.copie_fixture()
+        for nom in ("../x", "/etc", "CORRECTIONS\nx", "autre", "CORRECTIONS/", ""):
+            with self.assertRaises(ValueError, msg=repr(nom)):
+                corrections.ecrire_pointeur(audit, nom)
+        self.assertFalse((audit / "data/corrections-dossier.txt").exists())
+
+
 class TestLisezMoi(Base):
     def lisez_moi(self, audit, **kw):
         return (self.generer(audit, FIXTURE_FICHES, **kw) / "LISEZ-MOI.md").read_text(encoding="utf-8")
@@ -566,6 +641,28 @@ class TestSuiviPreserve(Base):
                     f.read_text(encoding="utf-8").replace(f"- {nom} : \n", f"- {nom} : {valeur}\n"), encoding="utf-8"))
                 shutil.rmtree(self.t / "2026-09-30")
 
+    def test_suivi_limite_au_plan_et_a_la_section_suivi(self):
+        audit, cible = self.avec_plan()
+        f = cible / "01-serveur-regex.md"
+        # une case cochée dans le CORPS d'une fiche (exemple, critère) ne fige pas le dossier
+        f.write_text(f.read_text(encoding="utf-8").replace("## Suivi", "- [x] exemple dans le corps\n\n## Suivi", 1), encoding="utf-8")
+        self.assertFalse(corrections.suivi_present(cible))
+        # une date renseignée hors de « Suivi » non plus
+        (cible / "00-PLAN.md").write_text((cible / "00-PLAN.md").read_text(encoding="utf-8") + "\n- Date : 2026-10-01\n", encoding="utf-8")
+        self.assertFalse(corrections.suivi_present(cible))
+        # case cochée dans le plan, ou dans la section Suivi d'une fiche : oui
+        plan = cible / "00-PLAN.md"
+        plan.write_text(plan.read_text(encoding="utf-8") + "\n- [x] fait\n", encoding="utf-8")
+        self.assertTrue(corrections.suivi_present(cible))
+        plan.write_text(plan.read_text(encoding="utf-8").replace("- [x] fait", "- [ ] fait"), encoding="utf-8")
+        self.assertFalse(corrections.suivi_present(cible))
+        f.write_text(f.read_text(encoding="utf-8").replace("- [ ] Corrigé", "- [x] Corrigé"), encoding="utf-8")
+        self.assertTrue(corrections.suivi_present(cible))
+
+    def test_legende_du_plan_mentionne_les_fiches_critiques(self):
+        audit, cible = self.avec_plan()
+        self.assertIn("ou critique si la fiche est de type critique", (cible / "00-PLAN.md").read_text(encoding="utf-8"))
+
     def test_dossier_vierge_recree(self):
         audit, cible = self.avec_plan()
         (cible / "vieux.md").write_text("x", encoding="utf-8")
@@ -703,6 +800,17 @@ class TestMineurs(Base):
         brut = next(s for s in corrections.signaux.collecter(audit) if s["source"] == "http")
         self.assertEqual(idx["corrections"][0]["signaux"][0]["cle"], brut["cle"])
 
+    def test_cle_de_l_index_sans_invisibles_ni_secret(self):
+        d = self.fiches()
+        fiche(d, "geo-x", ["geo:manquante"])
+        audit = audit_synthetique(self.t, {}, geo=[("haute", "Balise\u200b manquante\U000E0049 AKIAABCDEFGHIJKLMNOP\u061c")])
+        idx = json.loads((self.generer(audit, d) / "index.json").read_text(encoding="utf-8"))
+        s = idx["corrections"][0]["signaux"][0]
+        self.assertEqual(s["cle"], corrections.cle_jointure("Balise\u200b manquante\U000E0049 AKIAABCDEFGHIJKLMNOP\u061c"))
+        self.assertNotIn("AKIAABCDEFGHIJKLMNOP", s["cle"])
+        for c in ("\u200b", "\U000E0049", "\u061c"):
+            self.assertNotIn(c, s["cle"] + s["texte"])
+
     def test_tmp_symlink_ne_plante_pas(self):
         audit = self.copie_fixture()
         cible_externe = self.t / "externe"
@@ -729,6 +837,33 @@ class TestMineurs(Base):
     def test_entrypoint_pointe_le_dossier_le_plus_recent(self):
         e = (RACINE / "docker/entrypoint.sh").read_text(encoding="utf-8")
         self.assertIn('for c in "$AUDIT"/CORRECTIONS*/', e)
+
+    def test_entrypoint_suit_le_pointeur_et_ignore_un_pointeur_hostile(self):
+        e = (RACINE / "docker/entrypoint.sh").read_text(encoding="utf-8")
+        debut, fin = e.index('  CORR=""'), e.index('  [ -n "$CORR" ] &&')
+        extrait = "set -u\n" + e[debut:fin]
+        audit = self.copie_fixture()
+        for nom in ("CORRECTIONS", "CORRECTIONS-20260930-101500"):
+            (audit / nom).mkdir()
+            (audit / nom / "LISEZ-MOI.md").write_text("x", encoding="utf-8")
+
+        def lire(pointeur):
+            chemin = audit / "data/corrections-dossier.txt"
+            if pointeur is None:
+                chemin.unlink() if chemin.exists() else None
+            else:
+                chemin.write_text(pointeur, encoding="utf-8")
+            r = subprocess.run(["bash", "-c", extrait + 'echo "$CORR"'], capture_output=True, text=True, env=dict(os.environ, AUDIT=str(audit)))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return r.stdout.strip()
+
+        # CORRECTIONS/ sort après CORRECTIONS-<horodatage>/ : sans pointeur, le glob retient donc l'ancien CORRECTIONS/ (repli seulement)
+        self.assertEqual(lire("CORRECTIONS-20260930-101500\n"), "CORRECTIONS-20260930-101500")
+        self.assertEqual(lire("CORRECTIONS\n"), "CORRECTIONS")
+        for hostile in ("../x\n", "/etc\n", "CORRECTIONS-20991231-000000\n", "CORRECTIONS\nautre\n"):
+            self.assertIn(lire(hostile), ("CORRECTIONS", "CORRECTIONS-20260930-101500"), hostile)
+            self.assertNotIn("/", lire(hostile))
+        self.assertIn(lire(None), ("CORRECTIONS", "CORRECTIONS-20260930-101500"))
 
 
 if __name__ == "__main__":

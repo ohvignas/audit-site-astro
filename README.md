@@ -194,7 +194,7 @@ Ouvre ton projet dans Claude Code ou Cursor et dis : applique les corrections du
 audits/votre-site.fr/2026-09-30/CORRECTIONS/ en suivant LISEZ-MOI.md
 ```
 
-L'agent travaille sur une branche Git, fait un commit par fiche, et vous demande votre accord avant tout changement sensible : problème critique, infrastructure (serveur, DNS, pare-feu), textes éditoriaux ou juridiques. Si vous relancez un audit, `CORRECTIONS/` est régénéré ; créez un fichier `CORRECTIONS/.garder` pour conserver le vôtre (le nouveau est alors écrit dans `CORRECTIONS-<horodatage>/`).
+L'agent travaille sur une branche Git, fait un commit par fiche, et vous demande votre accord avant tout changement sensible : problème critique, infrastructure (serveur, DNS, pare-feu), textes éditoriaux ou juridiques. Si vous relancez un audit, `CORRECTIONS/` est régénéré ; créez un fichier `CORRECTIONS/.garder` pour conserver le vôtre (le nouveau est alors écrit dans `CORRECTIONS-<horodatage>/`, dont le rapport HTML/PDF suit les fiches).
 
 ## 📄 Rapports
 

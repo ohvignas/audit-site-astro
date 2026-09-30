@@ -111,7 +111,7 @@ bash "$S/rapport_pdf.sh" "$AUDIT"          # code 2 = Chrome absent, 3 = RAM ins
 python3 "$S/historique.py" "$(dirname "$AUDIT")"
 ```
 
-À chaque passage, `CORRECTIONS/` est **régénéré**. Si l'utilisateur y a ajouté ses notes, il crée un fichier `CORRECTIONS/.garder` : le nouveau dossier s'écrit alors dans `CORRECTIONS-<horodatage>/` et l'ancien reste intact.
+À chaque passage, `CORRECTIONS/` est **régénéré**. Si l'utilisateur y a ajouté ses notes, il crée un fichier `CORRECTIONS/.garder` : le nouveau dossier s'écrit alors dans `CORRECTIONS-<horodatage>/` et l'ancien reste intact. Le nom du dossier réellement écrit est noté dans `data/corrections-dossier.txt` : `rapport_html.py` s'y réfère pour lier le rapport au bon plan, et c'est ce dossier-là (pas l'ancien) qu'il faut donner à l'agent de code.
 
 ## 6. Restitution dans le chat
 

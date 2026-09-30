@@ -10,7 +10,8 @@ ou des fichiers de données passe par html.escape.
 
 Si DOSSIER_AUDIT/CORRECTIONS/index.json existe (dossier remis à l'agent de code), la page ajoute : un lien « Comment corriger → NN »
 sur chaque signal associé à une fiche, une section « Plan de correction » et l'annexe « Guides de correction » (fiches rendues par
-markdown_vers_html). Sans index.json, ou s'il n'a aucune entrée utilisable, la page est identique à celle sans cette fonction.
+markdown_vers_html). Le dossier lu est celui que désigne data/corrections-dossier.txt (CORRECTIONS-<horodatage>/ quand
+corrections.py a conservé l'ancien), à défaut CORRECTIONS/. Sans index.json, ou s'il n'a aucune entrée utilisable, la page est identique à celle sans cette fonction.
 
 API : notes_par_domaine(signaux), notes_audit(audit), note_globale(notes), markdown_vers_html(md), charger_corrections(audit),
 generer(audit) -> HTML complet.
@@ -27,6 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import signaux  # noqa: E402
+from corrections import cle_jointure  # noqa: E402  (même nettoyage de la clé de jointure que celui de index.json)
 
 # --- Barème (references/notation.md) ---------------------------------------------------------------------------------
 POIDS = {"Performance": 20, "SEO technique": 20, "Contenu": 15, "GEO / IA": 15, "Sécurité": 12, "Code": 10, "Accessibilité": 8}
@@ -565,6 +567,8 @@ _FICHIER = re.compile(r"[0-9]{2,3}-[a-z0-9-]+\.md")  # nom simple : ni séparate
 _FRONTMATTER = re.compile(r"\A---[ \t]*\n.*?\n---[ \t]*(\n|\Z)", re.S)
 TAILLE_MAX_FICHE = 512 * 1024
 MENTION_CORRECTIONS = "Le dossier CORRECTIONS/ contient ces mêmes fiches, à donner à votre agent de code."
+_DOSSIER_CORRECTIONS = re.compile(r"CORRECTIONS(-[0-9TZ:-]+)?")  # même motif que corrections.py : nom simple, sans séparateur
+POINTEUR_CORRECTIONS = "data/corrections-dossier.txt"
 
 # Ajouté à la feuille de style seulement quand le dossier CORRECTIONS/ est exploitable (sinon la page reste inchangée).
 CSS_CORRECTIONS = """
@@ -590,19 +594,45 @@ def _texte(v):
 
 def _signaux_index(v):
     """Couples (source, cle) valides d'une entrée d'index."""
-    return [(_texte(x.get("source")), _texte(x.get("cle"))) for x in (v if isinstance(v, list) else [])
-            if isinstance(x, dict) and _texte(x.get("source")) and _texte(x.get("cle"))]
+    return [(_texte(x.get("source")), cle_jointure(_texte(x.get("cle")))) for x in (v if isinstance(v, list) else [])
+            if isinstance(x, dict) and _texte(x.get("source")) and cle_jointure(_texte(x.get("cle")))]
+
+
+def nom_dossier_corrections(audit):
+    """Nom du dossier de corrections à lire : celui de data/corrections-dossier.txt s'il est valide (une seule ligne, motif
+    CORRECTIONS ou CORRECTIONS-<horodatage>, 64 caractères au plus, aucun séparateur), sinon « CORRECTIONS »."""
+    try:
+        with open(Path(audit) / POINTEUR_CORRECTIONS, "rb") as f:
+            brut = f.read(256)
+        texte = brut.decode("utf-8")
+    except (OSError, UnicodeDecodeError, ValueError):
+        return "CORRECTIONS"
+    if texte.endswith("\n"):
+        texte = texte[:-1]
+    if len(texte) <= 64 and _DOSSIER_CORRECTIONS.fullmatch(texte):  # 64 : bien au-dessus d'un horodatage, sous la limite des noms de fichier
+        return texte
+    _avertir(f"data/corrections-dossier.txt invalide ({texte[:40]!r}), dossier CORRECTIONS/ utilisé")
+    return "CORRECTIONS"
 
 
 def charger_corrections(audit):
     """Corrections décrites par DOSSIER_AUDIT/CORRECTIONS/index.json, ou None si la page doit rester inchangée.
+    Le dossier lu est celui que désigne data/corrections-dossier.txt (CORRECTIONS-<horodatage>/ si l'ancien a été conservé).
 
     Renvoie {"corrections": [{num, titre, domaine, severite, effort, cles, corps}], "sans_fiche": [texte]} trié par numéro.
     Tout ce qui est invalide (JSON, version, entrée, nom de fichier, fiche absente ou illisible) est ignoré avec un
     avertissement sur stderr ; sans aucune correction utilisable, renvoie None.
     """
-    dossier = Path(audit) / "CORRECTIONS"
+    nom_dossier = nom_dossier_corrections(audit)
+    dossier = Path(audit) / nom_dossier
     index = dossier / "index.json"
+    try:
+        refuse = nom_dossier != "CORRECTIONS" and (dossier.is_symlink() or not index.is_file())
+    except OSError:
+        refuse = True
+    if refuse:
+        _avertir(f"{nom_dossier}/ absent ou non exploitable, section ignorée")
+        return None
     if not index.is_file():
         return None
     try:
@@ -647,7 +677,13 @@ def charger_corrections(audit):
     corrections.sort(key=lambda c: (int(c["num"]), c["num"]))
     sans = data.get("sans_fiche")
     sans = [_texte(x.get("texte")) for x in sans if isinstance(x, dict) and _texte(x.get("texte"))] if isinstance(sans, list) else []
-    return {"corrections": corrections, "sans_fiche": sans}
+    return {"corrections": corrections, "sans_fiche": sans, "dossier": nom_dossier}
+
+
+def mention_corrections(corr):
+    """MENTION_CORRECTIONS avec le nom du dossier réellement lu (CORRECTIONS/ ou CORRECTIONS-<horodatage>/)."""
+    nom = corr.get("dossier") or "CORRECTIONS"
+    return MENTION_CORRECTIONS.replace("CORRECTIONS/", nom + "/", 1)
 
 
 def liens_signaux(corr):
@@ -661,7 +697,7 @@ def liens_signaux(corr):
 
 
 def _lien_corriger(s, liens):
-    nums = (liens or {}).get((_texte(s.get("source")), _texte(s.get("cle"))))
+    nums = (liens or {}).get((_texte(s.get("source")), cle_jointure(_texte(s.get("cle")))))
     if not nums:
         return ""
     return ('<span class="corriger">Comment corriger → '
@@ -680,7 +716,7 @@ def section_plan(corr):
     sans = ""
     if corr["sans_fiche"]:
         sans = ('<h3>Constats sans guide dédié</h3><ul>' + "".join(f"<li>{e(t)}</li>" for t in corr["sans_fiche"]) + "</ul>")
-    return (f'<p>{e(MENTION_CORRECTIONS)} Chaque guide est reproduit en fin de rapport, dans l’annexe « Guides de correction ».</p>'
+    return (f'<p>{e(mention_corrections(corr))} Chaque guide est reproduit en fin de rapport, dans l’annexe « Guides de correction ».</p>'
             f'<div class="table-wrap"><table><caption class="sr">Plan de correction : guides, domaine, sévérité et effort</caption>'
             f'<thead><tr>{tete}</tr></thead><tbody>{"".join(lignes)}</tbody></table></div>{sans}')
 
@@ -692,7 +728,7 @@ def section_guides(corr):
         titre = "" if c["corps"].lstrip().startswith("#") else f'<h3>{e(c["titre"])}</h3>'
         fiches.append(f'<article class="fiche rapport" id="correction-{e(c["num"])}"><p class="fiche-num">Guide {e(c["num"])}</p>'
                       f'{titre}{markdown_vers_html(c["corps"], decalage=2)}</article>')
-    return f'<p>{e(MENTION_CORRECTIONS)}</p><ol>{sommaire}</ol>{"".join(fiches)}'
+    return f'<p>{e(mention_corrections(corr))}</p><ol>{sommaire}</ol>{"".join(fiches)}'
 
 
 # --- Page ------------------------------------------------------------------------------------------------------------

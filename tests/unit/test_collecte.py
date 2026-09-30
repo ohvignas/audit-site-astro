@@ -1,10 +1,12 @@
 import http.server
+import json
 import os
 import pathlib
 import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 
 RACINE = pathlib.Path(__file__).resolve().parents[2]
@@ -166,6 +168,88 @@ class TestEtapeCorrections(unittest.TestCase):
             self.assertFalse((audit / "CORRECTIONS").exists())
             self.assertIn("✅", next(l for l in lire_collecte(audit).splitlines() if l.startswith("| rapport-html")))
             self.assertEqual(r.returncode, 1, r.stdout[-2000:])
+
+
+    # --- dossier réellement écrit : data/corrections-dossier.txt ---------------------------------------------------
+    def _ancien_dossier(self, audit, age=3600):
+        """CORRECTIONS/ d'une exécution précédente (LISEZ-MOI.md + index.json datés d'il y a `age` secondes) et son pointeur."""
+        corr = audit / "CORRECTIONS"
+        corr.mkdir(parents=True)
+        (audit / "data").mkdir(exist_ok=True)
+        (audit / "data/corrections-dossier.txt").write_text("CORRECTIONS\n", encoding="utf-8")
+        ancien = time.time() - age
+        for nom, contenu in (("LISEZ-MOI.md", "ancien"), ("index.json", json.dumps({"version": 1, "corrections": [], "sans_fiche": []}))):
+            (corr / nom).write_text(contenu, encoding="utf-8")
+            os.utime(str(corr / nom), (ancien, ancien))
+        return corr
+
+    def _scripts_sans_fiches(self, t):
+        scripts = pathlib.Path(t, "skill", "scripts")
+        shutil.copytree(SCRIPT.parent, scripts, ignore=shutil.ignore_patterns("__pycache__"))
+        return scripts
+
+    def test_garder_l_etape_valide_le_nouveau_dossier_pas_l_ancien(self):
+        with tempfile.TemporaryDirectory() as t:
+            audit = pathlib.Path(t, "site.exemple.fr", "2026-09-30")
+            ancien = self._ancien_dossier(audit)
+            (ancien / ".garder").write_text("", encoding="utf-8")
+            r, _ = self._lancer(SCRIPT, audit)
+            ligne = next(l for l in lire_collecte(audit).splitlines() if l.startswith("| corrections"))
+            nom = (audit / "data/corrections-dossier.txt").read_text(encoding="utf-8").strip()
+            self.assertRegex(nom, r"^CORRECTIONS-\d{8}-\d{6}(-\d+)?$")
+            self.assertIn("✅", ligne)
+            self.assertIn(f"{nom}/LISEZ-MOI.md", ligne)
+            self.assertEqual((ancien / "LISEZ-MOI.md").read_text(encoding="utf-8"), "ancien")
+            self.assertTrue((audit / nom / "index.json").exists())
+            # l'avertissement de corrections.py (rangé dans le log de l'étape) est répété à l'écran et dans COLLECTE.md
+            self.assertIn(".garder", r.stdout)
+            self.assertIn(nom, r.stdout)
+            conserve = next(l for l in lire_collecte(audit).splitlines() if l.startswith("| corrections (dossier conservé)"))
+            self.assertIn(f"donner {nom}/", conserve)
+            self.assertEqual(r.returncode, 0, r.stdout[-2000:])
+
+    def test_ancien_dossier_ne_valide_pas_une_etape_en_echec(self):
+        # fiches introuvables : corrections.py échoue ; CORRECTIONS/ (ancien) et son pointeur existent, mais l'index est plus vieux que l'étape
+        with tempfile.TemporaryDirectory() as t:
+            scripts = self._scripts_sans_fiches(t)
+            audit = pathlib.Path(t, "audit")
+            self._ancien_dossier(audit)
+            r, _ = self._lancer(scripts / "collect_all.sh", audit)
+            ligne = next(l for l in lire_collecte(audit).splitlines() if l.startswith("| corrections"))
+            self.assertIn("❌", ligne)
+            self.assertIn("inexploitable", ligne)
+            self.assertTrue((audit / "CORRECTIONS/LISEZ-MOI.md").exists())
+            self.assertNotIn("dossier conservé", lire_collecte(audit))
+            self.assertEqual(r.returncode, 1, r.stdout[-2000:])
+
+    def test_pointeur_hostile_invalide_l_etape(self):
+        for hostile in ("../x\n", "/etc\n", "CORRECTIONS\nautre\n", "CORRECTIONS/../CORRECTIONS\n", ""):
+            with self.subTest(hostile=hostile), tempfile.TemporaryDirectory() as t:
+                scripts = self._scripts_sans_fiches(t)
+                audit = pathlib.Path(t, "audit")
+                ancien = self._ancien_dossier(audit, age=0)  # même un index tout neuf ne sauve pas un pointeur hostile
+                (audit / "data/corrections-dossier.txt").write_text(hostile, encoding="utf-8")
+                pathlib.Path(t, "x").mkdir()
+                pathlib.Path(t, "x/index.json").write_text("{}", encoding="utf-8")
+                self.assertTrue(ancien.is_dir())
+                r, _ = self._lancer(scripts / "collect_all.sh", audit)
+                ligne = next(l for l in lire_collecte(audit).splitlines() if l.startswith("| corrections"))
+                self.assertIn("❌", ligne)
+                self.assertNotIn("../x", ligne)
+                self.assertEqual(r.returncode, 1, r.stdout[-2000:])
+
+    def test_dossier_frais_sans_garder_reste_corrections(self):
+        with tempfile.TemporaryDirectory() as t:
+            audit = pathlib.Path(t, "site.exemple.fr", "2026-09-30")
+            self._ancien_dossier(audit)  # ancien plan sans suivi ni .garder : recréé
+            r, _ = self._lancer(SCRIPT, audit)
+            ligne = next(l for l in lire_collecte(audit).splitlines() if l.startswith("| corrections"))
+            self.assertIn("✅", ligne)
+            self.assertIn("CORRECTIONS/LISEZ-MOI.md", ligne)
+            self.assertEqual((audit / "data/corrections-dossier.txt").read_text(encoding="utf-8"), "CORRECTIONS\n")
+            self.assertNotIn("dossier conservé", lire_collecte(audit))
+            self.assertNotEqual((audit / "CORRECTIONS/LISEZ-MOI.md").read_text(encoding="utf-8"), "ancien")
+            self.assertEqual(r.returncode, 0, r.stdout[-2000:])
 
 
 class TestEtapePdf(unittest.TestCase):

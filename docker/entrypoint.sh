@@ -31,9 +31,12 @@ else
   echo "📄 Rapport : audits/$HOST/$(date +%F)/RAPPORT-BRUT.md"
   [ -f "$AUDIT/RAPPORT.html" ] && echo "🌐 Page web : audits/$HOST/$(date +%F)/RAPPORT.html"
   [ -f "$AUDIT/RAPPORT.pdf" ] && echo "📕 PDF : audits/$HOST/$(date +%F)/RAPPORT.pdf"
-  # CORRECTIONS/ ou, si un suivi y est commencé (ou .garder), le plus récent CORRECTIONS-<horodatage>/ (tri alphabétique : le dernier est le plus récent)
+  # CORRECTIONS/ ou, si un suivi y est commencé (ou .garder), CORRECTIONS-<horodatage>/.
+  # Le nom réellement écrit est dans data/corrections-dossier.txt (validé) ; à défaut, on retombe sur le tri alphabétique.
   CORR=""
-  for c in "$AUDIT"/CORRECTIONS*/; do [ -f "${c}LISEZ-MOI.md" ] && CORR=$(basename "$c"); done
+  P=$(head -n 1 "$AUDIT/data/corrections-dossier.txt" 2>/dev/null | head -c 64)
+  if printf '%s\n' "$P" | grep -Eq '^CORRECTIONS(-[0-9TZ:-]+)?$' && [ -f "$AUDIT/$P/LISEZ-MOI.md" ]; then CORR="$P"; fi
+  [ -z "$CORR" ] && for c in "$AUDIT"/CORRECTIONS*/; do [ -f "${c}LISEZ-MOI.md" ] && CORR=$(basename "$c"); done
   [ -n "$CORR" ] && echo "🛠️ Corrections : audits/$HOST/$(date +%F)/$CORR/"
   [ -f "/audits/$HOST/index.html" ] && echo "📈 Historique : audits/$HOST/index.html"
   echo "🤖 Rapport priorisé avec correctifs : ouvrir le dossier dans Claude Code et lancer /audit-site-astro:audit-complet"

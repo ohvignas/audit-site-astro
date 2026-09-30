@@ -54,7 +54,8 @@ DONNEES = {"crawl": "data/crawl/issues.json", "geo": "data/geo/geo.json", "code"
 
 _BLANCS = re.compile("[\\s\x1c-\x1f\x85\u2028\u2029]+")
 # Catégories Unicode retirées des textes non fiables : Cc (contrôles), Cf (format : zéro-largeur, bidi, tags U+E0000…, U+061C…),
-# Co (usage privé), Cs (substituts), Cn (non attribués)
+# Co (usage privé), Cs (substituts), Cn (non attribués). Cn dépend de la base Unicode de l'interpréteur (Python 3.9 : Unicode 13) :
+# un caractère plus récent y est « non attribué » donc retiré. Sortie déterministe par interpréteur ; accepté tel quel.
 _CATEGORIES_RETIREES = frozenset(("Cc", "Cf", "Co", "Cs", "Cn"))
 _MD_SPECIAUX = re.compile(r"([\\`*_\[\]<>])")
 _DEBUT_LISTE = re.compile(r"^(\d*)([#+=~.)-])")
@@ -80,6 +81,12 @@ def masquer(s):
 def _sans_invisibles(s, garder=""):
     """Retire tout caractère de catégorie Cc, Cf, Co, Cs ou Cn (sauf ceux de `garder`)."""
     return "".join(c for c in s if c in garder or unicodedata.category(c) not in _CATEGORIES_RETIREES)
+
+
+def cle_jointure(cle):
+    """Clé de jointure (source, cle) écrite dans index.json : même nettoyage que les textes non fiables (invisibles retirés,
+    secrets masqués). rapport_html.py applique la même fonction au signal qu'il affiche, pour que les deux côtés coïncident."""
+    return masquer(_sans_invisibles(str(cle)))
 
 
 def sans_controles(s):
@@ -272,7 +279,7 @@ def rendre_plan(modele, site, date):
            f"- **Site** : {prose(site)}",
            f"- **Date de l'audit** : {date or 'inconnue'}",
            f"- **Corrections à appliquer** : {len(cs)} · **constats sans fiche** : {len(sans)}", "",
-           "**Légende** — sévérité constatée : critique > haute > moyenne > basse > info (la plus haute parmi les constats de la correction). "
+           "**Légende** — sévérité constatée : critique > haute > moyenne > basse > info (la plus haute parmi les constats de la correction, ou critique si la fiche est de type critique). "
            "Effort : S moins d'1 h, M moins d'1 jour, L plus d'1 jour. Ordre : sévérité, puis effort, puis domaine.", "",
            "Traiter dans l'ordre. Cocher chaque ligne une fois la correction appliquée et vérifiée (méthode complète dans [LISEZ-MOI.md](LISEZ-MOI.md)).",
            "", "## Corrections à appliquer", ""]
@@ -424,7 +431,7 @@ def rendre_lisez_moi(audit, site, date, projet, avec_rapport_audit, url):
 
 def construire_index(modele):
     def sig_json(s):
-        return {"texte": sans_controles(s["texte"]), "source": s["source"], "cle": masquer(str(s["cle"]))}  # verbatim (clé de jointure avec le signal), sauf valeur de secret
+        return {"texte": sans_controles(s["texte"]), "source": s["source"], "cle": cle_jointure(s["cle"])}  # clé de jointure avec le signal : même nettoyage des deux côtés
 
     corrections = []
     for c in modele["corrections"]:
@@ -452,7 +459,8 @@ _SUIVI_REMPLI = re.compile(r"^[ \t]*-[ \t]*(?:Date|Commit)[ \t]*:[ \t]*\S", re.M
 
 
 def suivi_present(dossier):
-    """True si l'agent a avancé dans ce dossier : case cochée (plan ou fiche) ou date / commit renseignés dans un « Suivi »."""
+    """True si l'agent a avancé dans ce dossier : case cochée dans 00-PLAN.md, ou, dans la section « Suivi » de chaque fiche NN-*.md,
+    case cochée ou date / commit renseignés. Le corps des fiches n'est pas examiné (un exemple « - [x] » ne fige pas le dossier)."""
     for p in sorted(Path(dossier).glob("*.md")):
         if p.name == "LISEZ-MOI.md":
             continue
@@ -460,7 +468,12 @@ def suivi_present(dossier):
             texte = p.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             return True  # illisible : dans le doute, on ne l'écrase pas
-        if _COCHEE.search(texte) or _SUIVI_REMPLI.search(texte.partition("\n## Suivi")[2]):
+        if p.name == "00-PLAN.md":
+            if _COCHEE.search(texte):
+                return True
+            continue
+        suivi = texte.partition("\n## Suivi")[2]
+        if suivi and (_COCHEE.search(suivi) or _SUIVI_REMPLI.search(suivi)):
             return True
     return False
 
@@ -481,6 +494,21 @@ def _dossier_cible(audit):
         n += 1
         cible = Path(f"{base}-{n}")
     return cible, raison
+
+
+POINTEUR = "data/corrections-dossier.txt"
+
+
+def ecrire_pointeur(audit, nom):
+    """Écrit data/corrections-dossier.txt : une ligne, le nom du dossier réellement écrit (CORRECTIONS ou CORRECTIONS-<horodatage>).
+    Lu par rapport_html.py et par le validateur de collect_all.sh pour ne pas suivre un ancien plan conservé."""
+    if len(nom) > 64 or not re.fullmatch(r"CORRECTIONS(-[0-9TZ:-]+)?", nom):
+        raise ValueError(f"nom de dossier de corrections inattendu : {nom!r}")
+    chemin = audit / POINTEUR
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    tmp = chemin.with_name(chemin.name + ".tmp")
+    tmp.write_text(nom + "\n", encoding="utf-8")
+    os.replace(str(tmp), str(chemin))
 
 
 def generer(audit, dossier_fiches=None, projet=None):
@@ -527,6 +555,7 @@ def generer(audit, dossier_fiches=None, projet=None):
     except BaseException:
         shutil.rmtree(tmp, ignore_errors=True)
         raise
+    ecrire_pointeur(audit, cible.name)
     return cible, total, raison
 
 
