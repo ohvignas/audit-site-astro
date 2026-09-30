@@ -150,18 +150,26 @@ def check_llms(origin, timeout):
 
 
 def pick_sample(crawl_path, home, n):
+    """Échantillon : la home, puis un représentant par gabarit (1er segment d'URL). Les segments qui regroupent
+    plusieurs pages (blog/…, formations/… : un gabarit partagé) passent avant les pages isolées, pour qu'un gabarit
+    d'article ne soit jamais évincé par des pages uniques très liées ; puis complément par liens entrants."""
     if not crawl_path or not Path(crawl_path).exists():
         return [home], []
     data = json.load(open(crawl_path, encoding="utf-8"))
     pages = data["pages"]
     idx = [p for p in pages if p.get("indexable")]
     idx.sort(key=lambda p: -(p.get("inlinks") or 0))
+
+    def seg(p):
+        return (urlparse(p["url"]).path.strip("/").split("/") or [""])[0]
+
+    taille = Counter(seg(p) for p in idx)
     chosen, segs = [home], set()
-    for p in idx:
-        seg = (urlparse(p["url"]).path.strip("/").split("/") or [""])[0]
-        if p["url"] != home and seg not in segs:
+    for p in sorted(idx, key=lambda p: (-min(taille[seg(p)], 2), -(p.get("inlinks") or 0))):
+        s = seg(p)
+        if p["url"] != home and s not in segs:
             chosen.append(p["url"])
-            segs.add(seg)
+            segs.add(s)
         if len(chosen) >= n:
             break
     for p in idx:
