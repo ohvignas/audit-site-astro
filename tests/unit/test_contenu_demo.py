@@ -135,6 +135,16 @@ class TestRestesDesGabarits(unittest.TestCase):
         for desc in ("Welcome to my website, a place about woodworking.", "Bienvenue sur Astro Blog", "Get started building with Astro."):
             self.assertEqual(motifs('<head><meta name="description" content="%s"></head>' % desc), [], desc)
 
+    def test_meta_astrowind_phrase_entiere(self):
+        meta = ('<head><meta name="description" content="%s"></head>')
+        self.assertEqual(motifs(meta % "\U0001F680 Suitable for Startups, Small Business, Sass Websites, Professional Portfolios, "
+                                       "Marketing Websites, Landing Pages &amp; Blogs."), [("gabarit de démarrage", "description")])
+        self.assertEqual(motifs(meta % "Optimising Sass websites for speed"), [])
+
+    def test_copyright_sans_symbole_non_signale(self):
+        self.assertEqual(motifs("<p>Can you copyright your name?</p>"), [])
+        self.assertEqual(motifs("<footer>(c) 2026 Votre Nom</footer>"), [("coordonnées fictives", "texte")])
+
     def test_phrases_longues_du_gabarit(self):
         self.assertEqual(motifs("<p>Welcome to the official Astro blog starter template</p>"), [("gabarit de démarrage", "texte")])
         self.assertEqual(motifs("<p>Congrats on setting up a new Starlight project!</p>"), [("gabarit de démarrage", "texte")])
@@ -154,7 +164,7 @@ class TestRestesDesGabarits(unittest.TestCase):
             self.assertEqual(motifs("<p>%s</p>" % t), [], t)
 
     def test_copyright_fictif(self):
-        for t in ("© 2026 Votre Nom. Tous droits réservés.", "Copyright Your Company", "&copy; 2026 Your name here", "© Company Name",
+        for t in ("© 2026 Votre Nom. Tous droits réservés.", "\u00a9 Your Company", "&copy; 2026 Your name here", "© Company Name",
                   "© Nom de l'entreprise"):
             self.assertEqual(motifs("<footer>%s</footer>" % t), [("coordonnées fictives", "texte")], t)
 

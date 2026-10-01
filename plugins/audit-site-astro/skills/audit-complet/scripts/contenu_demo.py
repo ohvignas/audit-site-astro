@@ -31,7 +31,7 @@ MOTIFS = (
                                         r"|\bofficial Astro blog starter template\b|\bCongrats on setting up a new Starlight project\b"
                                         r"|\bGuides lead a user through a specific task\b|^(?:\W{0,6}\s)?Hello, Astronaut!$", re.I | re.M)),
     ("coordonnées fictives", re.compile(r"\b(?:your|votre) (?:company|name|tagline|entreprise|slogan) (?:here|ici)\b|\bjohn\.doe@"
-                                        r"|(?:©|\(c\)|\bcopyright)\s*(?:\d{4}\s*)?(?:your (?:name|company|brand)|votre (?:nom|entreprise|soci[ée]t[ée])"
+                                        r"|(?:©|\(c\))\s*(?:\d{4}\s*)?(?:your (?:name|company|brand)|votre (?:nom|entreprise|soci[ée]t[ée])"
                                         r"|company name|nom de (?:l'entreprise|la soci[ée]t[ée]))\b", re.I)),
 )
 BLOCS = {"p", "div", "li", "ul", "ol", "dd", "dt", "h1", "h2", "h3", "h4", "h5", "h6", "td", "th", "tr", "section", "article",
@@ -41,7 +41,9 @@ CHAMP_EXACT = {
     "titre": re.compile(r"(?:astro (?:basics|blog)|(?:.+ \| )?my docs|coming soon|under construction|site en construction"
                         r"|bient[ôo]t disponible)\W*$", re.I),
     "description": re.compile(r"(?:welcome to my website!?|astro description|get started building your docs site with starlight\.?"
-                              r"|a guide in my new starlight docs site\.?|.*\bsass websites\b.*)$", re.I),
+                              r"|a guide in my new starlight docs site\.?"
+                              r"|\W*suitable for startups, small business, sass websites, professional portfolios, marketing websites,"
+                              r" landing pages (?:&|and) blogs\.?)$", re.I),
 }
 FAUX_CONTACT = re.compile(r"^(?:mailto:)?[^@\s]+@(?:example\.(?:com|org|net)|domain\.(?:com|fr)|yourdomain\.\w+|votre-?domaine\.\w+|email\.com)\b"
                           r"|^tel:\W*(?:\+?1\W*)?(?:\(?555\)?\W*(?:01\d\d|\d{3}\W*\d{4})|0?123456789|\+?33\W*1\W*23\W*45\W*67\W*89"
