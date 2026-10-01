@@ -1,0 +1,23 @@
+{
+ "constats": [
+  {
+   "severite": "haute",
+   "categorie": "performance",
+   "constat": "Image d'en-tête non optimisée (<img> au lieu de <Image>)",
+   "ou": [
+    "src/components/Hero.astro:12",
+    "src/pages/index.astro:30"
+   ],
+   "piste": "utiliser astro:assets et <Image> avec width/height"
+  },
+  {
+   "severite": "basse",
+   "categorie": "seo",
+   "constat": "Balise canonical absente du layout",
+   "ou": [
+    "src/layouts/Base.astro:8"
+   ],
+   "piste": ""
+  }
+ ]
+}

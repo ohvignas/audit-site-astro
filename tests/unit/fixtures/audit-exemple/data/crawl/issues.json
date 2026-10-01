@@ -1,0 +1,40 @@
+{
+ "liens_casses": {
+  "label": "Liens internes cassés (404)",
+  "severity": "haute",
+  "count": 2,
+  "examples": [
+   {
+    "lien": "https://exemple.test/ancienne-page",
+    "depuis": [
+     "https://exemple.test/",
+     "https://exemple.test/blog/"
+    ]
+   },
+   {
+    "lien": "https://exemple.test/promo-2020",
+    "depuis": [
+     "https://exemple.test/tarifs/"
+    ]
+   }
+  ]
+ },
+ "title_manquant": {
+  "label": "Pages sans balise title",
+  "severity": "moyenne",
+  "count": 1,
+  "examples": [
+   "https://exemple.test/mentions-legales/"
+  ]
+ },
+ "h1_multiples": {
+  "label": "Pages avec plusieurs H1",
+  "severity": "basse",
+  "count": 3,
+  "examples": [
+   "https://exemple.test/a/",
+   "https://exemple.test/b/",
+   "https://exemple.test/c/"
+  ]
+ }
+}
