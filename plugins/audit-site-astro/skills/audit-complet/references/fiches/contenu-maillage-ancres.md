@@ -6,6 +6,7 @@ severite_type: moyenne
 effort: M
 declencheurs:
   - "lighthouse:link-text|n'ont pas de texte (descriptif|explicite)"
+  - "crawl:lien_generique"
 sources:
   - https://developers.google.com/search/docs/crawling-indexing/links-crawlable
   - https://developer.chrome.com/docs/lighthouse/seo/link-text
