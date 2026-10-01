@@ -16,11 +16,15 @@ Repère, avec fichier:ligne :
   - tiers : Google Fonts, GTM, pixels, chat
   - Convex : fonctions publiques sans vérification d'auth, sans validateur d'args, .filter() sans index,
     .collect() non borné, v.any(), URLs de storage servies brutes en <img>
+  - Astro 6/7 : actions sans validation `input`, security.actionBodySizeLimit relevé, options experimental retirées en Astro 7,
+    @astrojs/db, src/fetch.ts réservé, session sans ttl
+  - monorepo : node_modules et lockfile cherchés du projet jusqu'à la racine du workspace (pnpm-workspace.yaml, "workspaces", .git)
   - bundle : plus gros fichiers JS/CSS du build (si dist/ présent), tailles gzip
 
 Sorties : code-scan.json, code-scan.md
 """
 import argparse
+import functools
 import gzip
 import json
 import os
@@ -53,6 +57,7 @@ NON_LUS = set()       # fichiers non lus parce que le budget de temps est épuis
 INTERROMPU = False    # vrai dès que le budget a interrompu une étape : plus aucune conclusion d'absence
 _DEBUT = None         # départ du chronomètre (fixé par reinitialiser(), sinon au premier test du budget)
 RACINE = None         # racine du projet : chemins relatifs des fichiers notés par read() quand elle n'est pas passée
+_ACTIF = False        # vrai pendant main() ou pendant un scan_* appelé seul : le budget est alors partagé par les étapes
 
 findings = []
 
@@ -108,6 +113,27 @@ def budget_epuise():
 
 def non_lus(fichiers, root):
     NON_LUS.update(rel(f, root) for f in fichiers)
+
+
+def entree_autonome(etape):
+    """Point d'entrée d'une étape du scan (`scan_*(root, …)`). Appelée par main(), elle partage le budget de temps et l'état de
+    interruption de tout le scan. Appelée seule (tests, autre script), elle repart d'un budget neuf : ni INTERROMPU, ni NON_LUS,
+    ni chronomètre d'un scan précédent ne sont hérités (sinon une interruption passée supprimerait à tort des constats d'absence).
+    Les constats (`findings`) et les fichiers ignorés s'accumulent jusqu'à reinitialiser() : un appelant qui enchaîne
+    plusieurs étapes les retrouve tous."""
+    @functools.wraps(etape)
+    def enveloppe(root, *args, **kwargs):
+        global _ACTIF, INTERROMPU, _DEBUT, RACINE
+        if _ACTIF:
+            return etape(root, *args, **kwargs)
+        _ACTIF = True
+        INTERROMPU, _DEBUT, RACINE = False, time.monotonic(), root
+        NON_LUS.clear()
+        try:
+            return etape(root, *args, **kwargs)
+        finally:
+            _ACTIF = False
+    return enveloppe
 
 
 def _dans(chemin, base):
@@ -311,6 +337,37 @@ def lignes_completes(text, rx, limit=50):
 
 # --------------------------------------------------------------------------- package.json / config
 
+def _marque_workspace(d):
+    """`d` est la racine d'un workspace/dépôt : pnpm-workspace.yaml, package.json avec "workspaces", ou .git (dossier ou fichier
+    de worktree)."""
+    if (d / "pnpm-workspace.yaml").exists() or (d / ".git").exists():
+        return True
+    try:
+        pj = d / "package.json"
+        if pj.stat().st_size > MAX_OCTETS:
+            return False
+        return bool(json.loads(pj.read_text(encoding="utf-8", errors="replace")).get("workspaces"))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def racine_workspace(root):
+    """Racine du workspace (monorepo pnpm / npm / yarn) qui contient `root`, `root` lui-même s'il n'y en a pas : le premier dossier,
+    en remontant, qui contient pnpm-workspace.yaml, un package.json avec "workspaces" ou .git. La remontée s'arrête là
+    (jamais au-delà) et n'a pas lieu du tout hors d'un workspace."""
+    root = Path(os.path.abspath(root))
+    return next((d for d in (root, *root.parents) if _marque_workspace(d)), root)
+
+
+def dossiers_workspace(root):
+    """De `root` jusqu'à la racine du workspace incluse : là où chercher node_modules et le lockfile (en monorepo, les
+    dépendances sont hissées à la racine du workspace, pas dans apps/web). Contrairement à Node, qui remonte sans limite."""
+    root = Path(os.path.abspath(root))
+    haut = racine_workspace(root)
+    return [root, *(d for d in root.parents if _dans(str(d), str(haut)))] if haut != root else [root]
+
+
+@entree_autonome
 def scan_package(root, report):
     pj = root / "package.json"
     if not pj.exists():
@@ -332,8 +389,15 @@ def scan_package(root, report):
         "engines": data.get("engines", {}),
         "nb_dependances": len(deps),
     }
-    lock = [f for f in ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock") if (root / f).exists()]
+    lock, lock_dans = [], root
+    for d in dossiers_workspace(root):  # le lockfile d'un monorepo est à la racine du workspace
+        lock = [f for f in ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock") if (d / f).exists()]
+        if lock:
+            lock_dans = d
+            break
     report["package"]["lockfile"] = lock
+    if lock and lock_dans != root:
+        report["package"]["lockfile_dans"] = os.path.relpath(lock_dans, root)
     if not lock:
         add("moyenne", "projet", "Aucun lockfile : builds non reproductibles", fix="commiter le lockfile du gestionnaire utilisé")
     heavy = [d for d in deps if d in ("moment", "lodash", "jquery", "@fortawesome/fontawesome-free", "gsap", "three",
@@ -344,6 +408,7 @@ def scan_package(root, report):
     return deps
 
 
+@entree_autonome
 def scan_astro_config(root, report):
     cfg = next((root / f for f in ("astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts")
                 if (root / f).exists()), None)
@@ -459,6 +524,7 @@ def _scanner_source(f, t, r, hyd, hyd_where, raw_imgs, img_no_alt, img_no_dims, 
     inline_scripts += [f"{r}:{i}" for i, _ in lines_matching(t, RX["is_inline"])]
 
 
+@entree_autonome
 def scan_src(root, report):
     src = root / "src"
     if not src.exists():
@@ -636,15 +702,19 @@ DOC = "https://docs.astro.build/en"
 
 
 def astro_version(root):
-    """Version installée (node_modules) sinon plage du package.json → tuple (maj, min, patch) ou None."""
-    for src in (root / "node_modules/astro/package.json", root / "package.json"):
+    """Version installée (node_modules du projet, sinon celui du workspace) sinon plage du package.json → tuple
+    (maj, min, patch) ou None. En monorepo, node_modules est hissé à la racine du workspace (voir dossiers_workspace)."""
+    root = Path(root)
+    sources = [d / "node_modules/astro/package.json" for d in dossiers_workspace(root)] + [root / "package.json"]
+    for src in sources:
         if not src.exists():
             continue
+        installe = src != root / "package.json"  # le package.json d'astro lui-même, pas celui du projet
         try:
-            data = json.loads(read(src, root) or "{}")
+            data = json.loads(read(src, src.parents[2] if installe else root) or "{}")
         except ValueError:
             continue
-        v = data.get("version") if src.parent.name == "astro" else \
+        v = data.get("version") if installe else \
             {**data.get("dependencies", {}), **data.get("devDependencies", {})}.get("astro")
         m = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", v or "")
         if m:
@@ -664,6 +734,7 @@ def latest_astro():
         return None
 
 
+@entree_autonome
 def scan_astro_features(root, report):
     cfg = next((root / f for f in ("astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts")
                 if (root / f).exists()), None)
@@ -845,6 +916,133 @@ def scan_astro_features(root, report):
                                    "vérifier qu'elles servent réellement l'expérience")
 
 
+# --------------------------------------------------------------------------- Astro 6 / 7 : actions, montée de version, sessions
+# Sources (docs.astro.build, lues le 2026-10-01 — tâche 25 du plan v2.1) :
+#   /en/guides/upgrade-to/v7/  : `rustCompiler`, `queuedRendering`, `advancedRouting` retirés (comportement par défaut), `logger`
+#                                stabilisé (champ `logger` de premier niveau), `cache` et `routeRules` sortis de `experimental` ;
+#                                `@astrojs/db` supprimé ; `src/fetch.ts` (ou .js) fichier réservé (option `fetchFile` pour le garder).
+#   /en/reference/configuration-reference/ : security.actionBodySizeLimit (défaut 1048576, depuis 5.18.0) ; session.ttl
+#                                (secondes, défaut Infinity, depuis 5.7.0).
+#   /en/guides/actions/        : `input` est facultatif ; sans lui le handler reçoit les données brutes (FormData avec accept: 'form').
+FLAGS_ASTRO7 = ("rustCompiler", "queuedRendering", "advancedRouting", "cache", "routeRules", "logger")
+LIMITE_CORPS_DEFAUT = 1048576  # security.actionBodySizeLimit
+
+
+def _structure(t):
+    """Code sans commentaires ni texte de chaînes : seule la structure reste (accolades, clés). Les numéros de ligne sont conservés."""
+    return sans_texte_litteral(sans_commentaires(t))
+
+
+def _bloc_equilibre(n, ouvrante):
+    """Contenu de l'objet dont l'accolade ouvrante est n[ouvrante] (accolades équilibrées ; `n` vient de _structure)."""
+    prof = 0
+    for j in range(ouvrante, len(n)):
+        prof += {"{": 1, "}": -1}.get(n[j], 0)
+        if prof == 0:
+            return n[ouvrante + 1:j]
+    return n[ouvrante + 1:]  # accolade jamais fermée : le reste du fichier
+
+
+def _premier_niveau(bloc):
+    """`bloc` dont le contenu des sous-blocs {…}, (…) et […] est vidé (mêmes positions) : il ne reste que les clés de l'objet lui-même,
+    pas celles de ses imbriqués (`input` dans un handler, `ttl` dans un autre bloc)."""
+    sortie, prof = [], 0
+    for c in bloc:
+        if c in "{([":
+            sortie.append(c if prof == 0 else " ")
+            prof += 1
+        elif c in "})]":
+            prof = max(prof - 1, 0)
+            sortie.append(c if prof == 0 else " ")
+        else:
+            sortie.append(c if prof == 0 or c == "\n" else " ")
+    return "".join(sortie)
+
+
+def _a_cle(premier_niveau, cle):
+    return bool(re.search(rf"(?<![\w$.]){cle}\s*(?::|,|\Z)", premier_niveau))
+
+
+def _handler_sans_parametre(bloc, n0):
+    """Le handler (clé de premier niveau) ne déclare aucun paramètre : il ne reçoit aucune donnée, rien à valider."""
+    return any(re.match(r"\s*(?::\s*(?:async\s*)?(?:function\s*\w*\s*)?)?\(\s*\)", bloc[m.end():])
+               for m in re.finditer(r"(?<![\w$.])handler\b", n0))
+
+
+def _blocs_define_action(texte):
+    """(ligne, bloc, premier niveau du bloc) de chaque `defineAction({ … })` du code (commentaires et chaînes exclus)."""
+    n = _structure(texte)
+    for m in re.finditer(r"(?<![\w$.])defineAction\s*\(\s*\{", n):
+        bloc = _bloc_equilibre(n, m.end() - 1)
+        yield n.count("\n", 0, m.start()) + 1, bloc, _premier_niveau(bloc)
+
+
+def _action_sans_validation(bloc, n0):
+    """Pas d'`input` au premier niveau, pas de `...autres` (qui peut l'apporter : on ne conclut pas), et un handler qui reçoit des données."""
+    return not _a_cle(n0, "input") and "..." not in n0 and not _handler_sans_parametre(bloc, n0)
+
+
+def _octets(expr):
+    """`10485760`, `10_485_760`, `10 * 1024 * 1024` → entier."""
+    total = 1
+    for facteur in expr.replace("_", "").split("*"):
+        total *= int(facteur)
+    return total
+
+
+@entree_autonome
+def scan_astro7(root, report):
+    cfg = next((root / f for f in ("astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts")
+                if (root / f).exists()), None)
+    t = sans_commentaires(read(cfg, root)) if cfg else ""
+    n = _structure(t)
+    cname = rel(cfg, root) if cfg else "astro.config"
+    v = astro_version(root) or (0, 0, 0)
+    # --- Actions : validation des entrées
+    sans_input = []
+    actions = root / "src/actions"
+    if actions.exists():
+        fichiers = list(iter_files(actions, {".ts", ".js", ".mjs", ".mts"}, root))
+        for k, f in enumerate(fichiers):
+            if budget_epuise():  # constats positifs par fichier : ceux déjà trouvés restent valables
+                non_lus(fichiers[k:], root)
+                break
+            texte = lire_source(f, root)
+            if texte is None or "defineAction" not in texte:
+                continue
+            sans_input += [f"{rel(f, root)}:{ligne}" for ligne, bloc, n0 in _blocs_define_action(texte)
+                           if _action_sans_validation(bloc, n0)]
+    if sans_input:
+        add("moyenne", "securite", f"Action Astro sans validation input ({len(sans_input)}) : données reçues non validées", sans_input[:20],
+            "input: z.object({ … }) dans chaque defineAction (import { z } from 'astro/zod') — https://docs.astro.build/en/guides/actions/")
+    m = re.search(r"\bactionBodySizeLimit\s*:\s*(\d[\d_]*(?:\s*\*\s*\d[\d_]*)*)", n)
+    if m and _octets(m.group(1)) > LIMITE_CORPS_DEFAUT:
+        add("basse", "securite", f"security.actionBodySizeLimit relevé à {_octets(m.group(1))} octets (défaut 1 Mo)", [cname],
+            "ne relever que pour les actions d'envoi de fichiers, et vérifier l'identité avant de lire le corps")
+    # --- Montée en Astro 7
+    exp = set()
+    for e in re.finditer(r"\bexperimental\s*:\s*\{", n):
+        n0 = _premier_niveau(_bloc_equilibre(n, e.end() - 1))
+        exp.update(f for f in FLAGS_ASTRO7 if re.search(rf"(?<![\w$.]){f}\s*:", n0))
+    if exp:
+        add("moyenne", "code", f"Options experimental à retirer ou à sortir avant Astro 7 : {', '.join(sorted(exp))}", [cname],
+            f"suivre {DOC}/guides/upgrade-to/v7/")
+    pk = (report.get("package") or {})
+    ou_db = (["package.json"] if "@astrojs/db" in (pk.get("integrations") or []) else []) + \
+            ([cname] if "@astrojs/db" in t else [])
+    if ou_db:
+        add("moyenne", "code", "@astrojs/db n'est plus pris en charge par Astro 7", ou_db, f"voir {DOC}/guides/upgrade-to/v7/")
+    fetch = [rel(f, root) for f in (root / "src/fetch.ts", root / "src/fetch.js") if f.exists()]
+    if fetch and v[0] and v[0] < 7 and not re.search(r"\bfetchFile\s*:", n):
+        add("basse", "code", "src/fetch.ts est un fichier réservé à partir d'Astro 7", fetch,
+            "renommer le fichier avant la montée de version (ou fixer fetchFile dans la configuration)")
+    # --- Sessions (session.ttl : en secondes, infini par défaut)
+    for s_ in re.finditer(r"\bsession\s*:\s*\{", n):
+        if not _a_cle(_premier_niveau(_bloc_equilibre(n, s_.end() - 1)), "ttl"):
+            add("info", "securite", "session configurée sans ttl : sessions sans expiration", [cname], "session: { ttl: 60 * 60 * 24 * 7 }")
+            break
+
+
 # --------------------------------------------------------------------------- Convex
 
 FN_RX = re.compile(r"export\s+const\s+(\w+)\s*=\s*(query|mutation|action|internalQuery|internalMutation|internalAction|"
@@ -853,6 +1051,7 @@ AUTH_RX = re.compile(r"getUserIdentity|ctx\.auth|getAuthUserId|requireAuth|requi
                      r"checkAuth|ensureAdmin|isAdmin|authorize|withAuth|currentUser|getCurrentUser|viewer", re.I)
 
 
+@entree_autonome
 def scan_convex(root, report):
     cdir = root / "convex"
     if not cdir.exists():
@@ -921,6 +1120,7 @@ def scan_convex(root, report):
 
 # --------------------------------------------------------------------------- bundle
 
+@entree_autonome
 def scan_dist(root, dist, report):
     d = (root / dist) if dist else None
     if not d or not d.exists():
@@ -960,6 +1160,7 @@ def scan_dist(root, dist, report):
 
 # --------------------------------------------------------------------------- git / secrets
 
+@entree_autonome
 def scan_repo(root, report):
     gi = read(root / ".gitignore", root) if (root / ".gitignore").exists() else ""
     if ".env" not in gi:
@@ -1017,13 +1218,18 @@ def main():
     report = {"projet": str(root)}
     etapes = [("scan_package", lambda: scan_package(root, report)), ("scan_astro_config", lambda: scan_astro_config(root, report)),
               ("scan_src", lambda: scan_src(root, report)), ("scan_astro_features", lambda: scan_astro_features(root, report)),
-              ("scan_convex", lambda: scan_convex(root, report)), ("scan_dist", lambda: scan_dist(root, a.dist, report)),
+              ("scan_astro7", lambda: scan_astro7(root, report)), ("scan_convex", lambda: scan_convex(root, report)), ("scan_dist", lambda: scan_dist(root, a.dist, report)),
               ("scan_repo", lambda: scan_repo(root, report))]
-    for nom, etape in etapes:
-        try:
-            etape()
-        except Exception as e:  # une étape en erreur n'empêche ni les autres ni l'écriture des sorties
-            report.setdefault("etapes_en_erreur", []).append(f"{nom} : {type(e).__name__}: {e}"[:300])
+    global _ACTIF
+    _ACTIF = True  # budget et interruption partagés par toutes les étapes (voir entree_autonome)
+    try:
+        for nom, etape in etapes:
+            try:
+                etape()
+            except Exception as e:  # une étape en erreur n'empêche ni les autres ni l'écriture des sorties
+                report.setdefault("etapes_en_erreur", []).append(f"{nom} : {type(e).__name__}: {e}"[:300])
+    finally:
+        _ACTIF = False
     constats_de_synthese(report)
     n_ignores = len(IGNORES)
     report["fichiers_ignores"] = IGNORES[:MAX_LISTE] + ([{"fichier": "…", "raison": f"… et {n_ignores - MAX_LISTE} autres"}]
