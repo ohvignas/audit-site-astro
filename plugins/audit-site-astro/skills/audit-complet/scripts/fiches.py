@@ -17,21 +17,22 @@ API :
   correspond(decl, signal)     -> True si le déclencheur reconnaît le signal
   parse_frontmatter(texte)     -> (dict, corps)
 
-Déclencheurs (frontmatter `declencheurs`) : « <source>:<motif> » où source ∈ crawl, geo, code, http, securite, lighthouse, projet.
+Déclencheurs (frontmatter `declencheurs`) : « <source>:<motif> » où source ∈ crawl, geo, code, http, securite, lighthouse, projet, rendu, domaine, terrain.
   crawl  : égalité exacte avec la clé d'issue du crawl (signal["cle"]) ;
-  autres : re.search(motif, signal["cle"], re.I) sur les signaux de la source correspondante ;
+  autres (dont rendu, domaine, terrain) : re.search(motif, signal["cle"], re.I) sur les signaux de la source correspondante ;
   manuel : « manuel:<sujet> », jamais reconnu automatiquement.
 """
 import re
 from functools import lru_cache
 from pathlib import Path
 
-PREFIXES_SIGNAL = ("crawl", "geo", "code", "http", "securite", "lighthouse", "projet")
+PREFIXES_SIGNAL = ("crawl", "geo", "code", "http", "securite", "lighthouse", "projet", "rendu", "domaine", "terrain")
 PREFIXE_MANUEL = "manuel"
 PREFIXES = PREFIXES_SIGNAL + (PREFIXE_MANUEL,)
 
-PREFIXES_ID = ("perf", "serveur", "seo", "contenu", "geo", "code", "convex", "secu", "a11y")
-DOMAINES = ("Performance", "Serveur / HTTP", "SEO technique", "Contenu", "GEO / IA", "Code", "Sécurité", "Accessibilité")
+PREFIXES_ID = ("perf", "serveur", "seo", "contenu", "geo", "code", "convex", "secu", "a11y", "rgpd")
+DOMAINES = ("Performance", "Serveur / HTTP", "SEO technique", "Contenu", "GEO / IA", "Code", "Sécurité", "Accessibilité",
+            "RGPD / traceurs")
 SEVERITES = ("critique", "haute", "moyenne", "basse")
 EFFORTS = ("S", "M", "L")
 SECTIONS = ("Pourquoi c'est important", "Comment le constater soi-même", "Correction", "Critères d'acceptation",

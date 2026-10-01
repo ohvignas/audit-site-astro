@@ -23,6 +23,11 @@ _DOMAINES_CODE = {"performance": "Performance", "seo": "SEO technique", "securit
 
 
 _VULN = {"- **critical**": "critique", "- **high**": "haute", "- **moderate**": "moyenne"}
+SOURCES_ISSUES = (("crawl", "crawl/issues.json", "SEO technique"), ("rendu", "rendu/issues.json", "Accessibilité"),
+                  ("domaine", "domaine/issues.json", "Sécurité"), ("terrain", "terrain/issues.json", "Performance"))
+# Domaines acceptés dans le champ « domaine » d'une entrée d'issues.json (sinon : domaine par défaut de la source)
+DOMAINES_CONNUS = frozenset(("Performance", "Serveur / HTTP", "SEO technique", "Contenu", "GEO / IA", "Code", "Sécurité", "Accessibilité",
+                             "RGPD / traceurs", "Bonnes pratiques"))
 
 
 def charger(p):
@@ -36,7 +41,7 @@ def ex_str(e):
     if isinstance(e, str):
         return e
     if isinstance(e, dict):
-        return " — ".join(f"{k}: {v}" for k, v in e.items() if not isinstance(v, (list, dict)) or k in ("liens_depuis", "urls"))[:220]
+        return " — ".join(f"{k}: {v}" for k, v in e.items() if not isinstance(v, (list, dict)) or k in ("liens_depuis", "urls", "exemples_pages"))[:220]
     return str(e)[:220]
 
 
@@ -63,7 +68,7 @@ def meta_crawl(audit):
 
 
 def _signal(sev, domaine, texte, exemples, source, cle):
-    """source ∈ {crawl, geo, code, http, securite, lighthouse, projet} ; cle identifie le constat dans sa source
+    """source ∈ {crawl, rendu, domaine, terrain, geo, code, http, securite, lighthouse, projet} ; cle identifie le constat dans sa source
     (crawl : clé d'issue ; geo : texte du signal ; code : texte du constat ; http/securite/projet : ligne brute
     du fichier ; lighthouse : « <id> <titre> » ou titre de l'échec). Sert à associer les fiches de correction."""
     return {"severite": sev, "domaine": domaine, "texte": texte, "exemples": list(exemples), "source": source, "cle": cle}
@@ -74,10 +79,13 @@ def collecter(audit):
     d = audit / "data"
     signals = []
 
-    crawl = charger(d / "crawl/issues.json") or {}
-    for k, it in crawl.items():
-        signals.append(_signal(it["severity"], "SEO technique", f"{it['label']} — {it['count']}", [ex_str(e) for e in it["examples"][:5]],
-                               "crawl", k))
+    # Sources au format du crawl : {clé: {label, severity, count, examples, domaine?}} ; « domaine » remplace le défaut de la source
+    for source, rel, dom_defaut in SOURCES_ISSUES:
+        issues = charger(d / rel)
+        for k, it in (issues.items() if isinstance(issues, dict) else ()):
+            dom = it.get("domaine")
+            signals.append(_signal(it["severity"], dom if isinstance(dom, str) and dom in DOMAINES_CONNUS else dom_defaut, f"{it['label']} — {it['count']}",
+                                   [ex_str(e) for e in it["examples"][:5]], source, k))
 
     geo = charger(d / "geo/geo.json") or {}
     for s in geo.get("signaux", []):
