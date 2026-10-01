@@ -1,0 +1,10 @@
+---
+import Base from '../../layouts/Base.astro';
+// Document « Convex » incomplet : prix et image absents
+const formation: Record<string, unknown> = { titre: 'Automatisation no-code' };
+---
+<Base title="Fiche formation incomplète" description="Fiche de formation alimentée par une base de données dont certains champs sont vides.">
+  <h1>{String(formation.titre)}</h1>
+  <p>{`Prix : ${formation.prix} €`}</p> {/* S42 : donnée manquante affichée telle quelle */}
+  <img src="/images/schema.png" alt={String(formation.image)} width="80" height="60" /> {/* S42 : alt="undefined" */}
+</Base>
