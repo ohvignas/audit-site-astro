@@ -968,6 +968,12 @@ class TestCommandesDeProduction(Base):
                 self.assertIn("npx convex dev", texte, ident)
                 self.assertIn("demander à l'humain", texte, ident)
 
+    def test_mise_en_garde_rgpd_arret_humain(self):
+        notes = corrections._mise_en_garde({"id": "rgpd-x", "fiche": {"corps": ""}, "severite": "moyenne", "domaine": "RGPD / traceurs"})
+        texte = " ".join(notes)
+        self.assertIn("demander l'accord de l'humain", texte)
+        self.assertIn("juridique", texte)
+
     def test_regle_d_arret_du_lisez_moi(self):
         audit = self.copie_fixture()
         t = (self.generer(audit, FIXTURE_FICHES) / "LISEZ-MOI.md").read_text(encoding="utf-8")

@@ -61,5 +61,61 @@ class TestNouvellesSources(unittest.TestCase):
         self.assertEqual(notes["Sécurité"]["inclut"], ["RGPD / traceurs"])
 
 
+    def test_domaine_invalide_retombe_sur_le_defaut(self):
+        with tempfile.TemporaryDirectory() as d:
+            ecrire(d, "rendu/issues.json", {"a": issue("haute", "Domaine fantôme"), "b": {**issue("haute"), "domaine": ["x"]},
+                                            "c": issue("haute", "RGPD / traceurs")})
+            vus = {s["cle"]: s["domaine"] for s in signaux.collecter(d)}
+        self.assertEqual(vus, {"a": "Accessibilité", "b": "Accessibilité", "c": "RGPD / traceurs"})
+
+    def test_issues_non_dict_ignore(self):
+        with tempfile.TemporaryDirectory() as d:
+            ecrire(d, "rendu/issues.json", [1, 2])
+            self.assertEqual(signaux.collecter(d), [])
+
+    def test_exemples_pages_conserves(self):
+        self.assertIn("exemples_pages", signaux.ex_str({"exemples_pages": ["/a"], "signature": "s"}))
+
+
+class TestAuditeSeulementSiSortie(unittest.TestCase):
+    def notes(self, fichiers=(), dossiers=()):
+        with tempfile.TemporaryDirectory() as d:
+            for rel, contenu in fichiers:
+                f = pathlib.Path(d, "data", rel)
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text(contenu, encoding="utf-8")
+            for rel in dossiers:
+                pathlib.Path(d, "data", rel).mkdir(parents=True, exist_ok=True)
+            return rapport_html.notes_audit(d)
+
+    def test_dossiers_vides_ne_comptent_pas(self):
+        self.assertEqual(self.notes(dossiers=("rendu", "crawl", "terrain", "domaine", "geo", "securite", "code")), {})
+
+    def test_fichiers_vides_ne_comptent_pas(self):
+        self.assertEqual(self.notes(fichiers=(("rendu/issues.json", ""), ("crawl/issues.json", ""))), {})
+
+    def test_rendu_valide_audite_l_accessibilite(self):
+        n = self.notes(fichiers=(("rendu/issues.json", "{}"),))
+        self.assertEqual(n["Accessibilité"]["note"], 100)
+        self.assertNotIn("SEO technique", n)
+
+    def test_crawl_valide_audite_le_seo(self):
+        self.assertEqual(self.notes(fichiers=(("crawl/pages.json", "{}"),))["SEO technique"]["note"], 100)
+
+    def test_domaine_valide_audite_la_securite(self):
+        self.assertEqual(self.notes(fichiers=(("domaine/issues.json", "{}"),))["Sécurité"]["note"], 100)
+
+    def test_terrain_n_audite_pas_la_performance(self):
+        self.assertEqual(self.notes(fichiers=(("terrain/issues.json", "{}"),)), {})
+
+    def test_sources_existantes_exigent_leur_fichier(self):
+        n = self.notes(fichiers=(("geo/geo.json", "{}"), ("code/code-scan.json", "{}"), ("securite/security-probe.md", "x")))
+        self.assertEqual(sorted(n), ["Code", "GEO / IA", "Sécurité"])
+
+    def test_dedoublonnage_securite(self):
+        n = self.notes(fichiers=(("securite/security-probe.md", "x"), ("domaine/issues.json", "{}")))
+        self.assertEqual(list(n), ["Sécurité"])
+
+
 if __name__ == "__main__":
     unittest.main()

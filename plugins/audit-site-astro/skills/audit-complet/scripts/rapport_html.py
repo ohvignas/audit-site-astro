@@ -201,18 +201,30 @@ def note_globale(notes):
     return g, False
 
 
+def _non_vide(p):
+    try:
+        return p.is_file() and p.stat().st_size > 0
+    except OSError:
+        return False
+
+
 def notes_audit(audit, sigs=None):
     """Notes par domaine d'un dossier d'audit (signaux bruts) ; `sigs` évite de relire les données si déjà collectés.
 
-    Les domaines dont la source de données existe (crawl, geo, securite, code, Lighthouse) comptent même sans constat.
+    Un domaine compte même sans constat (note 100) seulement si le fichier principal de sa source existe et n'est pas vide
+    (crawl : issues.json ou pages.json ; geo : geo.json ; securite : security-probe.md ; code : code-scan.json ou project-checks.md ;
+    rendu : issues.json ; domaine : issues.json) ou si Lighthouse a mesuré. Un simple dossier ne suffit jamais (étape ignorée ou en échec).
+    `terrain` (CrUX) ne rend jamais « Performance » audité à lui seul.
     """
     audit = Path(audit)
     if sigs is None:
         sigs = signaux.collecter(audit)
     d = audit / "data"
-    audites = [dom for dom, chemin in (("SEO technique", "crawl"), ("GEO / IA", "geo"), ("Sécurité", "securite"), ("Code", "code"),
-                                       ("Accessibilité", "rendu"), ("Sécurité", "domaine"), ("Performance", "terrain"))
-               if (d / chemin).is_dir()]
+    audites = [dom for dom, fichiers in (("SEO technique", ("crawl/issues.json", "crawl/pages.json")), ("GEO / IA", ("geo/geo.json",)),
+                                         ("Sécurité", ("securite/security-probe.md",)),
+                                         ("Code", ("code/code-scan.json", "code/project-checks.md")),
+                                         ("Accessibilité", ("rendu/issues.json",)), ("Sécurité", ("domaine/issues.json",)))
+               if any(_non_vide(d / f) for f in fichiers)]
     audites = sorted(set(audites), key=audites.index)
     if signaux.lighthouse(audit):
         audites += ["Performance", "Accessibilité"]

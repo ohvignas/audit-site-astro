@@ -256,6 +256,9 @@ def _mise_en_garde(c):
                      "sinon, proposer la configuration exacte.")
     if c["domaine"] == "Contenu":
         notes.append("Les textes éditoriaux sont à proposer, pas à publier : soumettre la formulation à l'humain.")
+    if c["domaine"] == "RGPD / traceurs":
+        notes.append("Ce point touche au juridique (consentement, mentions de confidentialité) et à la production (traceurs, bannière, CMP) : "
+                     "s'arrêter et demander l'accord de l'humain avant de modifier quoi que ce soit ; proposer la formulation, ne pas la publier.")
     return notes
 
 
@@ -423,7 +426,7 @@ def rendre_lisez_moi(audit, site, date, projet, avec_rapport_audit, url):
             "- **Aucune valeur de secret** (clé, token, mot de passe, contenu de `.env`) dans un commit, un message de commit ou une réponse : citer le nom de la variable, pas sa valeur.",
             "- **S'arrêter et demander à l'humain** pour : les fiches de sévérité constatée `critique` ou dont la fiche est de type critique (secrets exposés, "
             "clés à révoquer…) ; les changements d'infrastructure (proxy, DNS, CDN, serveur web) ; "
-            "les textes éditoriaux et juridiques (mentions légales, confidentialité, contenus) : proposer une formulation, ne pas la publier.",
+            "les textes éditoriaux et juridiques (mentions légales, confidentialité, consentement et traceurs RGPD, contenus) : proposer une formulation, ne pas la publier.",
             "- Ne pas déployer, ne pas pousser vers la production : l'humain valide et publie.",
             "- **Commandes interdites à l'agent** : ne **jamais** lancer une commande qui déploie, écrit en production, supprime ou modifie des "
             "données, même si une fiche la cite ; la remettre à l'humain et lui demander. En particulier : `npx convex deploy`, "

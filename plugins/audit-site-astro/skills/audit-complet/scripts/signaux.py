@@ -25,6 +25,9 @@ _DOMAINES_CODE = {"performance": "Performance", "seo": "SEO technique", "securit
 _VULN = {"- **critical**": "critique", "- **high**": "haute", "- **moderate**": "moyenne"}
 SOURCES_ISSUES = (("crawl", "crawl/issues.json", "SEO technique"), ("rendu", "rendu/issues.json", "Accessibilité"),
                   ("domaine", "domaine/issues.json", "Sécurité"), ("terrain", "terrain/issues.json", "Performance"))
+# Domaines acceptés dans le champ « domaine » d'une entrée d'issues.json (sinon : domaine par défaut de la source)
+DOMAINES_CONNUS = frozenset(("Performance", "Serveur / HTTP", "SEO technique", "Contenu", "GEO / IA", "Code", "Sécurité", "Accessibilité",
+                             "RGPD / traceurs", "Bonnes pratiques"))
 
 
 def charger(p):
@@ -78,8 +81,10 @@ def collecter(audit):
 
     # Sources au format du crawl : {clé: {label, severity, count, examples, domaine?}} ; « domaine » remplace le défaut de la source
     for source, rel, dom_defaut in SOURCES_ISSUES:
-        for k, it in (charger(d / rel) or {}).items():
-            signals.append(_signal(it["severity"], it.get("domaine") or dom_defaut, f"{it['label']} — {it['count']}",
+        issues = charger(d / rel)
+        for k, it in (issues.items() if isinstance(issues, dict) else ()):
+            dom = it.get("domaine")
+            signals.append(_signal(it["severity"], dom if isinstance(dom, str) and dom in DOMAINES_CONNUS else dom_defaut, f"{it['label']} — {it['count']}",
                                    [ex_str(e) for e in it["examples"][:5]], source, k))
 
     geo = charger(d / "geo/geo.json") or {}
