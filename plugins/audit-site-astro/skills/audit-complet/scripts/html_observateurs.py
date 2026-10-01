@@ -15,11 +15,21 @@ resultat() (un résultat qui n'est pas du JSON strict est remplacé par {"erreur
 notée dans obs[nom] = {"erreur": "Type: message"} et, avec le nom du module, dans ctx["meta"]["erreurs_modules"].
 Format commun des résultats : listes de {"signature": str, "n": int, …} ; collecter_groupes() et ajouter_groupes() regroupent
 les occurrences de tout le site par signature de composant (128 icônes identiques = 1 constat).
+
+Aucun secret dans les sorties (règle de sécurité) : une adresse qui entre dans une signature, un exemple, issues.json, pages.json ou
+summary.md passe par url_sans_secret() (schéma, hôte sans identifiants, chemin ; ni requête, ni fragment, ni paramètre de matrice
+« ;jsessionid=… », ni « %3F » / « %23 » encodés ; longueur bornée) ; un texte libre qui peut contenir une adresse (alt, aria-label,
+extrait de phrase) par texte_sans_secret(). Les URL des pages du site audité (url de la page) passent par url_page_publique() :
+même nettoyage, mais les paramètres sans risque (?page=2, ?tab=) restent ; ceux dont le nom ressemble à un secret (token, key, sig,
+session, sid, auth, code, password…) ou dont la valeur ressemble à une clé (AIza…, sk-…, JWT, hexadécimal long) sont retirés.
+analyser() et issues() repassent par assainir_sortie() sur tout ce que rend un module : un module qui oublie le helper ne fait
+pas fuiter une adresse complète, mais le helper reste la règle (il évite aussi de perdre la signature utile).
 """
 import importlib
 import json
 import re
 from html.parser import HTMLParser
+from urllib.parse import unquote_plus, urlsplit
 
 MODULES = ("a11y_svg", "a11y_noms", "a11y_structure", "a11y_textes", "contenu_demo", "fuites_rendu", "tete_html",
            "securite_html", "liens_externes", "ressources_site", "donnees_structurees")
@@ -33,6 +43,199 @@ CLASSES_MASQUE = {"hidden", "d-none", "is-hidden", "invisible"}
 # « hidden md:block » : masqué sur mobile seulement, visible ensuite → pas masqué
 CLASSE_REAFFICHE = re.compile(r"^(sm|md|lg|xl|2xl):(block|inline|inline-block|flex|inline-flex|grid|inline-grid|table|contents|visible)$")
 SANS_TEXTE_VISIBLE = {"script", "style", "noscript", "template", "textarea", "title"}
+
+
+# --------------------------------------------------------------------------- adresses sans secret
+
+LONGUEUR_URL = 100          # signatures et exemples
+LONGUEUR_URL_PAGE = 300     # URL de page du site audité
+SCHEMAS_OPAQUES = {"data", "javascript", "blob", "about", "vbscript", "file"}  # le reste de l'adresse n'a aucune valeur de diagnostic
+# Le chemin s'arrête au premier « ; » (paramètres de matrice : ;jsessionid=…) ou au premier « ? » / « # » / « ; » encodé (%3F, %23, %3B,
+# éventuellement encodés deux fois : %253F) : ce qui suit est une requête ou un fragment déguisés en chemin
+COUPE_CHEMIN = re.compile(r";|%(?:25)*(?:3[fF]|23|3[bB])")
+# Nom de paramètre qui ressemble à un secret : mots longs en sous-chaîne, mots courts seulement comme mot entier (« key » dans
+# « api_key », « accessKey », pas dans « keyword »), ou fin de nom (« …key », « …sig »)
+NOMS_SECRETS_LONGS = ("token", "secret", "passw", "session", "signature", "credential", "bearer", "apikey", "jwt", "cookie",
+                      "jeton", "motdepasse")
+NOMS_SECRETS_COURTS = {"key", "cle", "clef", "sig", "sid", "auth", "code", "pwd", "mdp", "pass", "otp", "csrf", "xsrf", "nonce", "hmac",
+                       "ticket", "sas", "oauth", "sso"}
+FINS_SECRETES = ("key", "sig", "sid", "auth", "code", "pwd")
+# Formats de clés connus : Google (AIza), OpenAI/Stripe (sk-, sk_live_), GitHub, Slack, AWS, JWT ; hexadécimal ≥ 32 (condensat)
+FORMATS_CLES = (r"AIza[\w-]{20,}", r"sk-[\w-]{16,}", r"[sp]k_(?:live|test)_\w{8,}", r"gh[pousr]_\w{20,}", r"xox[abprs]-[\w-]{10,}",
+                r"AKIA[0-9A-Z]{16}", r"eyJ[\w-]{5,}\.[\w-]{5,}\.[\w-]*")
+CLE_CONNUE = re.compile("|".join(FORMATS_CLES))
+VALEUR_SECRETE = re.compile("|".join(FORMATS_CLES + (r"[0-9a-fA-F]{32,}", r"[A-Za-z0-9+/=_-]{40,}")))
+URL_DANS_TEXTE = re.compile(r"(?i)\b(?:https?|wss?|ftp)://[^\s\"'<>\\]+")
+PAIRE_DANS_TEXTE = re.compile(r"([\w.\-\[\]]+)=([^\s&;\"'<>]+)")
+PONCTUATION_FINALE = ".,;:!?)]}»”"
+
+
+def _nom_secret(nom):
+    """Vrai si le nom d'un paramètre (ou d'un attribut) ressemble à un secret."""
+    n = nom.lower()
+    if any(m in n for m in NOMS_SECRETS_LONGS):
+        return True
+    morceaux = re.split(r"[^a-z0-9]+", re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", nom).lower())
+    return any(m in NOMS_SECRETS_COURTS for m in morceaux) or n.endswith(FINS_SECRETES)
+
+
+def _valeur_secrete(valeur):
+    v = valeur
+    for _ in range(2):  # une valeur peut contenir une requête encodée (?next=%2Flogin%3Ftoken%3Dabc)
+        if VALEUR_SECRETE.search(v):
+            return True
+        if any(_nom_secret(m.group(1)) for m in PAIRE_DANS_TEXTE.finditer(v)):
+            return True
+        v = unquote_plus(v)
+    return bool(VALEUR_SECRETE.search(v))
+
+
+def _segment_secret(seg):
+    """Segment de chemin qui est un secret (webhook, clé dans l'URL) : format de clé connu ou 24 caractères alphanumériques mêlant
+    chiffres, majuscules et minuscules. Les noms de fichiers à condensat (index.4f3a9c.js) et les slugs à tirets restent intacts."""
+    if CLE_CONNUE.search(seg):
+        return True
+    return (len(seg) >= 24 and re.fullmatch(r"[A-Za-z0-9_]+", seg) is not None and any(c.isdigit() for c in seg)
+            and any(c.isupper() for c in seg) and any(c.islower() for c in seg))
+
+
+def _chemin_net(chemin):
+    chemin = COUPE_CHEMIN.split(chemin, 1)[0]
+    return "/".join("…" if _segment_secret(s) else s for s in chemin.split("/"))
+
+
+def _borner(texte, n):
+    return texte if len(texte) <= n else texte[:max(n - 1, 0)] + "…"
+
+
+def _decouper(url):
+    """(urlsplit, texte nettoyé), ou (None, texte) si l'adresse est illisible (« http://[invalide »)."""
+    u = "".join(c for c in " ".join(str(url or "").split()) if c.isprintable())
+    try:
+        return urlsplit(u), u
+    except ValueError:
+        return None, u
+
+
+def _base(p, avec_schema):
+    """schéma://hôte (sans identifiants), « //hôte » ou « hôte » ; vide pour une adresse relative."""
+    hote = p.netloc.rpartition("@")[2].lower()
+    if not hote:
+        return ""
+    if not avec_schema:
+        return hote
+    return (p.scheme.lower() + "://" if p.scheme else "//") + hote
+
+
+def _opaque(p):
+    """Adresse sans hôte à traiter à part : schéma opaque (data:, javascript:…), mailto: / tel: (adresse sans « ?objet=… »)."""
+    schema = p.scheme.lower()
+    if schema in SCHEMAS_OPAQUES:
+        return schema + ":"
+    if schema in ("mailto", "tel"):
+        return schema + ":" + COUPE_CHEMIN.split(p.path, 1)[0]
+    return None
+
+
+def url_sans_secret(url, longueur=LONGUEUR_URL, avec_schema=True):
+    """Adresse sans le moindre secret, pour les signatures, exemples et sorties : schéma, hôte (sans identifiants user:pass@) et
+    chemin. Ni requête, ni fragment (ils portent les jetons, clés d'API et signatures), chemin coupé aux paramètres de matrice
+    « ;jsessionid=… » et aux « %3F » / « %23 » encodés, segment qui ressemble à une clé masqué (« … »), longueur bornée (« … »).
+    Une adresse relative reste relative, une ancre seule devient « # », data: / javascript: / blob: deviennent « data: »…
+    avec_schema=False : « hôte/chemin » (signature d'une iframe)."""
+    if not url or not str(url).strip():
+        return ""
+    p, u = _decouper(url)
+    if p is None:
+        return "adresse illisible"
+    if u.startswith("#"):
+        return "#"
+    opaque = _opaque(p)
+    if opaque is not None:
+        return _borner(opaque, longueur)
+    base = _base(p, avec_schema)
+    chemin = _chemin_net(p.path)
+    if not base and p.scheme:  # « foo:bar » : schéma inconnu sans hôte
+        return _borner(p.scheme.lower() + ":" + chemin, longueur)
+    return _borner(base + chemin, longueur)
+
+
+def url_page_publique(url, longueur=LONGUEUR_URL_PAGE):
+    """URL d'une page du site audité telle qu'on peut l'écrire dans pages.json, issues.json et summary.md : comme url_sans_secret
+    (identifiants, fragment, paramètres de matrice et segments secrets retirés) mais la requête est gardée, sans les paramètres dont
+    le nom ressemble à un secret (token, key, sig, signature, session, sid, auth, code, password…) ni ceux dont la valeur ressemble à
+    une clé (AIza…, sk-…, JWT, hexadécimal long). ?page=2 et ?tab=prix restent : ils distinguent des pages."""
+    if not url or not str(url).strip():
+        return "" if not url else str(url)
+    p, u = _decouper(url)
+    if p is None:
+        return "adresse illisible"
+    if u.startswith("#"):
+        return "#"
+    opaque = _opaque(p)
+    if opaque is not None:
+        return _borner(opaque, longueur)
+    gardes = []
+    for morceau in p.query.split("&"):
+        if not morceau:
+            continue
+        nom, _, valeur = morceau.partition("=")
+        if _nom_secret(unquote_plus(nom)) or _valeur_secrete(valeur) or _valeur_secrete(nom):
+            continue
+        gardes.append(morceau)
+    base = _base(p, True)
+    chemin = _chemin_net(p.path)
+    if not base and p.scheme:
+        return _borner(p.scheme.lower() + ":" + chemin, longueur)
+    return _borner(base + chemin + ("?" + "&".join(gardes) if gardes else ""), longueur)
+
+
+def texte_sans_secret(texte, adresse=url_sans_secret):
+    """Texte libre (alt, aria-label, extrait de phrase, message d'erreur) sans secret : chaque adresse http(s)://… devient `adresse(url)`
+    (url_sans_secret par défaut), « nom=valeur » dont le nom ressemble à un secret devient « nom=… », une clé de format connu
+    (AIza…, sk-…, ghp_…, JWT) devient « … »."""
+    def remplacer(m):
+        brut = m.group(0)
+        coupe = len(brut.rstrip(PONCTUATION_FINALE))
+        return adresse(brut[:coupe]) + brut[coupe:]
+
+    def paire(m):
+        # « Disallow: /*?session=* » (motif de robots.txt) ou une valeur déjà masquée : rien à cacher
+        if m.group(2) == "…" or not _nom_secret(m.group(1)) or re.fullmatch(r"[*$.+?^|()\[\]\\]+", m.group(2)):
+            return m.group(0)
+        return m.group(1) + "=…"
+
+    t = URL_DANS_TEXTE.sub(remplacer, str(texte))
+    return CLE_CONNUE.sub("…", PAIRE_DANS_TEXTE.sub(paire, t))
+
+
+def _parcourir(o, fn, cle=None):
+    if isinstance(o, dict):
+        return {(fn(k, None) if isinstance(k, str) and URL_DANS_TEXTE.match(k) else k): _parcourir(v, fn, k) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_parcourir(v, fn, cle) for v in o]
+    if isinstance(o, str):
+        return fn(o, cle)
+    return o
+
+
+# Champs de pages.json / issues.json qui portent une adresse pouvant être relative (les adresses absolues sont reconnues seules)
+CHAMPS_ADRESSE = {"img_srcs", "hreflang", "canonicals", "canonical", "src", "href", "mixed_content"}
+
+
+def _chaine_publique(s, cle):
+    if re.match(r"(?i)(?:https?:)?//", s) and not any(c.isspace() for c in s):
+        return url_page_publique(s)
+    if cle in CHAMPS_ADRESSE and s and not any(c.isspace() for c in s):
+        return url_page_publique(s)
+    return texte_sans_secret(s, adresse=url_page_publique)
+
+
+def assainir_sortie(o):
+    """Copie de `o` (dict, listes, chaînes JSON) sans secret, pour pages.json, issues.json, pages.csv et summary.md : une chaîne qui est
+    une adresse (ou qui en contient) passe par url_page_publique ; les clés de dictionnaire qui sont des adresses aussi.
+    L'original n'est pas modifié (le crawl continue avec les vraies adresses)."""
+    return _parcourir(o, _chaine_publique)
 
 
 def _erreur(e):
@@ -202,7 +405,8 @@ def analyser(html, entetes, url, modules=None, erreurs=None):
             res[nom] = r
         except Exception as e:
             res[nom] = {"erreur": _erreur(e)}
-    return {nom: res[nom] for nom in sorted(res, key=lambda n: _ordre(n))}
+    # filet de sécurité : aucune adresse complète ni clé de format connu ne sort d'un module, même s'il oublie url_sans_secret()
+    return {nom: assainir_sortie(res[nom]) for nom in sorted(res, key=lambda n: _ordre(n))}
 
 
 def _ordre(nom):
@@ -245,7 +449,12 @@ def apres_crawl(pages, ctx):
 
 
 def issues(pages, add, ctx):
-    _appeler("issues", ctx, pages, add, ctx)
+    def add_net(cle, libelle, severite, exemple=None, *args, **kw):
+        if "example" in kw:  # nom du paramètre de build_issues
+            kw["example"] = assainir_sortie(kw["example"])
+        add(cle, libelle, severite, assainir_sortie(exemple), *args, **kw)
+
+    _appeler("issues", ctx, pages, add_net, ctx)
 
 
 def collecter_groupes(pages, nom, champ):
@@ -265,7 +474,7 @@ def ajouter_groupes(add, cle, libelle, severite, groupes, domaine):
     """Un constat par signature (ordre trié = sortie déterministe), avec 3 pages d'exemple."""
     for sig in sorted(groupes):
         g = groupes[sig]
-        urls = sorted(set(g["pages"]))
+        urls = sorted({url_page_publique(u) for u in g["pages"]})  # URL des pages du site audité : sans jeton dans la requête
         exemple = {"signature": sig, "occurrences": g["n"], "pages": len(urls), "exemples_pages": urls[:3]}
         if "exemple" in g:
             exemple["exemple"] = g["exemple"]

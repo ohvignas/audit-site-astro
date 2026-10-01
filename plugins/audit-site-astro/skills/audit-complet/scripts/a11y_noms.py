@@ -80,7 +80,7 @@ class Observateur(ho.Observateur):
             nom = nom or (type_input == "image" and not _vide(a.get("alt"))) or (type_input != "image" and (
                 not _vide(a.get("value")) or type_input in ("submit", "reset")))
         if t == "a":
-            ident = ' href="{0}"'.format(" ".join(a["href"].split())[:80])
+            ident = ' href="{0}"'.format(ho.url_sans_secret(a["href"], 80))  # jamais de requête, de fragment ni d'identifiants
         elif t == "input":
             ident = ' type="{0}"'.format(type_input)
         else:

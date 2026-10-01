@@ -112,15 +112,16 @@ class Observateur(ho.Observateur):
         for ou in ("titre", "description"):
             for v in valeurs[ou]:
                 if v and CHAMP_EXACT[ou].match(v):
-                    out.append({"signature": "valeur par défaut du gabarit ({0}) : « {1} »".format(ou, v[:80]), "n": 1,
+                    out.append({"signature": "valeur par défaut du gabarit ({0}) : « {1} »".format(ou, ho.texte_sans_secret(v)[:80]), "n": 1,
                                 "motif": "gabarit de démarrage", "ou": ou})
                     break
         if self.faux_contacts:
-            out.append({"signature": "coordonnées fictives (lien) : « {0} »".format(self.faux_contacts[0][:60]), "n": 1,
+            out.append({"signature": "coordonnées fictives (lien) : « {0} »".format(ho.url_sans_secret(self.faux_contacts[0], 60)), "n": 1,
                         "motif": "coordonnées fictives", "ou": "texte"})
         for ou in ("titre", "description", "texte"):
             brut = " ".join(self.sources[ou]) if ou != "description" else "\n".join(self.sources[ou])
-            t = "\n".join(" ".join(ligne.split()) for ligne in brut.split("\n"))
+            # texte nettoyé avant le découpage de l'extrait : une adresse coupée par la fenêtre ne serait plus reconnue
+            t = ho.texte_sans_secret("\n".join(" ".join(ligne.split()) for ligne in brut.split("\n")))
             for motif, rx in MOTIFS:
                 m = premiere_occurrence(rx, t)
                 if m:

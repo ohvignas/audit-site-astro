@@ -15,7 +15,6 @@ Choix pour limiter les faux positifs :
   garde que hôte + chemin du src : jamais de query string, de fragment ni d'identifiants (clés d'API, jetons signés) ;
 - meta viewport : séparateurs virgule, point-virgule ou espace ; ignorée dans un <template> ou un <noscript>."""
 import re
-from urllib.parse import urlsplit
 
 import html_observateurs as ho
 from html_observateurs import dans
@@ -46,14 +45,7 @@ def _liste(d):
 
 def _src_sans_secret(src):
     """Hôte + chemin d'une URL d'iframe : ni query string, ni fragment, ni identifiants (clés d'API, jetons dans l'URL)."""
-    try:
-        p = urlsplit(src.strip())
-    except ValueError:
-        return "src illisible"
-    if p.scheme in ("data", "javascript", "blob", "about"):
-        return p.scheme + ":"
-    hote = p.netloc.rpartition("@")[2]
-    return ((hote + p.path) if hote else p.path)[:80] or "sans src"
+    return ho.url_sans_secret(src, 80, avec_schema=False) or "sans src"
 
 
 def _pixel_de_suivi(a):
@@ -100,7 +92,7 @@ class Observateur(ho.Observateur):
                 and "contenteditable" not in a):
             for k in ("aria-label", "aria-labelledby"):
                 if a.get(k, "").strip():
-                    _ajouter(self.interdits, '<{0} {1}="{2}">'.format(t, k, a[k].strip()[:60]))
+                    _ajouter(self.interdits, '<{0} {1}="{2}">'.format(t, k, ho.texte_sans_secret(a[k].strip())[:60]))
 
     def texte(self, donnees, pile):
         if self._ouverts:
