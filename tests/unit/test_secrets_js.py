@@ -140,6 +140,42 @@ class TestDetection(unittest.TestCase):
         self.assertTrue(secrets_js.est_public("Google API"))
         self.assertFalse(secrets_js.est_public("OpenAI"))
 
+    def test_jeton_oauth_anthropic(self):
+        oat = "sk-" + "ant-" + "oat01-" + "Zk3Vb8Nq1Lw7Rt5Yh2Mc9Xd4Pf6Sg0JaUe_-" * 2
+        self.assertEqual(self.noms("t='" + oat + "'"), ["Anthropic"])
+
+    def test_cles_aleatoires_longues_detectees_a_99_pour_cent(self):
+        # N1 : la règle camelCase est proportionnelle ; une vraie clé n'est pas perdue parce qu'elle est longue
+        import random
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+        rnd = random.Random(20261001)
+        for longueur in (48, 100, 120):
+            with self.subTest(longueur=longueur):
+                trouvees = sum(1 for _ in range(1000)
+                               if self.noms("k='sk-" + "".join(rnd.choice(alphabet) for _ in range(longueur)) + "';"))
+                self.assertGreaterEqual(trouvees, 990, "%d/1000 détectées" % trouvees)
+
+    def test_identifiants_en_mots_toujours_rejetes_et_regression_tailwind(self):
+        for t in ("sk-" + "RenderMenuItem2Large3Active", "re_" + "ValidateFieldArrayName2Values3Mode",
+                  "sk-" + "RenderMenuItemActiveStateLarge2Wide3Panel",
+                  "mask-image-b-from-color mask-image-b-from-pos mask-image-b-to-color",
+                  "mask-image-b-from-color-transparent mask-image-b-from-pos-50%-to-color-black"):
+            self.assertEqual(self.noms("'" + t + "'"), [], t)
+
+    def test_cle_dans_un_attribut_html_non_cite(self):
+        # N2 : HTML minifié sans guillemets, la clé est la dernière valeur avant « > »
+        for t in ("<meta name=api content=" + OPENAI + ">", "<div data-k=" + STRIPE + ">", "<b x=" + AWS + "/>"):
+            self.assertEqual(len(self.noms(t)), 1, t)
+        for t in ("<" + OPENAI + ">", "<" + STRIPE + ">", "<sk-proj-YOUR_KEY>", "<sk_live_" + "x" * 24 + ">"):
+            self.assertEqual(self.noms(t), [], t)
+
+    def test_hexadecimale_dans_un_nom_de_fichier_ou_une_classe(self):
+        h = HEX32[3:]
+        for t in ("/assets/sk-" + h + ".css", "import('./sk-" + h + ".js')", "u='sk-" + h + ".png'", "https://x.fr/y/sk-" + h,
+                  ".sk-" + h + "{color:red}", '<i class="a sk-' + h + '">', "sk-" + h + ".mjs", "sk-" + h + ".map"):
+            self.assertEqual(self.noms(t), [], t)
+        self.assertEqual(self.noms("t='" + HEX32 + "'."), ["Clé sk- (hexadécimale)"])  # un point final de phrase n'est pas une extension
+
     def test_faux_positifs_du_vrai_site_et_classes_css(self):
         for t in ('<div class="mask-image-b-from-color mask-image-b-to-color">',     # beta.illith.com, 2026-10-01
                   ".mask-image-b-from-pos{mask-position:var(--tw-mask-b-from-pos)}",

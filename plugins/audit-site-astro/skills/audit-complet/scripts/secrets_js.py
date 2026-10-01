@@ -31,7 +31,7 @@ PEM = r"(?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK"
 FORMATS = (
     ("Stripe", BORD_CONNU + r"(?:sk|rk)_live_[A-Za-z0-9]{10,}", False),
     ("OpenAI", BORD_CONNU + r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}", False),
-    ("Anthropic", BORD_CONNU + r"sk-ant-(?:api|admin)\d{2}-[A-Za-z0-9_-]{20,}", False),
+    ("Anthropic", BORD_CONNU + r"sk-ant-(?:api|admin|oat)\d{2}-[A-Za-z0-9_-]{20,}", False),
     ("AWS", BORD_CONNU + r"AKIA[0-9A-Z]{16}(?![0-9A-Z])", False),
     ("Google API", BORD_CONNU + r"AIza[0-9A-Za-z_-]{35}", False),
     ("GitHub", BORD_CONNU + r"(?:(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{50,})", False),
@@ -48,6 +48,7 @@ PUBLICS = ("Google API",)
 # jeton à tirets dont chaque segment est un mot (≥ 2 lettres) ou un nombre : « Nav-Top-Bar-2024 », « tooltip-arrow-left »
 SEGMENT_KEBAB = re.compile(r"^(?:[A-Za-z]{2,}|\d+)$")
 DANS_CLASSE = re.compile(r"""class(?:Name)?\s*=\s*["'][^"']*$""")
+EXTENSION = re.compile(r"\.(?:js|mjs|cjs|css|map|json|html?|png|jpe?g|webp|avif|gif|svg|ico|woff2?|ttf|txt|wasm)(?![A-Za-z0-9])", re.I)
 GABARIT = re.compile(r"example|xxxx|your[_-]|placeholder|redacted", re.I)
 
 
@@ -72,7 +73,8 @@ def _est_kebab(corps):
 
 def _gabarit(texte, m):
     valeur = m.group(0)
-    if GABARIT.search(valeur) or (m.start() > 0 and texte[m.start() - 1] == "<") or texte[m.end():m.end() + 1] == ">":
+    # gabarit « <sk-proj-…> » : les deux chevrons ; une clé suivie seulement de « > » est la dernière valeur d'un attribut non cité
+    if GABARIT.search(valeur) or (texte[max(0, m.start() - 1):m.start()] == "<" and texte[m.end():m.end() + 1] == ">"):
         return True
     if valeur.startswith("-----BEGIN"):
         return False
@@ -85,7 +87,8 @@ def _generique_plausible(texte, m):
         return False
     if len([p for p in corps.split("_") if re.fullmatch(r"[a-z]{3,}", p)]) >= 2:  # mots séparés par « _ » : re_quote_attribute_…
         return False
-    if len(re.findall(r"[A-Z][a-z]{3,}", corps)) >= 4:  # camelCase : RenderMenuItem2Large3Active
+    mots = re.findall(r"[A-Z][a-z]{3,}", corps)  # camelCase : RenderMenuItem2Large3Active ; proportionnel à la longueur,
+    if len(mots) >= 2 and sum(map(len, mots)) > 0.6 * len(corps):  # une longue clé aléatoire contient quelques mots par hasard
         return False
     if not (re.search(r"[A-Z]", corps) and re.search(r"[a-z]", corps) and len(re.findall(r"\d+", corps)) >= 2):
         return False  # une clé aléatoire mêle casses et chiffres ; « …Large2024x » n'a qu'un groupe de chiffres
@@ -95,6 +98,8 @@ def _generique_plausible(texte, m):
 def _hexadecimale_plausible(texte, m):
     corps = m.group(0).rsplit("-", 1)[-1] if m.group(0).startswith("sk-or-v1-") else m.group(0)[3:]
     if DANS_CLASSE.search(texte[max(0, m.start() - 200):m.start()]):
+        return False
+    if texte[max(0, m.start() - 1):m.start()] in (".", "/") or EXTENSION.match(texte, m.end()):  # classe CSS, chemin, nom de fichier haché
         return False
     return bool(re.search(r"\d", corps) and re.search(r"[a-f]", corps)) and entropie(corps) >= 3.0
 
