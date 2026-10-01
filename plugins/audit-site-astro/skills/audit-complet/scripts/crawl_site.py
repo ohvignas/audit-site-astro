@@ -17,20 +17,16 @@ puis visite les URL du sitemap non trouvées par les liens (candidates orpheline
 """
 import argparse
 import csv
-import gzip
+import functools
 import json
 import os
 import re
-import ssl
 import sys
 import time
-import zlib
 from collections import Counter, defaultdict, deque
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urldefrag, urljoin, urlparse, urlunparse
-import urllib.error
-import urllib.request
 import xml.etree.ElementTree as ET
 
 UA = "Mozilla/5.0 (compatible; AuditWPAstra/1.0; audit interne)"
@@ -50,6 +46,7 @@ SKIP_TEXT_TAGS = {"script", "style", "noscript", "svg", "template"}
 # Constantes de masquage et contrôles HTML additionnels : html_observateurs.py (une lecture partagée par onze modules,
 # en plus de celle de PageParser)
 import html_observateurs  # noqa: E402
+import reseau_sur  # noqa: E402
 from html_observateurs import VOID_TAGS, masque  # noqa: E402,F401
 
 
@@ -58,91 +55,21 @@ ASSETS_RX = re.compile(r"\.(css|m?js)\b|wp-content/(themes|plugins)|wp-includes|
 
 # --------------------------------------------------------------------------- HTTP
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
+def fetch(url, timeout=20, method="GET", max_bytes=8_000_000, ua=UA, extra_headers=None, max_hops=10, prive_ok=None,
+          resoudre=None, echeance=None, max_decompresse=reseau_sur.LIMITE_HTML):
+    """GET/HEAD en suivant les redirections à la main (reseau_sur.ouvrir) pour conserver la chaîne complète (max_hops requêtes au
+    plus). Seuls http et https sont ouverts (jamais file://, ftp://, data:), jamais de cookie, corps décompressé borné.
+    prive_ok : noms d'hôtes exemptés du refus des adresses non publiques ; None = l'hôte de `url` (l'appelant le désigne : cible de
+    l'audit) ; une redirection vers un autre hôte privé (127.0.0.1, 10.x, 169.254.169.254…) est refusée (refus="adresse_privee")."""
+    if prive_ok is None:
+        prive_ok = {reseau_sur.hote_de(url)} - {None}
+    return reseau_sur.ouvrir(url, timeout=timeout, method=method, max_bytes=max_bytes, ua=ua, extra_headers=extra_headers,
+                             max_hops=max_hops, prive_ok=prive_ok, resoudre=resoudre, echeance=echeance, proxy=True,
+                             max_decompresse=max_decompresse)
 
 
-_OPENERS = {}
-
-
-def _opener():
-    """Opener sans suivi automatique des redirections ; TLS non vérifié si AUDIT_INSECURE_TLS=1 (tests)."""
-    insecure = os.environ.get("AUDIT_INSECURE_TLS") == "1"
-    if insecure not in _OPENERS:
-        handlers = [_NoRedirect()]
-        if insecure:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            handlers.append(urllib.request.HTTPSHandler(context=ctx))
-        _OPENERS[insecure] = urllib.request.build_opener(*handlers)
-    return _OPENERS[insecure]
-
-
-def _decompress(body, enc):
-    try:
-        if enc == "gzip":
-            return gzip.decompress(body)
-        if enc == "deflate":
-            try:
-                return zlib.decompress(body)
-            except zlib.error:
-                return zlib.decompress(body, -zlib.MAX_WBITS)
-    except Exception:
-        pass
-    return body
-
-
-def fetch(url, timeout=20, method="GET", max_bytes=8_000_000, ua=UA, extra_headers=None, max_hops=10):
-    """GET/HEAD en suivant les redirections à la main pour conserver la chaîne complète (max_hops sauts au plus)."""
-    chain = []
-    current = url
-    t_start = time.time()
-    for _ in range(max_hops):
-        headers = {
-            "User-Agent": ua,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Encoding": "gzip, deflate",
-            "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.6",
-        }
-        if extra_headers:
-            headers.update(extra_headers)
-        try:
-            req = urllib.request.Request(current, method=method, headers=headers)
-        except ValueError as e:
-            return {"url": url, "final_url": current, "status": 0, "error": f"URL invalide : {e}", "chain": chain,
-                    "headers": {}, "body": b"", "raw_bytes": 0, "ttfb": None, "time": 0}
-        t_hop = time.time()
-        try:
-            resp = _opener().open(req, timeout=timeout)
-            status, hdrs = resp.status, resp.headers
-            ttfb = time.time() - t_hop
-            body = resp.read(max_bytes) if method == "GET" else b""
-            resp.close()
-        except urllib.error.HTTPError as e:
-            status, hdrs = e.code, e.headers
-            ttfb = time.time() - t_hop
-            if 300 <= status < 400 and hdrs.get("Location"):
-                chain.append({"url": current, "status": status})
-                current = urljoin(current, hdrs["Location"])
-                continue
-            try:
-                body = e.read(max_bytes) if method == "GET" else b""
-            except Exception:
-                body = b""
-        except Exception as e:  # DNS, TLS, timeout...
-            return {"url": url, "final_url": current, "status": 0, "error": str(e)[:200], "chain": chain,
-                    "headers": {}, "body": b"", "raw_bytes": 0, "ttfb": None,
-                    "time": round(time.time() - t_start, 3)}
-        enc = (hdrs.get("Content-Encoding") or "").lower().strip()
-        raw_len = len(body)
-        body = _decompress(body, enc)
-        return {"url": url, "final_url": current, "status": status, "error": None, "chain": chain,
-                "headers": {k.lower(): v for k, v in hdrs.items()}, "body": body, "raw_bytes": raw_len,
-                "ttfb": round(ttfb, 3), "time": round(time.time() - t_start, 3)}
-    return {"url": url, "final_url": current, "status": -1, "error": f"plus de {max_hops} redirections", "chain": chain,
-            "headers": {}, "body": b"", "raw_bytes": 0, "ttfb": None, "time": round(time.time() - t_start, 3)}
+def _decompress(body, enc, limite=reseau_sur.LIMITE_SITEMAP):
+    return reseau_sur.decompresser_borne(body, enc, limite)[0]
 
 
 def decode_body(res):
@@ -475,7 +402,7 @@ def jsonld_types(raw_blocks):
 
 # --------------------------------------------------------------------------- sitemaps
 
-def parse_sitemaps(start_urls, timeout, limit_maps=200):
+def parse_sitemaps(start_urls, timeout, limit_maps=200, prive_ok=None):
     urls, lastmods, seen_maps, errors = [], {}, set(), []
     todo = deque(start_urls)
     while todo and len(seen_maps) < limit_maps:
@@ -483,7 +410,7 @@ def parse_sitemaps(start_urls, timeout, limit_maps=200):
         if sm in seen_maps:
             continue
         seen_maps.add(sm)
-        res = fetch(sm, timeout=timeout, ua=UA)
+        res = fetch(sm, timeout=timeout, ua=UA, prive_ok=prive_ok, max_decompresse=reseau_sur.LIMITE_SITEMAP)
         if res["status"] != 200 or not res["body"]:
             errors.append(f"{sm} → HTTP {res['status']}")
             continue
@@ -651,12 +578,16 @@ def crawl(args):
     robots = RobotsTxt(decode_body(robots_res) if robots_res["status"] == 200 else "")
     relative_sitemaps = [sm for sm in robots.sitemaps if not sm.lower().startswith("http")]
     robots.sitemaps = [urljoin(f"{scheme}://{host}/", sm) for sm in robots.sitemaps]
+    # hôtes du site audité (variantes www comprises) : seuls exemptés du refus des adresses non publiques ; tout autre hôte désigné par
+    # une redirection, un sitemap ou une image doit être public (un site audité est hostile par hypothèse)
+    sur = frozenset(h for h in (reseau_sur.hote_de(start), reseau_sur.hote_de(f"{scheme}://{bare}/"), reseau_sur.hote_de(f"{scheme}://www.{bare}/")) if h)
+    fetch_s = functools.partial(fetch, prive_ok=sur)
     sm_candidates = robots.sitemaps or [f"{scheme}://{host}/sitemap_index.xml", f"{scheme}://{host}/sitemap.xml",
                                         f"{scheme}://{host}/wp-sitemap.xml"]
-    sm_urls, lastmods, sm_files, sm_errors = parse_sitemaps(sm_candidates, args.timeout)
+    sm_urls, lastmods, sm_files, sm_errors = parse_sitemaps(sm_candidates, args.timeout, prive_ok=sur)
     if not sm_urls and robots.sitemaps:
         more, lm2, f2, e2 = parse_sitemaps([f"{scheme}://{host}/sitemap_index.xml",
-                                            f"{scheme}://{host}/wp-sitemap.xml"], args.timeout)
+                                            f"{scheme}://{host}/wp-sitemap.xml"], args.timeout, prive_ok=sur)
         sm_urls, sm_files, sm_errors = more, sm_files + f2, sm_errors + e2
         lastmods.update(lm2)
     sitemap_set = set(sm_urls)
@@ -702,7 +633,7 @@ def crawl(args):
         if not args.ignore_robots and not robots.allowed("Googlebot", url):
             blocked.append(url)
             continue
-        res = fetch(url, timeout=args.timeout)
+        res = fetch_s(url, timeout=args.timeout)
         page, parser = analyze_page(url, res)
         page["depth"] = seen.get(url)
         page["in_sitemap"] = url in sitemap_set
@@ -759,7 +690,7 @@ def crawl(args):
         c = (p.get("canonicals") or [None])[0]
         if (c and c != p["url"] and c not in pages and c not in canon_targets and (internal(c) or variant(c))
                 and (args.ignore_robots or robots.allowed("Googlebot", c)) and len(canon_targets) < 50):
-            canon_targets[c], _ = analyze_page(c, fetch(c, timeout=args.timeout))
+            canon_targets[c], _ = analyze_page(c, fetch_s(c, timeout=args.timeout))
             time.sleep(args.delay)
 
     # --- images cassées (optionnel)
@@ -772,9 +703,9 @@ def crawl(args):
                 if s and s not in uniq:
                     uniq.append(s)
         for s in uniq[:args.check_images]:
-            r = fetch(s, timeout=args.timeout, method="HEAD")
+            r = fetch_s(s, timeout=args.timeout, method="HEAD")
             if r["status"] in (405, 501):
-                r = fetch(s, timeout=args.timeout, max_bytes=1024)
+                r = fetch_s(s, timeout=args.timeout, max_bytes=1024)
             if r["status"] >= 400 or r["status"] <= 0:
                 broken_imgs[s] = r["status"]
             time.sleep(args.delay / 2)
@@ -806,12 +737,12 @@ def crawl(args):
                                               "pages": list(pages.values())}))
     ecrire_json(out / "issues.json", publier(constats({"meta": {}, "provisoire": True})))
     # --- URL du sitemap non visitées (limite de pages atteinte) : quelques HEAD de preuve, bornés (voir sonder_sitemap)
-    sitemap_sondes = sonder_sitemap(sitemap_set, pages, host, scheme, robots, fetch, timeout=args.timeout,
+    sitemap_sondes = sonder_sitemap(sitemap_set, pages, host, scheme, robots, fetch_s, timeout=args.timeout,
                                     delai=args.delay, budget_s=args.budget_reseau, ignore_robots=args.ignore_robots)
     # --- modules du diffuseur : requêtes réseau éventuelles (liens externes, ressources), bornées en temps, puis constats
-    ctx = {"fetch": fetch, "timeout": args.timeout, "delai": args.delay, "host": host, "scheme": scheme,
+    ctx = {"fetch": fetch_s, "timeout": args.timeout, "delai": args.delay, "host": host, "scheme": scheme,
            "ua_navigateur": BROWSER_UA, "liens_externes_max": args.liens_externes, "delai_externe": args.delai_externe,
-           "ressources_max": args.ressources, "budget_reseau_s": args.budget_reseau, "meta": {},
+           "ressources_max": args.ressources, "budget_reseau_s": args.budget_reseau, "liens_prives": args.liens_prives, "meta": {},
            "sitemap_sondes": sitemap_sondes}
     html_observateurs.apres_crawl(pages, ctx)
     issues = constats(ctx)
@@ -1160,6 +1091,9 @@ def main():
     ap.add_argument("--check-images", type=int, default=0, help="vérifier le statut de N images uniques")
     ap.add_argument("--liens-externes", type=int, default=300, help="liens externes vérifiés au plus (0 = aucun)")
     ap.add_argument("--delai-externe", type=float, default=1.0, help="pause minimale entre deux requêtes vers un même hôte externe (s)")
+    ap.add_argument("--liens-prives", action="store_true", default=os.environ.get("AUDIT_LIENS_PRIVES") == "1",
+                    help="vérifier aussi les liens externes qui visent une adresse privée (banc de test local) ; sinon jamais contactés "
+                         "(hors hôte du site audité lui-même). Variable d'environnement : AUDIT_LIENS_PRIVES=1")
     ap.add_argument("--ressources", type=int, default=400, help="ressources du site vérifiées au plus (0 = aucune)")
     ap.add_argument("--budget-reseau", type=float, default=300, help="temps maximal des requêtes de chaque module réseau (s)")
     crawl(ap.parse_args())

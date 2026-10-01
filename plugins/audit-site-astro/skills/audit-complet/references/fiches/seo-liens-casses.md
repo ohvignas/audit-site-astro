@@ -8,6 +8,7 @@ declencheurs:
   - "crawl:http_4xx"
   - "crawl:external_broken"
   - "crawl:external_a_verifier"
+  - "crawl:external_non_verifie"
   - "lighthouse:http-status-code|code HTTP d.échec"
 sources:
   - https://developers.google.com/search/docs/crawling-indexing/http-network-errors
@@ -61,7 +62,7 @@ export default defineConfig({
 
 ## Liens vers d'autres sites
 
-Les clés `external_broken` (404, 410, nom de domaine inexistant) et `external_a_verifier` (401, 403, 429, 999 de LinkedIn, 5xx, délai dépassé) du même fichier concernent les liens sortants. Le crawler les vérifie avec un HEAD puis un GET d'un octet, au plus une requête par seconde et par hôte, en commençant par les liens présents sur le plus de pages ; le nombre de liens laissés de côté (plafond ou budget de temps) est dans `pages.json` (`meta.modules.liens_externes_non_verifies`). Un lien « à vérifier » n'est pas cassé : beaucoup de sites refusent les robots, ouvrez-le dans un navigateur avant de le corriger. Pour un lien réellement cassé, le remplacer par une page équivalente ou le retirer (`liens_depuis` indique la page à modifier).
+Les clés `external_broken` (404, 410, nom de domaine inexistant) et `external_a_verifier` (401, 403, 429, 999 de LinkedIn, 5xx, délai dépassé) du même fichier concernent les liens sortants. Le crawler les vérifie avec un HEAD puis un GET d'un octet, au plus une requête par seconde et par hôte, en commençant par les liens présents sur le plus de pages ; le nombre de liens laissés de côté (plafond ou budget de temps) est dans `pages.json` (`meta.modules.liens_externes_non_verifies`). Un lien « à vérifier » n'est pas cassé : beaucoup de sites refusent les robots, ouvrez-le dans un navigateur avant de le corriger (un 404 ou 410 est lui aussi confirmé par un second GET, mais un robot peut être traité autrement qu'un visiteur). La clé `external_non_verifie` (info) compte les liens laissés de côté et dit pourquoi : plafond, budget de temps, adresse privée (jamais contactée : un lien vers 127.0.0.1, 10.x ou 169.254.169.254, ou une redirection vers eux ou vers file://, n'est jamais suivi), réseau indisponible depuis la machine d'audit (aucun lien n'est alors déclaré cassé). Le crawler n'ouvre que http et https ; en nuage, exécutez l'audit avec une sortie réseau restreinte (pare-feu de sortie, pas d'accès aux métadonnées). Pour un lien réellement cassé, le remplacer par une page équivalente ou le retirer (`liens_depuis` indique la page à modifier).
 
 ## Critères d'acceptation
 
