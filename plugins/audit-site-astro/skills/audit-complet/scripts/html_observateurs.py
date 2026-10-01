@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-html_observateurs.py — Contrôles HTML du crawl en un seul passage du parseur (Python 3.9+, stdlib).
+html_observateurs.py — Contrôles HTML du crawl : une lecture du HTML partagée par les onze modules (en plus de celle de
+PageParser, dans crawl_site.py) (Python 3.9+, stdlib).
 
 crawl_site.py appelle, pour chaque page HTML analysée :
   analyser(html, entetes, url)  -> {nom_module: résultat JSON}   (pages.json, clé « obs » de chaque page)
@@ -9,11 +10,14 @@ puis, une fois le crawl terminé :
   issues(pages, add, ctx)       -> constats ajoutés à issues.json par add(clé, libellé, sévérité, exemple, n=, domaine=)
 
 Un module de MODULES fournit NOM, une classe Observateur (sous-classe de Observateur) et, au besoin, apres_crawl(pages, ctx)
-et issues(pages, add, ctx). Une erreur dans un module n'interrompt jamais le crawl (notée dans ctx["meta"]["erreurs_modules"]).
+et issues(pages, add, ctx). Une erreur dans un module n'interrompt jamais le crawl, qu'elle survienne à l'import, à l'instanciation, pendant la lecture, dans
+resultat() (un résultat qui n'est pas du JSON strict est remplacé par {"erreur": …}), dans apres_crawl ou dans issues : elle est
+notée dans obs[nom] = {"erreur": "Type: message"} et, avec le nom du module, dans ctx["meta"]["erreurs_modules"].
 Format commun des résultats : listes de {"signature": str, "n": int, …} ; collecter_groupes() et ajouter_groupes() regroupent
 les occurrences de tout le site par signature de composant (128 icônes identiques = 1 constat).
 """
 import importlib
+import json
 import re
 from html.parser import HTMLParser
 
@@ -31,6 +35,10 @@ CLASSE_REAFFICHE = re.compile(r"^(sm|md|lg|xl|2xl):(block|inline|inline-block|fl
 SANS_TEXTE_VISIBLE = {"script", "style", "noscript", "template", "textarea", "title"}
 
 
+def _erreur(e):
+    return "{0}: {1}".format(type(e).__name__, e)[:200]
+
+
 def masque(tag, a):
     """Élément absent de l'arbre d'accessibilité (ignoré par axe/Lighthouse) : hidden, aria-hidden, style, classe
     utilitaire de masquage, <template>, <noscript>, <dialog> fermé."""
@@ -42,7 +50,12 @@ def masque(tag, a):
 
 
 class Observateur:
-    """Base des observateurs : méthodes vides, à surcharger."""
+    """Base des observateurs : méthodes vides, à surcharger.
+
+    Surcharger debut, fin et texte DANS LA CLASSE : le diffuseur n'appelle un observateur que pour les méthodes que sa classe
+    surcharge (hérité d'une classe intermédiaire compris). Une méthode non surchargée n'est jamais appelée, et une méthode posée
+    sur l'instance (self.texte = …) est ignorée. Le texte d'un même nœud peut arriver en plusieurs appels de texte() (autour des
+    commentaires HTML, par exemple) : accumuler soi-même."""
 
     def __init__(self, entetes, url):
         self.entetes, self.url = entetes or {}, url
@@ -65,6 +78,9 @@ def dans(pile, *tags):
 
 
 def visible(pile):
+    """Texte hors des éléments sans texte rendu (script, style, noscript, template, textarea, title) et hors d'un ancêtre masqué
+    (hidden, aria-hidden, display:none…) : logique de l'arbre d'accessibilité, pas exactement de l'écran (sr-only est visible,
+    aria-hidden ne l'est pas)."""
     return not (pile and pile[-1]["masque"]) and not dans(pile, *SANS_TEXTE_VISIBLE)
 
 
@@ -77,7 +93,11 @@ def _surcharge(o, methode):
 
 
 class Diffuseur(HTMLParser):
-    """Parcourt le HTML une fois et transmet les événements à chaque observateur, avec la pile des ancêtres."""
+    """Parcourt le HTML une fois et transmet les événements à chaque observateur, avec la pile des ancêtres.
+
+    Écarts connus avec un navigateur (identiques à PageParser) : un élément non vide écrit en balise auto-fermante hors SVG
+    (<a href="/x" />) est fermé aussitôt ; pas de fermeture implicite à la HTML5 (<p> avant <div>) ; les noms de balises et
+    d'attributs sont en minuscules (viewbox, clippath, foreignobject) ; pour un attribut en double, la première valeur l'emporte."""
 
     def __init__(self, observateurs):
         super().__init__(convert_charrefs=True)
@@ -91,13 +111,15 @@ class Diffuseur(HTMLParser):
             try:
                 f(*args)
             except Exception as e:  # observateur fautif : retiré partout, les autres continuent
-                self.erreurs[id(o)] = "{0}: {1}".format(type(e).__name__, e)[:200]
+                self.erreurs[id(o)] = _erreur(e)
                 self.obs.remove(o)
                 for m in EVENEMENTS:
                     self._envoi[m] = [c for c in self._envoi[m] if c[0] is not o]
 
     def _noeud(self, tag, attrs):
-        a = {k.lower(): (v or "") for k, v in attrs}
+        a = {}
+        for k, v in attrs:
+            a.setdefault(k.lower(), v or "")  # attribut en double : le premier compte, comme dans un navigateur
         return {"tag": tag, "a": a, "masque": bool(self.pile and self.pile[-1]["masque"]) or masque(tag, a)}
 
     def handle_starttag(self, tag, attrs):
@@ -135,35 +157,65 @@ class Diffuseur(HTMLParser):
 
 
 _CHARGES = []
+_ERREURS_IMPORT = {}
 
 
 def modules():
-    if not _CHARGES:
-        _CHARGES.extend((nom, importlib.import_module(nom)) for nom in MODULES)
+    """[(nom, module)] des modules importés. Un module qui ne s'importe pas (ImportError, SyntaxError sous une version de
+    Python plus ancienne…) est écarté et noté dans _ERREURS_IMPORT : les autres continuent."""
+    if not _CHARGES and not _ERREURS_IMPORT:
+        for nom in MODULES:
+            try:
+                _CHARGES.append((nom, importlib.import_module(nom)))
+            except Exception as e:  # SyntaxError, ImportError, erreur à l'exécution du module
+                _ERREURS_IMPORT[nom] = _erreur(e)
     return _CHARGES
 
 
-def analyser(html, entetes, url, modules=None):
-    obs = []
-    for nom, mod in (modules if modules is not None else globals()["modules"]()):
+def analyser(html, entetes, url, modules=None, erreurs=None):
+    """{nom: résultat} pour chaque module. `erreurs` (liste, facultatif) reçoit « parse: … » si la lecture du HTML s'est arrêtée."""
+    res, obs = {}, []
+    if modules is None:
+        charges = globals()["modules"]()
+        res.update({nom: {"erreur": msg} for nom, msg in _ERREURS_IMPORT.items()})
+    else:
+        charges = modules
+    for nom, mod in charges:
         cls = getattr(mod, "Observateur", None)
-        if cls is not None:
+        if cls is None:
+            continue
+        try:
             obs.append((nom, cls(entetes, url)))
+        except Exception as e:  # __init__ fautif : module ignoré pour cette page
+            res[nom] = {"erreur": _erreur(e)}
     d = Diffuseur([o for _, o in obs])
     d.analyser(html)
-    res = {}
+    if erreurs is not None:
+        erreurs.extend(sorted({m for i, m in d.erreurs.items() if m.startswith("parse: ")}))
     for nom, o in obs:
         if id(o) in d.erreurs and o not in d.obs:
             res[nom] = {"erreur": d.erreurs[id(o)]}
             continue
         try:
-            res[nom] = o.resultat()
+            r = o.resultat()
+            json.dumps(r, allow_nan=False)  # le résultat finit dans pages.json : JSON strict exigé
+            res[nom] = r
         except Exception as e:
-            res[nom] = {"erreur": "{0}: {1}".format(type(e).__name__, e)[:200]}
-    return res
+            res[nom] = {"erreur": _erreur(e)}
+    return {nom: res[nom] for nom in sorted(res, key=lambda n: _ordre(n))}
+
+
+def _ordre(nom):
+    return MODULES.index(nom) if nom in MODULES else len(MODULES)
+
+
+def _noter_erreurs_import(ctx):
+    for nom, msg in _ERREURS_IMPORT.items():
+        ctx.setdefault("meta", {}).setdefault("erreurs_modules", {})[nom] = msg
 
 
 def _appeler(nom_fonction, ctx, *args):
+    _noter_erreurs_import(ctx)
     for nom, mod in modules():
         f = getattr(mod, nom_fonction, None)
         if f is None:
@@ -171,10 +223,24 @@ def _appeler(nom_fonction, ctx, *args):
         try:
             f(*args)
         except Exception as e:
-            ctx.setdefault("meta", {}).setdefault("erreurs_modules", {})[nom] = "{0}: {1}".format(type(e).__name__, e)[:200]
+            ctx.setdefault("meta", {}).setdefault("erreurs_modules", {})[nom] = _erreur(e)
+
+
+def _noter_erreurs_des_pages(pages, ctx):
+    """Reporte dans meta.erreurs_modules les modules en erreur sur au moins une page (première erreur + nombre de pages)."""
+    vues = {}
+    for p in pages.values():
+        for nom, r in (p.get("obs") or {}).items():
+            if isinstance(r, dict) and set(r) == {"erreur"}:
+                premiere, n = vues.get(nom, (r["erreur"], 0))
+                vues[nom] = (premiere, n + 1)
+    for nom, (msg, n) in sorted(vues.items()):
+        ctx.setdefault("meta", {}).setdefault("erreurs_modules", {}).setdefault(
+            nom, "{0} ({1} page{2})".format(msg, n, "s" if n > 1 else ""))
 
 
 def apres_crawl(pages, ctx):
+    _noter_erreurs_des_pages(pages, ctx)
     _appeler("apres_crawl", ctx, pages, ctx)
 
 

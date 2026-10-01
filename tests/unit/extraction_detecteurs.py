@@ -61,6 +61,16 @@ def appels(source, nom, indice_message, env=None):
     return out
 
 
+def _argument(appel, rang, mot_cle, ou):
+    """Argument de clé d'un appel : positionnel (rang) ou, à défaut, par mot-clé ; ValueError s'il manque (jamais ignoré)."""
+    if len(appel.args) > rang:
+        return appel.args[rang]
+    for k in appel.keywords:
+        if k.arg == mot_cle:
+            return k.value
+    raise ValueError(f"clé d'issue absente ({ou}) : {ast.unparse(appel)}")
+
+
 def cles_crawl(source):
     """Clés d'issue de crawl_site.py : 1er argument de `add(...)`, 2ᵉ de `ajouter_groupes(add, ...)`, 1er de `issues.setdefault(...)` et `issues["clé"] = …`.
     Lève ValueError si un de ces arguments n'est pas un littéral (l'extraction ne serait plus fiable)."""
@@ -78,11 +88,11 @@ def cles_crawl(source):
     for n in ast.walk(arbre):
         if id(n) in interne:
             continue
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "add" and n.args:
-            lit(n.args[0], "add")  # add(…) nu seulement : jamais ensemble.add(x) (crawl_site.py en a 8, T14 aussi)
-        elif (isinstance(n, ast.Call) and len(n.args) > 1
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "add":
+            lit(_argument(n, 0, "key", "add"), "add")  # add(…) nu seulement : jamais ensemble.add(x) (crawl_site.py en a 8, T14 aussi)
+        elif (isinstance(n, ast.Call)
               and (getattr(n.func, "id", None) == "ajouter_groupes" or getattr(n.func, "attr", None) == "ajouter_groupes")):
-            lit(n.args[1], "ajouter_groupes")  # (html_observateurs.)ajouter_groupes(add, "clé", …)
+            lit(_argument(n, 1, "cle", "ajouter_groupes"), "ajouter_groupes")  # (html_observateurs.)ajouter_groupes(add, "clé", …)
         elif (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "setdefault"
               and ast.unparse(n.func.value) == "issues" and n.args):
             lit(n.args[0], "issues.setdefault")

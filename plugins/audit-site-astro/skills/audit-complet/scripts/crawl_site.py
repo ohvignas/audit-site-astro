@@ -47,7 +47,8 @@ SKIP_QUERY = re.compile(r"(^|&)(replytocom|share|add-to-cart|add_to_wishlist|pre
 COUNT_TAGS = {"ul", "ol", "table", "time", "main", "article", "iframe", "video", "form", "nav", "script", "link"}
 SKIP_TEXT_TAGS = {"script", "style", "noscript", "svg", "template"}
 # Chemins de CSS/JS nécessaires au rendu : WordPress, Astro (/_astro/), Next.js (/_next/)
-# Constantes de masquage et contrôles HTML additionnels : html_observateurs.py (un passage du parseur, onze modules)
+# Constantes de masquage et contrôles HTML additionnels : html_observateurs.py (une lecture partagée par onze modules,
+# en plus de celle de PageParser)
 import html_observateurs  # noqa: E402
 from html_observateurs import VOID_TAGS, masque  # noqa: E402,F401
 
@@ -478,6 +479,23 @@ def parse_sitemaps(start_urls, timeout, limit_maps=200):
 
 # --------------------------------------------------------------------------- analyse
 
+def ecrire_json(chemin, objet):
+    """Écrit `objet` en JSON dans `chemin` de façon atomique : fichier temporaire du même dossier puis os.replace. Si la
+    sérialisation échoue, l'ancien fichier reste intact et aucun fichier temporaire ne traîne."""
+    chemin = Path(chemin)
+    tmp = chemin.with_name(chemin.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(objet, f, ensure_ascii=False, indent=1)
+        os.replace(str(tmp), str(chemin))
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def analyze_page(url, res):
     page = {
         "url": url,
@@ -509,7 +527,10 @@ def analyze_page(url, res):
         parser.feed(html)
     except Exception as e:
         page["error"] = f"parse: {e}"
-    observations = html_observateurs.analyser(html, res["headers"], url)
+    erreurs_lecture = []
+    observations = html_observateurs.analyser(html, res["headers"], url, erreurs=erreurs_lecture)
+    if erreurs_lecture and not page["error"]:
+        page["error"] = erreurs_lecture[0]
     robots_meta = (parser.metas.get("robots", "") + "," + parser.metas.get("googlebot", "")).lower()
     xr = page["x_robots_tag"].lower()
     types, jl_err, _ = jsonld_types(parser.jsonld_raw)
@@ -718,27 +739,34 @@ def crawl(args):
                 broken_imgs[s] = r["status"]
             time.sleep(args.delay / 2)
 
-    # --- pages.json écrit tout de suite : si le délai de l'étape coupe les contrôles réseau, les données du crawl restent
-    with open(out / "pages.json", "w", encoding="utf-8") as f:
-        json.dump({"meta": {"start_url": start, "host": host, "pages_crawled": len(pages), "partiel": True},
-                   "pages": list(pages.values())}, f, ensure_ascii=False, indent=1)
+    def constats(ctx_):
+        """issues.json du crawl : build_issues puis les constats ajoutés ici (sitemap relatif, UTM)."""
+        issues_ = build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_links,
+                               nofollow_internal, broken_imgs, host, scheme, canon_targets, ctx_)
+        if relative_sitemaps:
+            issues_["robots_sitemap_relative"] = {
+                "label": "Directive Sitemap relative dans robots.txt (Google exige une URL absolue)",
+                "severity": "moyenne", "count": len(relative_sitemaps), "examples": relative_sitemaps}
+        for tgt, srcs in utm_links.items():
+            it = issues_.setdefault("utm_internal", {
+                "label": "Liens internes avec paramètres UTM (faussent l'analytics, dupliquent les URL)",
+                "severity": "basse", "count": 0, "examples": []})
+            it["count"] += 1
+            if len(it["examples"]) < 25:
+                it["examples"].append({"lien": tgt, "depuis": sorted(srcs)[:3]})
+        return issues_
+
+    # --- pages.json et issues.json provisoires écrits tout de suite (atomiquement) : si le délai de l'étape coupe les
+    #     contrôles réseau, les données et les constats du crawl restent ; les modules n'y ajoutent rien (ctx "provisoire")
+    ecrire_json(out / "pages.json", {"meta": {"start_url": start, "host": host, "pages_crawled": len(pages), "partiel": True},
+                                      "pages": list(pages.values())})
+    ecrire_json(out / "issues.json", constats({"meta": {}, "provisoire": True}))
     # --- modules du diffuseur : requêtes réseau éventuelles (liens externes, ressources), bornées en temps, puis constats
     ctx = {"fetch": fetch, "timeout": args.timeout, "delai": args.delay, "host": host, "scheme": scheme,
            "ua_navigateur": BROWSER_UA, "liens_externes_max": args.liens_externes, "delai_externe": args.delai_externe,
            "ressources_max": args.ressources, "budget_reseau_s": args.budget_reseau, "meta": {}}
     html_observateurs.apres_crawl(pages, ctx)
-    issues = build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_links,
-                          nofollow_internal, broken_imgs, host, scheme, canon_targets, ctx)
-    if relative_sitemaps:
-        issues["robots_sitemap_relative"] = {"label": "Directive Sitemap relative dans robots.txt (Google exige une URL absolue)",
-                                             "severity": "moyenne", "count": len(relative_sitemaps),
-                                             "examples": relative_sitemaps}
-    for tgt, srcs in utm_links.items():
-        it = issues.setdefault("utm_internal", {"label": "Liens internes avec paramètres UTM (faussent l'analytics, dupliquent les URL)",
-                                                "severity": "basse", "count": 0, "examples": []})
-        it["count"] += 1
-        if len(it["examples"]) < 25:
-            it["examples"].append({"lien": tgt, "depuis": sorted(srcs)[:3]})
+    issues = constats(ctx)
 
     meta = {
         "start_url": start, "host": host, "pages_crawled": len(pages), "max_pages": args.max_pages,
@@ -752,10 +780,8 @@ def crawl(args):
         "astra_detected": any(p.get("astra") for p in pages.values()),
         "astro_detected": any(p.get("astro") for p in pages.values()),
     }
-    with open(out / "pages.json", "w", encoding="utf-8") as f:
-        json.dump({"meta": meta, "pages": list(pages.values())}, f, ensure_ascii=False, indent=1)
-    with open(out / "issues.json", "w", encoding="utf-8") as f:
-        json.dump(issues, f, ensure_ascii=False, indent=1)
+    ecrire_json(out / "pages.json", {"meta": meta, "pages": list(pages.values())})
+    ecrire_json(out / "issues.json", issues)
     write_csv(out / "pages.csv", pages.values())
     write_summary(out / "summary.md", meta, pages, issues)
     print(f"[ok] {len(pages)} pages — résultats dans {out}", file=sys.stderr)
@@ -965,7 +991,8 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
         add("nofollow_internal", "Liens internes en nofollow", "basse", {"url": tgt, "n": n}, n=n)
     for src, st in broken_imgs.items():
         add("broken_images", "Images cassées", "moyenne", {"src": src, "status": st})
-    html_observateurs.issues(pages, add, ctx)
+    if not ctx.get("provisoire"):  # issues.json provisoire (avant les contrôles réseau) : sans les constats des modules
+        html_observateurs.issues(pages, add, ctx)
     return issues
 
 
