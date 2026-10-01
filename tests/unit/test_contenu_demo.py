@@ -80,6 +80,122 @@ class TestFauxPositifs(unittest.TestCase):
         self.assertEqual(motifs(html), [("lorem ipsum", "texte")])
 
 
+LOREM = "<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>"
+GABARIT = [("gabarit de démarrage", "titre")]
+
+
+class TestFrontieresDeBloc(unittest.TestCase):
+    """Revue T7 I1 : un guillemet orphelin d'un autre bloc ne fait pas taire un vrai placeholder ; la jointure ne fabrique pas de motif."""
+
+    def test_guillemet_orphelin_ailleurs(self):
+        for avant in ("<nav>« Page précédente</nav>", "<nav>&laquo; Précédent</nav>", '<p>Écran 27" 4K</p>',
+                      "<p>He said \u201chello</p>", '<p>"a" "b" "c</p>'):
+            self.assertEqual(motifs(avant + LOREM), [("lorem ipsum", "texte")], avant)
+
+    def test_jointure_entre_blocs_sans_motif(self):
+        self.assertEqual(motifs("<ul><li>Fenêtres à remplacer</li><li>Par votre menuisier habituel</li></ul>"), [])
+        self.assertEqual(motifs("<h2>Sed do</h2><p>Lorem</p><p>ipsum dolor</p>"), [])
+
+    def test_description_independante_de_og(self):
+        html = ('<head><meta name="description" content="Écran 27&quot;"><meta property="og:description" '
+                'content="Lorem ipsum dolor sit amet"></head>')
+        self.assertEqual(motifs(html), [("lorem ipsum", "description")])
+
+    def test_phrase_coupee_par_une_balise_en_ligne_reste_lue(self):
+        self.assertEqual(motifs("<p>Lorem <em>ipsum</em> dolor sit</p>"), [("lorem ipsum", "texte")])
+
+    def test_guillemets_simples_et_longue_citation(self):
+        for cite_ in ("<p>'Lorem ipsum dolor sit amet'</p>", "<p>\u2018Lorem ipsum dolor sit amet\u2019</p>",
+                      "<p>\u201eLorem ipsum dolor sit amet\u201c</p>",
+                      "<p>« " + "Le texte classique des imprimeurs, repris partout, " * 5 + "Lorem ipsum dolor sit amet »</p>"):
+            self.assertEqual(motifs(cite_), [], cite_)
+
+    def test_gabarit_basics_html_reel(self):  # examples/basics : le code est exclu, le reste du h1 doit suffire
+        html = "<h1>To get started, open the <code><pre>src/pages</pre></code> directory in your project.</h1>"
+        self.assertEqual(motifs(html), [("gabarit de démarrage", "texte")])
+
+
+class TestRestesDesGabarits(unittest.TestCase):
+    """Revue T7 I2 : chaque ancre sûre a son test de rappel et son test de faux positif."""
+
+    def test_titre_ou_description_par_defaut_blog_basics_starlight(self):
+        self.assertEqual(motifs("<head><title>Astro Basics</title></head>"), GABARIT)
+        self.assertEqual(motifs("<head><title>Astro Blog</title></head>"), GABARIT)
+        self.assertEqual(motifs("<head><title>Getting started | My Docs</title></head>"), GABARIT)
+        self.assertEqual(motifs('<head><meta name="description" content="Welcome to my website!"></head>'),
+                         [("gabarit de démarrage", "description")])
+        self.assertEqual(motifs('<head><meta property="og:description" content="Get started building your docs site with Starlight."></head>'),
+                         [("gabarit de démarrage", "description")])
+        self.assertEqual(motifs('<head><meta name="description" content="A guide in my new Starlight docs site."></head>'),
+                         [("gabarit de démarrage", "description")])
+
+    def test_titre_ou_description_par_defaut_faux_positifs(self):
+        for titre in ("Astro Blog : nos actualités sur le framework", "Notre avis sur Astro Basics et ses limites", "Mes docs"):
+            self.assertEqual(motifs("<head><title>%s</title></head>" % titre), [], titre)
+        for desc in ("Welcome to my website, a place about woodworking.", "Bienvenue sur Astro Blog", "Get started building with Astro."):
+            self.assertEqual(motifs('<head><meta name="description" content="%s"></head>' % desc), [], desc)
+
+    def test_phrases_longues_du_gabarit(self):
+        self.assertEqual(motifs("<p>Welcome to the official Astro blog starter template</p>"), [("gabarit de démarrage", "texte")])
+        self.assertEqual(motifs("<p>Congrats on setting up a new Starlight project!</p>"), [("gabarit de démarrage", "texte")])
+        self.assertEqual(motifs("<h1>\U0001F9D1\u200d\U0001F680 Hello, Astronaut!</h1>"), [("gabarit de démarrage", "texte")])
+
+    def test_phrases_longues_faux_positifs(self):
+        self.assertEqual(motifs("<p>Le chat dit Hello, Astronaut! au chien.</p>"), [])
+        self.assertEqual(motifs("<p>Le blog officiel d'Astro propose un gabarit de blog.</p>"), [])
+
+    def test_lorem_mots_de_queue(self):
+        for t in ("Sed do eiusmod tempor", "ut labore et dolore, incididunt ut labore", "Ut enim ad minim veniam", "adipisicing elit",
+                  "Vitae ultricies leo integer"):
+            self.assertEqual(motifs("<p>%s</p>" % t), [("lorem ipsum", "texte")], t)
+
+    def test_lorem_mots_de_queue_faux_positifs(self):
+        for t in ("Ad hoc, minimum veniam au quotidien.", "Un sed de plus.", "Il travaille ut labore."):
+            self.assertEqual(motifs("<p>%s</p>" % t), [], t)
+
+    def test_copyright_fictif(self):
+        for t in ("© 2026 Votre Nom. Tous droits réservés.", "Copyright Your Company", "&copy; 2026 Your name here", "© Company Name",
+                  "© Nom de l'entreprise"):
+            self.assertEqual(motifs("<footer>%s</footer>" % t), [("coordonnées fictives", "texte")], t)
+
+    def test_copyright_faux_positifs(self):
+        for t in ("<label>Votre nom</label>", "<h1>Your Name</h1>", "© 2026 ILLITH", "Nom de l'entreprise : ILLITH", "Votre nom complet"):
+            self.assertEqual(motifs("<div>%s</div>" % t), [], t)
+
+    def test_liens_fictifs(self):
+        for href in ("mailto:contact@example.com", "mailto:hello@yourdomain.com", "mailto:moi@votredomaine.fr", "tel:+15555550123",
+                     "tel:(555) 123-4567", "tel:0123456789", "tel:01 23 45 67 89"):
+            self.assertEqual(motifs('<a href="%s">Contact</a>' % href), [("coordonnées fictives", "texte")], href)
+
+    def test_liens_fictifs_faux_positifs(self):
+        for html in ('<a href="mailto:contact@illith.com">c</a>', '<a href="tel:+33612345678">t</a>', "<p>Écrire à email@example.com</p>",
+                     "<code>mailto:contact@example.com</code>", '<a hidden href="mailto:contact@example.com">c</a>',
+                     '<a href="https://example.com/">exemple</a>', '<a href="tel:+33 4 91 02 03 04">t</a>'):
+            self.assertEqual(motifs(html), [], html)
+
+    def test_page_d_attente_dans_le_titre(self):
+        for t in ("Coming soon", "Under construction", "Site en construction", "Bientôt disponible"):
+            self.assertEqual(motifs("<head><title>%s</title></head>" % t), GABARIT, t)
+
+    def test_page_d_attente_faux_positifs(self):
+        self.assertEqual(motifs("<head><title>Coming soon à Paris : notre boutique</title></head><body><span>Bientôt disponible</span></body>"), [])
+
+
+class TestAReplacerAgence(unittest.TestCase):
+    """Revue T7 I3 : phrases plausibles d'une agence de refonte."""
+
+    def test_agence_non_signalee(self):
+        for t in ("Votre ancien site est à remplacer par votre nouveau site Astro.",
+                  "Les pages obsolètes sont à remplacer par vos nouvelles pages optimisées.",
+                  "Le champ est à remplacer par le contenu de votre base.", "Cette fenêtre est à remplacer par un vrai bois massif."):
+            self.assertEqual(motifs("<p>%s</p>" % t), [], t)
+
+    def test_gabarit_signale(self):
+        for t in ("Texte à remplacer par la vôtre", "À remplacer par votre texte", "à remplacer par votre propre logo",
+                  "à remplacer par un vrai texte", "à remplacer par le contenu réel", "(à remplacer)"):
+            self.assertEqual(motifs("<p>%s</p>" % t), [("texte à remplacer", "texte")], t)
+
+
 class TestObservateur(unittest.TestCase):
     def test_methodes_dans_la_classe(self):
         for m in ("debut", "fin", "texte"):

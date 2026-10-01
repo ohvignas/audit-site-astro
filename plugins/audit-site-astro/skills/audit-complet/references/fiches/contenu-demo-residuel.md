@@ -54,5 +54,6 @@ python3 -c "import json;print(json.load(open('/tmp/verif/crawl/issues.json')).ge
 ## Pièges et retour arrière
 
 - Un article qui parle de « lorem ipsum » est un faux positif : vérifier l'extrait cité avant de corriger.
+- Une page qui présente un thème (« la page de démonstration du thème X »), un article sur le « contenu factice » ou le « texte de remplissage », ou un extrait de code rendu sans `<pre>` ni `<code>` peuvent être signalés à tort : seule une phrase comme « à remplacer par la vôtre » est certaine.
 - Retirer une valeur par défaut peut laisser des pages sans description : relancer le crawl et traiter `desc_missing`.
 - Retour arrière : `git revert` du commit de contenu.
