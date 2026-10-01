@@ -712,6 +712,14 @@ def crawl(args):
         p["inlinks"] = len(inlinks.get(u, ()))
         p["inlink_anchors"] = anchors[u].most_common(10)
 
+    # --- URL du sitemap non visitées (limite de pages atteinte) : HEAD, premier code de la chaîne de redirections (20 au plus)
+    sitemap_sondes = {}
+    for u in sorted(u for u in sitemap_set if u not in pages and (args.ignore_robots or robots.allowed("Googlebot", u)))[:20]:
+        r = fetch(u, timeout=args.timeout, method="HEAD")
+        sitemap_sondes[u] = {"statut": r["chain"][0]["status"] if r["chain"] else r["status"],
+                             "vers": normalize(r["final_url"]) or r["final_url"]}
+        time.sleep(args.delay)
+
     # --- cibles de canonical jamais crawlées (page non liée) : vérifier quand même leur statut (50 au plus).
     # Seules les pages analysées (HTML 200 sans redirection) portent des canonicals ; robots.txt est respecté.
     canon_targets = {}
@@ -760,11 +768,12 @@ def crawl(args):
     #     contrôles réseau, les données et les constats du crawl restent ; les modules n'y ajoutent rien (ctx "provisoire")
     ecrire_json(out / "pages.json", {"meta": {"start_url": start, "host": host, "pages_crawled": len(pages), "partiel": True},
                                       "pages": list(pages.values())})
-    ecrire_json(out / "issues.json", constats({"meta": {}, "provisoire": True}))
+    ecrire_json(out / "issues.json", constats({"meta": {}, "provisoire": True, "sitemap_sondes": sitemap_sondes}))
     # --- modules du diffuseur : requêtes réseau éventuelles (liens externes, ressources), bornées en temps, puis constats
     ctx = {"fetch": fetch, "timeout": args.timeout, "delai": args.delay, "host": host, "scheme": scheme,
            "ua_navigateur": BROWSER_UA, "liens_externes_max": args.liens_externes, "delai_externe": args.delai_externe,
-           "ressources_max": args.ressources, "budget_reseau_s": args.budget_reseau, "meta": {}}
+           "ressources_max": args.ressources, "budget_reseau_s": args.budget_reseau, "meta": {},
+           "sitemap_sondes": sitemap_sondes}
     html_observateurs.apres_crawl(pages, ctx)
     issues = constats(ctx)
 
@@ -806,10 +815,24 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
             it["examples"].append(example)
 
     html_ok = [p for p in pages.values() if p.get("is_html") and p["final_status"] == 200 and not p["redirect_hops"]]
+    sondes = ctx.get("sitemap_sondes", {})
+    bare = host[4:] if host.startswith("www.") else host
+
+    def equivalent(u):
+        """Page crawlée équivalente à une URL du sitemap jamais visitée : même chemin sur l'hôte et le schéma du crawl
+        (sitemap en http:// derrière un proxy, variante www). Sans elle, la page passait pour absente du sitemap."""
+        if u in pages:
+            return None
+        p = urlparse(u)
+        if p.netloc not in (host, bare, "www." + bare):
+            return None
+        e = urlunparse((scheme, host, p.path or "/", p.params, p.query, ""))
+        return e if e != u and e in pages else None
+
     sitemap_eff = set()
     for u in sitemap_set:
         sp = pages.get(u)
-        sitemap_eff.add(sp["final_url"] if sp and sp["redirect_hops"] else u)
+        sitemap_eff.add(sp["final_url"] if sp and sp["redirect_hops"] else (equivalent(u) or u))
     indexable = []
     for p in html_ok:
         canon = p.get("canonicals") or []
@@ -874,8 +897,10 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
                 add("deep_page", "Pages à plus de 3 clics de l'accueil", "moyenne", {"url": u, "profondeur": p["depth"]})
             if not p.get("jsonld_types"):
                 add("no_jsonld", "Aucune donnée structurée JSON-LD", "basse", u)
-            if not (p.get("og_title") and p.get("og_image")):
-                add("og_missing", "Open Graph incomplet (og:title / og:image)", "basse", u)
+            if not p.get("og_title"):
+                add("og_title_absent", "Open Graph : og:title absent (titre de l'aperçu de partage)", "basse", u)
+            if not p.get("og_image"):
+                add("og_image_absent", "Open Graph : og:image absent (aucune image d'aperçu de partage)", "basse", u)
             if sm_urls and p["url"] not in sitemap_eff:
                 add("not_in_sitemap", "Pages indexables absentes du sitemap", "moyenne", u)
         canon = p.get("canonicals") or []
@@ -952,15 +977,23 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
 
     if not sitemap_set:
         add("no_sitemap", "Aucun sitemap XML trouvé (robots.txt, /sitemap_index.xml, /wp-sitemap.xml)", "haute")
-    for u in sitemap_set:
-        p = pages.get(u)
-        if not p:
+    lib_redir = "URL du sitemap qui redirigent (souvent http:// ou slash final incohérent)"
+    for u in sorted(sitemap_set):
+        p, eq = pages.get(u), equivalent(u)
+        if not p and not eq:
+            s = sondes.get(u)
+            if s and 300 <= s["statut"] < 400:
+                add("sitemap_redirect", lib_redir, "moyenne", {"url": u, "vers": s["vers"], "statut": s["statut"]})
             continue
-        cible = p
-        if p["redirect_hops"]:
-            add("sitemap_redirect", "URL du sitemap qui redirigent (souvent http:// ou slash final incohérent)", "moyenne",
-                {"url": u, "vers": p["final_url"]})
-            cible = pages.get(p["final_url"]) or p
+        if not p:  # variante d'une page crawlée, jamais visitée : la redirection est déduite (ou sondée)
+            add("sitemap_redirect", lib_redir, "moyenne",
+                {"url": u, "vers": eq, "statut": sondes.get(u, {}).get("statut", "non vérifié (limite de crawl atteinte)")})
+            cible = pages[eq]
+        else:
+            cible = p
+            if p["redirect_hops"]:
+                add("sitemap_redirect", lib_redir, "moyenne", {"url": u, "vers": p["final_url"]})
+                cible = pages.get(p["final_url"]) or p
         # une redirection ne masque plus l'état de la cible : 404 et noindex restent signalés
         if cible["final_status"] != 200:
             add("sitemap_non200", "URL du sitemap en erreur", "haute", {"url": u, "status": cible["final_status"]})
@@ -970,7 +1003,7 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
             add("sitemap_canonicalized", "URL du sitemap canonisées ailleurs", "moyenne",
                 {"url": u, "canonical": cible["canonicals"][0]})
     home_url = next(iter(pages), None)
-    for u in sitemap_eff:
+    for u in sorted(sitemap_eff):
         p = pages.get(u)
         if p and not inlinks.get(u) and p.get("final_status") == 200 and not p["redirect_hops"] and u != home_url:
             add("orphan", "Pages orphelines (dans le sitemap, aucun lien interne trouvé)", "moyenne", u)

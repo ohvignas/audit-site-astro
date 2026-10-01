@@ -1,3 +1,4 @@
+from collections import Counter
 import json
 import pathlib
 import subprocess
@@ -89,6 +90,49 @@ class TestCrawlLocal(unittest.TestCase):
         it = self.issues.get("form_no_label", {})
         self.assertEqual(it.get("count"), 1)
         self.assertTrue(it["examples"][0]["url"].endswith("/formulaire"))
+
+
+sys.path.insert(0, str(CRAWL.parent))
+import crawl_site  # noqa: E402
+
+
+def page_ok(u, og_image=True):
+    return {"url": u, "status": 200, "final_status": 200, "final_url": u, "redirect_hops": 0, "redirect_chain": [],
+            "is_html": True, "canonicals": [u], "title": "Titre de test suffisamment long " + u[-2:],
+            "meta_description": "Description de test assez longue pour ne déclencher aucun contrôle de longueur " + u,
+            "h1": ["Titre"], "content_words": 400, "depth": 1, "jsonld_types": ["Organization"], "og_title": True,
+            "og_image": og_image, "lang": "fr", "viewport": True, "ttfb": 0.1}
+
+
+class TestSitemapVariantes(unittest.TestCase):
+    """beta.illith.com (2026-10-01) : sitemap en http://, limite de 40 pages atteinte avant la phase « sitemap »."""
+
+    def test_sitemap_http_non_visite(self):
+        pages = {"https://ex.fr/": page_ok("https://ex.fr/"), "https://ex.fr/a": page_ok("https://ex.fr/a", og_image=False)}
+        sm = ["http://ex.fr/a", "http://ex.fr/"]
+        ctx = {"meta": {}, "sitemap_sondes": {"http://ex.fr/": {"statut": 301, "vers": "https://ex.fr/"}}}
+        issues = crawl_site.build_issues(pages, {"https://ex.fr/a": {"https://ex.fr/"}}, set(sm), sm, [],
+                                         crawl_site.RobotsTxt("User-agent: *\nAllow: /\n"), {}, Counter(), {},
+                                         "ex.fr", "https", {}, ctx)
+        self.assertNotIn("not_in_sitemap", issues)
+        self.assertEqual(issues["sitemap_redirect"]["examples"], [
+            {"url": "http://ex.fr/", "vers": "https://ex.fr/", "statut": 301},
+            {"url": "http://ex.fr/a", "vers": "https://ex.fr/a", "statut": "non vérifié (limite de crawl atteinte)"}])
+        self.assertEqual(issues["og_image_absent"]["examples"], ["https://ex.fr/a"])
+        self.assertNotIn("og_title_absent", issues)
+        self.assertNotIn("og_missing", issues)
+
+    def test_url_de_sitemap_sondee_quand_la_limite_est_atteinte(self):
+        routes = {"/": (200, HTML, page("<p>Accueil</p>")),
+                  "/sitemap.xml": (200, {"Content-Type": "application/xml"},
+                                   '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>@@BASE@@/r/a</loc></url></urlset>'),
+                  "/r/a": (301, {"Location": "/a"}, ""), "/a": (200, HTML, page("<p>A</p>"))}
+        with SiteLocal(routes) as site, tempfile.TemporaryDirectory() as d:
+            r = subprocess.run([sys.executable, str(CRAWL), site.url, "--out", d, "--delay", "0", "--max-pages", "1",
+                                "--timeout", "5", "--liens-externes", "0", "--ressources", "0"], capture_output=True, text=True, timeout=120)
+            self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+            ex = json.loads(pathlib.Path(d, "issues.json").read_text(encoding="utf-8"))["sitemap_redirect"]["examples"]
+            self.assertEqual(ex, [{"url": site.base + "/r/a", "vers": site.base + "/a", "statut": 301}])
 
 
 if __name__ == "__main__":
