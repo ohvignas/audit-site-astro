@@ -62,7 +62,7 @@ def appels(source, nom, indice_message, env=None):
 
 
 def cles_crawl(source):
-    """Clés d'issue de crawl_site.py : 1er argument de `add(...)`, de `issues.setdefault(...)` et `issues["clé"] = …`.
+    """Clés d'issue de crawl_site.py : 1er argument de `add(...)`, 2ᵉ de `ajouter_groupes(add, ...)`, 1er de `issues.setdefault(...)` et `issues["clé"] = …`.
     Lève ValueError si un de ces arguments n'est pas un littéral (l'extraction ne serait plus fiable)."""
     cles = set()
 
@@ -73,12 +73,16 @@ def cles_crawl(source):
 
     arbre = ast.parse(source)
     # le corps de l'aide `add(key, …)` elle-même utilise `issues.setdefault(key, …)` avec une variable : à ignorer
-    interne = {id(x) for f in ast.walk(arbre) if isinstance(f, ast.FunctionDef) and f.name == "add" for x in ast.walk(f)}
+    interne = {id(x) for f in ast.walk(arbre) if isinstance(f, ast.FunctionDef) and f.name in ("add", "ajouter_groupes")
+               for x in ast.walk(f)}
     for n in ast.walk(arbre):
         if id(n) in interne:
             continue
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "add" and n.args:
-            lit(n.args[0], "add")
+            lit(n.args[0], "add")  # add(…) nu seulement : jamais ensemble.add(x) (crawl_site.py en a 8, T14 aussi)
+        elif (isinstance(n, ast.Call) and len(n.args) > 1
+              and (getattr(n.func, "id", None) == "ajouter_groupes" or getattr(n.func, "attr", None) == "ajouter_groupes")):
+            lit(n.args[1], "ajouter_groupes")  # (html_observateurs.)ajouter_groupes(add, "clé", …)
         elif (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "setdefault"
               and ast.unparse(n.func.value) == "issues" and n.args):
             lit(n.args[0], "issues.setdefault")

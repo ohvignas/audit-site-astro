@@ -47,24 +47,9 @@ SKIP_QUERY = re.compile(r"(^|&)(replytocom|share|add-to-cart|add_to_wishlist|pre
 COUNT_TAGS = {"ul", "ol", "table", "time", "main", "article", "iframe", "video", "form", "nav", "script", "link"}
 SKIP_TEXT_TAGS = {"script", "style", "noscript", "svg", "template"}
 # Chemins de CSS/JS nécessaires au rendu : WordPress, Astro (/_astro/), Next.js (/_next/)
-# Éléments sans balise fermante (ne s'empilent pas) ; styles qui masquent un élément
-VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
-STYLE_MASQUE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
-# Classes utilitaires qui masquent (Tailwind, Bootstrap, Bulma) : jetons entiers ; sr-only n'en fait PAS partie
-# (masqué visuellement mais lu par les lecteurs d'écran : un libellé reste requis)
-CLASSES_MASQUE = {"hidden", "d-none", "is-hidden", "invisible"}
-# « hidden md:block » : masqué sur mobile seulement, visible ensuite → pas masqué
-CLASSE_REAFFICHE = re.compile(r"^(sm|md|lg|xl|2xl):(block|inline|inline-block|flex|inline-flex|grid|inline-grid|table|contents|visible)$")
-
-
-def masque(tag, a):
-    """Élément absent de l'arbre d'accessibilité (ignoré par axe/Lighthouse) : hidden, aria-hidden, style, classe
-    utilitaire de masquage, <template>, <noscript>, <dialog> fermé."""
-    classes = a.get("class", "").split()
-    par_classe = bool(CLASSES_MASQUE.intersection(classes)) and not any(CLASSE_REAFFICHE.match(c) for c in classes)
-    return (tag in ("template", "noscript") or (tag == "dialog" and "open" not in a) or "hidden" in a
-            or a.get("aria-hidden", "").lower() == "true" or bool(STYLE_MASQUE.search(a.get("style", "")))
-            or par_classe)
+# Constantes de masquage et contrôles HTML additionnels : html_observateurs.py (un passage du parseur, onze modules)
+import html_observateurs  # noqa: E402
+from html_observateurs import VOID_TAGS, masque  # noqa: E402,F401
 
 
 ASSETS_RX = re.compile(r"\.(css|m?js)\b|wp-content/(themes|plugins)|wp-includes|/_astro\b|/_next/", re.I)
@@ -524,6 +509,7 @@ def analyze_page(url, res):
         parser.feed(html)
     except Exception as e:
         page["error"] = f"parse: {e}"
+    observations = html_observateurs.analyser(html, res["headers"], url)
     robots_meta = (parser.metas.get("robots", "") + "," + parser.metas.get("googlebot", "")).lower()
     xr = page["x_robots_tag"].lower()
     types, jl_err, _ = jsonld_types(parser.jsonld_raw)
@@ -560,6 +546,7 @@ def analyze_page(url, res):
         "microdata_items": parser.microdata,
         "tag_counts": dict(parser.tags),
         "form_fields_no_label": len(parser.champs_sans_libelle()),
+        "obs": observations,
         "has_author_link": parser.has_author_link,
         "body_class": parser.body_class[:300],
         "astra": "ast-" in parser.body_class or "/themes/astra" in html,
@@ -731,8 +718,17 @@ def crawl(args):
                 broken_imgs[s] = r["status"]
             time.sleep(args.delay / 2)
 
+    # --- pages.json écrit tout de suite : si le délai de l'étape coupe les contrôles réseau, les données du crawl restent
+    with open(out / "pages.json", "w", encoding="utf-8") as f:
+        json.dump({"meta": {"start_url": start, "host": host, "pages_crawled": len(pages), "partiel": True},
+                   "pages": list(pages.values())}, f, ensure_ascii=False, indent=1)
+    # --- modules du diffuseur : requêtes réseau éventuelles (liens externes, ressources), bornées en temps, puis constats
+    ctx = {"fetch": fetch, "timeout": args.timeout, "delai": args.delay, "host": host, "scheme": scheme,
+           "ua_navigateur": BROWSER_UA, "liens_externes_max": args.liens_externes, "delai_externe": args.delai_externe,
+           "ressources_max": args.ressources, "budget_reseau_s": args.budget_reseau, "meta": {}}
+    html_observateurs.apres_crawl(pages, ctx)
     issues = build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_links,
-                          nofollow_internal, broken_imgs, host, scheme, canon_targets)
+                          nofollow_internal, broken_imgs, host, scheme, canon_targets, ctx)
     if relative_sitemaps:
         issues["robots_sitemap_relative"] = {"label": "Directive Sitemap relative dans robots.txt (Google exige une URL absolue)",
                                              "severity": "moyenne", "count": len(relative_sitemaps),
@@ -752,6 +748,7 @@ def crawl(args):
         "sitemap_files": sm_files, "sitemap_errors": sm_errors, "sitemap_url_count": len(sitemap_set),
         "blocked_by_robots": blocked[:500], "broken_images": broken_imgs,
         "canonical_targets_checked": {u: c["final_status"] for u, c in canon_targets.items()},
+        "modules": ctx["meta"],
         "astra_detected": any(p.get("astra") for p in pages.values()),
         "astro_detected": any(p.get("astro") for p in pages.values()),
     }
@@ -767,12 +764,15 @@ def crawl(args):
 # --------------------------------------------------------------------------- problèmes
 
 def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_links, nofollow_internal,
-                 broken_imgs, host, scheme, canon_targets=None):
+                 broken_imgs, host, scheme, canon_targets=None, ctx=None):
     issues = {}
     canon_targets = canon_targets or {}
+    ctx = ctx if ctx is not None else {"meta": {}}
 
-    def add(key, label, sev, example=None, n=1):
+    def add(key, label, sev, example=None, n=1, domaine=None):
         it = issues.setdefault(key, {"label": label, "severity": sev, "count": 0, "examples": []})
+        if domaine:
+            it["domaine"] = domaine
         it["count"] += n
         if example is not None and len(it["examples"]) < 25:
             it["examples"].append(example)
@@ -965,6 +965,7 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
         add("nofollow_internal", "Liens internes en nofollow", "basse", {"url": tgt, "n": n}, n=n)
     for src, st in broken_imgs.items():
         add("broken_images", "Images cassées", "moyenne", {"src": src, "status": st})
+    html_observateurs.issues(pages, add, ctx)
     return issues
 
 
@@ -1026,6 +1027,10 @@ def main():
     ap.add_argument("--timeout", type=int, default=20)
     ap.add_argument("--ignore-robots", action="store_true", help="crawler aussi les URL bloquées par robots.txt")
     ap.add_argument("--check-images", type=int, default=0, help="vérifier le statut de N images uniques")
+    ap.add_argument("--liens-externes", type=int, default=300, help="liens externes vérifiés au plus (0 = aucun)")
+    ap.add_argument("--delai-externe", type=float, default=1.0, help="pause minimale entre deux requêtes vers un même hôte externe (s)")
+    ap.add_argument("--ressources", type=int, default=400, help="ressources du site vérifiées au plus (0 = aucune)")
+    ap.add_argument("--budget-reseau", type=float, default=300, help="temps maximal des requêtes de chaque module réseau (s)")
     crawl(ap.parse_args())
 
 

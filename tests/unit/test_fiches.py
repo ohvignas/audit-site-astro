@@ -16,6 +16,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import extraction_detecteurs as extraction  # noqa: E402
 import fiches  # noqa: E402
 import geo_check  # noqa: E402
+import html_observateurs  # noqa: E402
 import signaux  # noqa: E402
 
 
@@ -337,7 +338,10 @@ class TestCouverture(unittest.TestCase):
     # (a) crawl ------------------------------------------------------------------------------------------------------------
 
     def test_cles_du_crawl(self):
-        cles = extraction.cles_crawl(_lire("crawl_site.py"))
+        # crawl_site.py et les modules du diffuseur (chaque module écrit ses clés avec add(…) ou ajouter_groupes(add, …))
+        cles = set()
+        for nom in ("crawl_site",) + tuple(html_observateurs.MODULES):
+            cles |= extraction.cles_crawl(_lire(nom + ".py"))
         self.assertGreaterEqual(len(cles), 55, f"extraction des clés du crawl dégradée : {sorted(cles)}")
         trous = self._trous([sig("crawl", k) for k in sorted(cles)])
         self.assertEqual(trous, [], f"clés d'issue du crawl sans fiche : {trous}")
