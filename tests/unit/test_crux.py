@@ -1,10 +1,12 @@
 import contextlib
+import http.server
 import io
 import json
 import os
 import pathlib
 import sys
 import tempfile
+import threading
 import unittest
 import urllib.error
 from unittest import mock
@@ -203,6 +205,25 @@ class TestTendance(unittest.TestCase):
         self.assertIn("2 semaines", md)
 
 
+class TestSeveriteFcpTtfb(unittest.TestCase):
+    """FCP et TTFB ne sont pas des Core Web Vitals : sévérité plafonnée à « moyenne » ; LCP, INP et CLS mauvais restent « haute »."""
+
+    def _issues(self, metriques):
+        return crux.construire_issues([{"portee": "origine", "cible": "https://ex.fr", "appareil": "tous",
+                                        "metriques": metriques, "historique": {}}])
+
+    def test_fcp_ttfb_mauvais_plafonnes_a_moyenne(self):
+        res = self._issues({"FCP": {"p75": 3500, "verdict": "mauvais"}, "TTFB": {"p75": 2500, "verdict": "mauvais"}})
+        self.assertEqual({k: v["severity"] for k, v in res.items()}, {"terrain_fcp": "moyenne", "terrain_ttfb": "moyenne"})
+
+    def test_cwv_mauvais_restent_haute_et_a_ameliorer_moyenne(self):
+        res = self._issues({"LCP": {"p75": 4500, "verdict": "mauvais"}, "INP": {"p75": 600, "verdict": "mauvais"},
+                            "CLS": {"p75": 0.3, "verdict": "mauvais"}})
+        self.assertEqual({k: v["severity"] for k, v in res.items()}, {"terrain_lcp": "haute", "terrain_inp": "haute", "terrain_cls": "haute"})
+        res = self._issues({"LCP": {"p75": 3000, "verdict": "à améliorer"}})
+        self.assertEqual(res["terrain_lcp"]["severity"], "moyenne")
+
+
 class TestAppareils(unittest.TestCase):
     def _lancer(self, reponses, urls=()):
         vus = []
@@ -344,7 +365,7 @@ class TestCleJamaisEcrite(unittest.TestCase):
 
             def __exit__(self, *a):
                 return False
-        with mock.patch.object(crux.urllib.request, "urlopen", return_value=Rep(b'{"record": {"a": 1}}')) as m:
+        with mock.patch.object(crux._OPENER, "open", return_value=Rep(b'{"record": {"a": 1}}')) as m:
             self.assertEqual(crux.transport_http(crux.API + "queryRecord", {"origin": "https://ex.fr"}, {"X-Goog-Api-Key": CLE}),
                              (200, {"record": {"a": 1}}))
         req = m.call_args.args[0]
@@ -359,15 +380,57 @@ class TestCleJamaisEcrite(unittest.TestCase):
         url = crux.API + "queryRecord"
         err = urllib.error.HTTPError(url, 403, "Forbidden", {}, io.BytesIO(json.dumps(
             {"error": {"code": 403, "status": "PERMISSION_DENIED", "message": "clé " + CLE + " refusée ; " + url + "?key=" + CLE}}).encode()))
-        with mock.patch.object(crux.urllib.request, "urlopen", side_effect=err):
+        with mock.patch.object(crux._OPENER, "open", side_effect=err):
             statut, donnees = crux.transport_http(url, {"origin": "https://ex.fr"}, {"X-Goog-Api-Key": CLE})
         self.assertEqual(statut, 403)
         self.assertNotIn(CLE, json.dumps(donnees))
 
     def test_transport_http_exception_reseau(self):
         url = crux.API + "queryRecord"
-        with mock.patch.object(crux.urllib.request, "urlopen", side_effect=urllib.error.URLError("boom " + url + CLE)):
+        with mock.patch.object(crux._OPENER, "open", side_effect=urllib.error.URLError("boom " + url + CLE)):
             self.assertEqual(crux.transport_http(url, {"origin": "https://ex.fr"}, {"X-Goog-Api-Key": CLE}), (0, {}))
+
+    def test_redirection_jamais_suivie_et_cle_jamais_envoyee_ailleurs(self):
+        recus = {"cible": [], "origine": []}
+
+        def serveur(nom, reponse):
+            class H(http.server.BaseHTTPRequestHandler):
+                def do_POST(self):
+                    self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                    recus[nom].append({k.lower(): v for k, v in self.headers.items()})
+                    reponse(self)
+
+                do_GET = do_POST
+
+                def log_message(self, *a):
+                    pass
+            srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            self.addCleanup(srv.server_close)
+            self.addCleanup(srv.shutdown)
+            return srv.server_address[1]
+        port_cible = serveur("cible", lambda h: (h.send_response(200), h.send_header("Content-Length", "2"), h.end_headers(),
+                                                  h.wfile.write(b"{}")))
+        for code in (301, 302, 303, 307, 308):
+            def rediriger(h, code=code):
+                h.send_response(code)
+                h.send_header("Location", f"http://localhost:{port_cible}/pris")
+                h.send_header("Content-Length", "0")
+                h.end_headers()
+            port = serveur("origine", rediriger)
+            with self.subTest(code=code):
+                statut, donnees = crux.transport_http(f"http://127.0.0.1:{port}/x", {"origin": "https://ex.fr"},
+                                                      {"X-Goog-Api-Key": CLE})
+                self.assertEqual((statut, donnees), (code, {}))
+        self.assertEqual(recus["cible"], [], "la redirection ne doit jamais être suivie")
+        self.assertEqual(len(recus["origine"]), 5)
+        self.assertTrue(all(r.get("x-goog-api-key") == CLE for r in recus["origine"]))
+
+    def test_redirection_est_un_constat_ignore_pas_une_erreur(self):
+        _, md = TestAdressesEtArret()._lancer(lambda c: (302, {}))
+        self.assertIn("⏭️ https://ex.fr : données terrain non lues (HTTP 302)", md)
+        self.assertIn("redirection refusée", md)
+        self.assertNotIn("❌", md)
 
     def test_message_libre_de_google_jamais_recopie(self):
         _, md = TestAdressesEtArret()._lancer(lambda c: (403, {"error": {"status": "PERMISSION_DENIED",

@@ -43,8 +43,20 @@ DELAI_S = 8        # délai court par requête
 PAUSE_S = 0.5      # pause entre deux requêtes (quota Google : 150 requêtes/minute/projet)
 BUDGET_S = 60      # temps réseau total maximal ; au-delà, les cibles restantes sont passées (⏭️)
 STOP = (401, 403, 429)  # clé refusée ou quota : inutile d'insister (un 400 sur une page n'arrête rien)
+SEV_PLAFOND_MOYENNE = ("FCP", "TTFB")  # ni FCP ni TTFB ne sont des Core Web Vitals : jamais au-dessus de « moyenne »
 _CLE_DANS_TEXTE = re.compile(r"(?i)\bkey=[^&\s'\"]*")
 _CODE = re.compile(r"[A-Z_]{3,60}")
+
+
+class _SansRedirection(urllib.request.HTTPRedirectHandler):
+    """Ne suit aucune redirection : urllib recopie les en-têtes de la requête (donc X-Goog-Api-Key) vers la nouvelle cible.
+    Une 3xx remonte comme erreur HTTP (statut 3xx), traitée en ⏭️."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_SansRedirection)
 
 
 def masquer_cle(texte, cle=None):
@@ -153,7 +165,7 @@ def transport_http(url, corps, entetes=None):
     entetes["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=json.dumps(corps).encode(), headers=entetes, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=DELAI_S) as r:
+        with _OPENER.open(req, timeout=DELAI_S) as r:
             return r.status, _json(r.read(2_000_000), cle)
     except urllib.error.HTTPError as e:
         try:
@@ -183,15 +195,19 @@ def _periode(record):
         return None
 
 
+def _severite(label, verdict):
+    return "moyenne" if label in SEV_PLAFOND_MOYENNE else SEV[verdict]
+
+
 def construire_issues(resultats):
     issues = {}
     for r in resultats:
         for label, m in sorted((r.get("metriques") or {}).items()):
             if m["verdict"] in SEV:
                 it = issues.setdefault("terrain_" + label.lower(), {"label": f"{label} terrain (p75 CrUX) à améliorer ou mauvais",
-                                                                     "severity": SEV[m["verdict"]], "count": 0, "examples": [],
-                                                                     "domaine": "Performance"})
-                if SEV[m["verdict"]] == "haute":
+                                                                     "severity": _severite(label, m["verdict"]), "count": 0,
+                                                                     "examples": [], "domaine": "Performance"})
+                if _severite(label, m["verdict"]) == "haute":
                     it["severity"] = "haute"
                 it["count"] += 1
                 it["examples"].append({"portee": r["portee"], "appareil": r.get("appareil"), "cible": r["cible"],
@@ -290,6 +306,8 @@ def _ligne_non_lue(cible, statut, donnees, appareil):
         conseil = " ; clé restreinte (API ou origine non autorisée)"
     elif statut == 429:
         conseil = " ; quota atteint, réessayer plus tard"
+    elif 300 <= statut < 400:
+        conseil = " ; redirection refusée (la clé n'est jamais envoyée ailleurs)"
     elif statut in (401, 403):
         conseil = " ; clé refusée : vérifier la clé et l'activation de l'API"
     else:
