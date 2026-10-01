@@ -784,6 +784,8 @@ def crawl(args):
     ecrire_json(out / "issues.json", issues)
     write_csv(out / "pages.csv", pages.values())
     write_summary(out / "summary.md", meta, pages, issues)
+    for nom, msg in sorted(modules_en_erreur(meta).items()):
+        print(f"⚠️ module {nom} désactivé : {msg.split(':')[0]}", file=sys.stderr)  # reste dans .log-crawl.txt
     print(f"[ok] {len(pages)} pages — résultats dans {out}", file=sys.stderr)
 
 
@@ -993,6 +995,9 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
         add("broken_images", "Images cassées", "moyenne", {"src": src, "status": st})
     if not ctx.get("provisoire"):  # issues.json provisoire (avant les contrôles réseau) : sans les constats des modules
         html_observateurs.issues(pages, add, ctx)
+        # un module en erreur n'est jamais silencieux : ses contrôles manquent au rapport, il faut le dire
+        for nom in sorted(ctx["meta"].get("erreurs_modules", {})):
+            add("modules_en_erreur", "Modules d'analyse du crawl en erreur (contrôles désactivés ou incomplets)", "haute", nom)
     return issues
 
 
@@ -1015,6 +1020,11 @@ def write_csv(path, pages):
                         ",".join(p.get("jsonld_types", []) or []), p.get("lang")])
 
 
+def modules_en_erreur(meta):
+    """{module: « Type: message… »} des modules du diffuseur en erreur pendant ce crawl (vide si tout va bien)."""
+    return (meta.get("modules") or {}).get("erreurs_modules", {})
+
+
 def write_summary(path, meta, pages, issues):
     order = {"critique": 0, "haute": 1, "moyenne": 2, "basse": 3, "info": 4}
     st = Counter(p["final_status"] if not p["redirect_hops"] else p["status"] for p in pages.values())
@@ -1035,6 +1045,10 @@ def write_summary(path, meta, pages, issues):
              ]
     if ttfbs:
         lines.append(f"- TTFB crawler : médiane {ttfbs[len(ttfbs) // 2]} s, max {ttfbs[-1]} s")
+    if modules_en_erreur(meta):
+        lines += ["", "## Modules en erreur", "",
+                  "Ces contrôles du crawl n'ont pas (ou pas entièrement) tourné ; les constats correspondants manquent :", ""]
+        lines += [f"- `{nom}` : {msg}" for nom, msg in sorted(modules_en_erreur(meta).items())]
     lines += ["", "## Problèmes détectés", "", "| Sévérité | Problème | Nb |", "|---|---|---|"]
     for k, it in sorted(issues.items(), key=lambda x: (order.get(x[1]["severity"], 9), -x[1]["count"])):
         lines.append(f"| {it['severity']} | {it['label']} (`{k}`) | {it['count']} |")

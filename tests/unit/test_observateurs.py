@@ -183,6 +183,39 @@ class TestIsolationDesModules(unittest.TestCase):
         self.assertEqual(donnees["pages"][0]["title"], "Titre de test suffisamment long")
 
 
+class TestModulesEnErreurSignales(unittest.TestCase):
+    """Un module en erreur n'est jamais silencieux : ligne de journal, section du résumé, constat du crawl."""
+
+    def test_module_en_erreur_signale_trois_fois(self):
+        r, sortie = crawler_avec_module_modifie(
+            self, "a11y_svg", ENTETE_MODULE + "class Observateur(ho.Observateur):\n    def __init__(self, entetes, url):\n"
+            "        super().__init__(entetes, url)\n        entetes['absent']\n")
+        self.assertIn("⚠️ module a11y_svg désactivé : KeyError", r.stderr)
+        self.assertNotIn("module a11y_noms désactivé", r.stderr)
+        resume = (sortie / "summary.md").read_text(encoding="utf-8")
+        self.assertIn("## Modules en erreur", resume)
+        self.assertIn("`a11y_svg`", resume)
+        self.assertIn("KeyError", resume.split("## Modules en erreur", 1)[1].split("\n## ", 1)[0])
+        issues = json.loads((sortie / "issues.json").read_text(encoding="utf-8"))
+        cle = issues["modules_en_erreur"]
+        self.assertEqual(cle["severity"], "haute")
+        self.assertEqual(cle["examples"], ["a11y_svg"])
+        self.assertEqual(cle["count"], 1)
+
+    def test_module_non_importable_signale(self):
+        r, sortie = crawler_avec_module_modifie(self, "a11y_noms", "def (:\n")  # import impossible
+        self.assertIn("⚠️ module a11y_noms désactivé : SyntaxError", r.stderr)
+        issues = json.loads((sortie / "issues.json").read_text(encoding="utf-8"))
+        self.assertEqual(issues["modules_en_erreur"]["examples"], ["a11y_noms"])
+
+    def test_aucun_signalement_quand_tout_va_bien(self):
+        r, sortie = crawler_avec_module_modifie(
+            self, "a11y_svg", ENTETE_MODULE + "class Observateur(ho.Observateur):\n    pass\n")
+        self.assertNotIn("désactivé", r.stderr)
+        self.assertNotIn("Modules en erreur", (sortie / "summary.md").read_text(encoding="utf-8"))
+        self.assertNotIn("modules_en_erreur", json.loads((sortie / "issues.json").read_text(encoding="utf-8")))
+
+
 class TestSortiesJson(unittest.TestCase):
     """I2 : résultat non sérialisable remplacé par une erreur ; pages.json et issues.json écrits atomiquement."""
 
