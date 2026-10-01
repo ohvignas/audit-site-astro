@@ -8,6 +8,7 @@ import unittest
 ICI = pathlib.Path(__file__).resolve().parent
 RACINE = ICI.parents[1]
 sys.path.insert(0, str(ICI))
+sys.path.insert(0, str(RACINE / "plugins/audit-site-astro/skills/audit-complet/scripts"))
 from site_local import HTML, SiteLocal  # noqa: E402
 
 SCRIPT = RACINE / "plugins/audit-site-astro/skills/audit-complet/scripts/security_probe.sh"
@@ -17,16 +18,18 @@ ACCUEIL = ("<html><head><title>Accueil</title></head><body>"
            "</body></html>")
 
 
-def lancer(url, d):
-    env = dict(os.environ, AUDIT_IMAGE_DISTANTE="https://images.exemple.org/logo.png")
+def lancer(url, d, script=SCRIPT, env_extra=None, retirer=()):
+    env = dict(os.environ, AUDIT_IMAGE_DISTANTE="https://images.exemple.org/logo.png", **(env_extra or {}))
     env.pop("AUDIT_INSECURE_TLS", None)
-    subprocess.run(["bash", str(SCRIPT), url, d], capture_output=True, text=True, timeout=240, env=env)
+    for k in retirer:
+        env.pop(k, None)
+    subprocess.run(["bash", str(script), url, d], capture_output=True, text=True, timeout=240, env=env)
     return pathlib.Path(d, "security-probe.md").read_text(encoding="utf-8")
 
 
-def sonder(routes, prefixes, requetes=None):
+def sonder(routes, prefixes, requetes=None, **options):
     with SiteLocal(routes, prefixes) as site, tempfile.TemporaryDirectory() as d:
-        md = lancer(site.url, d)
+        md = lancer(site.url, d, **options)
         if requetes is not None:
             requetes.extend(site.requetes)
         return md
@@ -96,8 +99,20 @@ class TestSecurityTxt(unittest.TestCase):
         self.assertNotIn("✅ présent", self.ligne(md))
 
 
+PAGE_JS = '<html><body><script src="/_astro/app.js"></script></body></html>'
+
+
+def _page(js, **options):
+    return sonder({"/": (200, HTML, PAGE_JS), "/_astro/app.js": (200, JS, js)}, {}, **options)
+
+
+def _section_secrets(md):
+    return md.split("## Clés et secrets dans le HTML / JS livrés au navigateur")[1].split("## Méthodes HTTP et CORS")[0]
+
+
 class TestSecretsV21(unittest.TestCase):
     CLE = "sk-" + "proj-" + "COBAYEa1B2c3D4e5F6g7H8j9K0"   # factice, concaténée
+    GOOGLE = "AI" + "za" + "SyD3k9Lm2Qx7Vb5Nr8Tw1Yh4Jf6Cp0Zg3AB"
 
     def test_cle_connue_signalee_classes_tailwind_ignorees(self):
         page = '<html><body><script src="/_astro/app.js"></script></body></html>'
@@ -107,6 +122,91 @@ class TestSecretsV21(unittest.TestCase):
         self.assertNotIn(self.CLE, casse, "la clé complète ne doit jamais être écrite")
         self.assertNotIn("Motifs de secrets trouvés", propre)
         self.assertIn("aucun motif de clé secrète", propre)
+
+    def test_cle_google_publique_a_part_et_jamais_a_revoquer(self):
+        md = _page("var firebaseConfig={apiKey:'" + self.GOOGLE + "'};")
+        sec = _section_secrets(md)
+        self.assertIn("⚠️ clé publique Google exposée (normal côté client) : vérifier qu'elle est restreinte par référent HTTP et par API", sec)
+        self.assertNotIn("Motifs de secrets trouvés", md)
+        self.assertNotIn("RÉVOQUER", md)
+        self.assertNotIn("❌", sec)
+        self.assertNotIn("✅ aucun motif", sec)
+        self.assertNotIn(self.GOOGLE, md, "la clé complète ne doit jamais être écrite")
+
+    def test_cle_google_et_secret_ensemble(self):
+        sec = _section_secrets(_page("a='" + self.GOOGLE + "';b='" + self.CLE + "';"))
+        self.assertIn("❌ Motifs de secrets trouvés", sec)
+        self.assertIn("OpenAI : sk-proj-", sec)
+        self.assertIn("⚠️ clé publique Google exposée", sec)
+        self.assertNotIn("Google API :", sec.split("```")[1], "la clé publique n'est pas dans le bloc des secrets à révoquer")
+
+    def test_la_ligne_google_est_reconnue_par_une_fiche_non_critique(self):
+        import fiches
+        base = fiches.charger_fiches(RACINE / "plugins/audit-site-astro/skills/audit-complet/references/fiches")
+        ligne = "- ⚠️ clé publique Google exposée (normal côté client) : vérifier qu'elle est restreinte par référent HTTP et par API"
+        retenues = [f for f in base if any(fiches.correspond(d, {"source": "securite", "cle": ligne}) for d in f["declencheurs"])]
+        self.assertTrue(retenues, "aucune fiche ne reconnaît la ligne Google")
+        self.assertEqual({f["severite_type"] for f in retenues} & {"critique", "haute"}, set())
+        critique = next(f for f in base if f["id"] == "secu-secret-dans-js-client")
+        self.assertFalse(any(fiches.correspond(d, {"source": "securite", "cle": ligne}) for d in critique["declencheurs"]))
+
+    def test_exemples_et_gabarits_jamais_en_rouge(self):
+        sec = _section_secrets(_page("var a='AKIA" + "IOSFODNN7" + "EXAMPLE'; var b='sk_" + "live_" + "x" * 24 + "'; "
+                                     "placeholder:'-----BEGIN RSA PRIVATE KEY-----'"))
+        self.assertNotIn("❌", sec)
+        self.assertIn("✅ aucun motif", sec)
+
+    def test_cle_apres_un_echappement_json(self):
+        self.assertIn("OpenAI : sk-proj-", _page('var j="{\\"k\\":\\"x\\"}\\n' + self.CLE + '";'))
+
+
+def _chemin_sans_python(d):
+    """Dossier de liens vers tous les outils de /usr/bin et /bin sauf python* : un PATH où python3 est introuvable."""
+    bin_ = pathlib.Path(d, "bin")
+    bin_.mkdir()
+    for dossier in ("/usr/bin", "/bin"):
+        for f in sorted(os.listdir(dossier)):
+            if not f.startswith("python") and not (bin_ / f).exists():
+                os.symlink(os.path.join(dossier, f), str(bin_ / f))
+    return str(bin_)
+
+
+class TestAnalyseDesSecretsEnEchec(unittest.TestCase):
+    """Un contrôle de sécurité qui n'a pas pu regarder ne dit jamais « ✅ aucun motif » (revue T5, I1)."""
+    CLE = TestSecretsV21.CLE
+    MARQUE = "⚠️ analyse des secrets JS impossible"
+
+    def verifier(self, md):
+        sec = _section_secrets(md)
+        self.assertIn(self.MARQUE, sec)
+        self.assertNotIn("✅ aucun motif", sec)
+        self.assertNotIn("❌ Motifs de secrets trouvés", sec)
+        return sec
+
+    def test_python3_introuvable(self):
+        with tempfile.TemporaryDirectory() as d:
+            md = _page("const k='" + self.CLE + "';", env_extra={"PATH": _chemin_sans_python(d)})
+        self.assertIn("python3", self.verifier(md))
+
+    def test_secrets_js_absent_a_cote_de_la_sonde(self):
+        with tempfile.TemporaryDirectory() as d:
+            seul = pathlib.Path(d, "security_probe.sh")
+            seul.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+            md = _page("const k='" + self.CLE + "';", script=seul)
+        self.assertIn("secrets_js.py", self.verifier(md))
+
+    def test_secrets_js_qui_plante(self):
+        with tempfile.TemporaryDirectory() as d:
+            pathlib.Path(d, "security_probe.sh").write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+            pathlib.Path(d, "secrets_js.py").write_text("import sys\nsys.stderr.write('boom')\nsys.exit(3)\n", encoding="utf-8")
+            md = _page("const k='" + self.CLE + "';", script=pathlib.Path(d, "security_probe.sh"))
+        self.assertIn("code 3", self.verifier(md))
+
+    def test_sortie_ascii_forcee_detecte_quand_meme(self):
+        md = _page("const k='" + self.CLE + "';", env_extra={"PYTHONIOENCODING": "ascii", "LC_ALL": "C", "PYTHONUTF8": "0"})
+        sec = _section_secrets(md)
+        self.assertIn("OpenAI : sk-proj-", sec)
+        self.assertNotIn("✅ aucun motif", sec)
 
 
 if __name__ == "__main__":

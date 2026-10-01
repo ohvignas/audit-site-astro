@@ -6,6 +6,7 @@ severite_type: haute
 effort: S
 declencheurs:
   - "crawl:modules_en_erreur"
+  - "securite:analyse des secrets JS impossible"
 sources:
   - https://docs.python.org/3/library/html.parser.html
   - https://docs.python.org/3/using/cmdline.html
@@ -32,7 +33,8 @@ python3 --version                                          # l'outil demande Pyt
 
 1. Lire le nom du module et le type d'erreur dans `summary.md` (`ImportError` ou `SyntaxError` : version de Python ou installation incomplète ; `KeyError`, `TypeError` : défaut du module sur une page précise).
 2. Installer ou mettre à jour Python (3.9 ou plus) puis relancer l'audit complet.
-3. Si l'erreur persiste avec une version récente, relancer sur un échantillon (`--max-pages 20`) pour repérer la page en cause et signaler le défaut avec l'URL, le nom du module et le texte de l'erreur.
+3. Cas de la sonde de sécurité (ligne « analyse des secrets JS impossible » dans `security-probe.md`) : `python3` est introuvable, ou `secrets_js.py` n'a pas été copié à côté de `security_probe.sh` ; l'analyse des clés n'a pas eu lieu, ce n'est pas un « aucun secret ». Corriger puis relancer la sonde.
+4. Si l'erreur persiste avec une version récente, relancer sur un échantillon (`--max-pages 20`) pour repérer la page en cause et signaler le défaut avec l'URL, le nom du module et le texte de l'erreur.
 
 ## Critères d'acceptation
 

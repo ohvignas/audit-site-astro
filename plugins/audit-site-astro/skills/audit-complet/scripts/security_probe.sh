@@ -140,14 +140,30 @@ for j in $js; do
   case "$full" in "$BASE"*) curl -s -A "$UA" --max-time 15 "$full" >> "$TMP/bundle.js";; esac
 done
 cat "$TMP/home.html" >> "$TMP/bundle.js"
-# Formats connus, borne gauche, entropie, classes CSS exclues (secrets_js.py) ; valeurs tronquées à 12 caractères
-hits=$(python3 "$DIR/secrets_js.py" "$TMP/bundle.js" 2>/dev/null)
-if [ -n "$hits" ]; then
-  echo "❌ Motifs de secrets trouvés (tronqués) — vérifier et RÉVOQUER la clé si elle est réelle :"
-  echo '```'; echo "$hits"; echo '```'
-  echo "Note : une clé Google Maps/Firebase (AIza…) peut être publique si elle est restreinte par domaine."
+# Formats connus, borne gauche, entropie, classes CSS exclues (secrets_js.py) ; valeurs tronquées à 12 caractères.
+# Un échec de l'analyse (python3 ou secrets_js.py absent, plantage, sortie illisible) n'est JAMAIS présenté comme « aucun motif ».
+hits=""; publics=""; raison=""
+if ! command -v python3 >/dev/null 2>&1; then
+  raison="python3 introuvable"
+elif [ ! -f "$DIR/secrets_js.py" ]; then
+  raison="secrets_js.py introuvable à côté de la sonde"
 else
-  echo "- ✅ aucun motif de clé secrète connu dans le HTML et les scripts de la page d'accueil"
+  hits=$(python3 "$DIR/secrets_js.py" "$TMP/bundle.js" 2>/dev/null); rc=$?
+  [ "$rc" = "0" ] && { publics=$(python3 "$DIR/secrets_js.py" "$TMP/bundle.js" --publiques 2>/dev/null); rc=$?; }
+  [ "$rc" != "0" ] && { raison="secrets_js.py a échoué (code $rc)"; hits=""; publics=""; }
+fi
+if [ -n "$raison" ]; then
+  echo "- ⚠️ analyse des secrets JS impossible : $raison — relancer ; ce n'est pas un « aucun secret »"
+else
+  if [ -n "$hits" ]; then
+    echo "❌ Motifs de secrets trouvés (tronqués) — vérifier et RÉVOQUER la clé si elle est réelle :"
+    echo '```'; echo "$hits"; echo '```'
+  fi
+  if [ -n "$publics" ]; then
+    echo "- ⚠️ clé publique Google exposée (normal côté client) : vérifier qu'elle est restreinte par référent HTTP et par API"
+    echo '```'; echo "$publics"; echo '```'
+  fi
+  [ -z "$hits" ] && [ -z "$publics" ] && echo "- ✅ aucun motif de clé secrète connu dans le HTML et les scripts de la page d'accueil"
 fi
 
 echo
