@@ -5,6 +5,7 @@ domaine: Accessibilité
 severite_type: haute
 effort: S
 declencheurs:
+  - "crawl:zoom_bloque"
   - "lighthouse:meta-viewport|meta-refresh"
   - "lighthouse:user-scalable=\"no\"|maximum-scale|http-equiv=\"refresh\""
 sources:

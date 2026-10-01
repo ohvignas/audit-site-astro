@@ -1,0 +1,17 @@
+---
+export const prerender = true;
+import Base from '../../layouts/Base.astro';
+import TexteLong from '../../components/TexteLong.astro';
+const carte = "<!doctype html><html lang='fr'><head><title>Carte</title></head><body><main><p>Carte du centre</p></main></body></html>";
+---
+<Base title="Programme structuré : titres, aides et carte" description="Programme avec une hiérarchie de titres continue, une aide de saisie reliée au champ et une carte intégrée titrée.">
+  <h1>Programme structuré</h1>
+  <h2>Premier module</h2>
+  <h3>Objectifs du premier module</h3>
+  <label for="v21-email">Email</label>
+  <input id="v21-email" type="email" autocomplete="email" aria-describedby="aide-email" />
+  <p id="aide-email">Cette adresse sert uniquement à vous envoyer le programme.</p>
+  <iframe srcdoc={carte} title="Carte d'accès au centre de formation" width="300" height="150"></iframe>
+  <span role="img" aria-label="Note des participants : 5 sur 5">★★★★★</span>
+  <TexteLong sujet="du programme structuré" complement="sur la hiérarchie des titres" />
+</Base>

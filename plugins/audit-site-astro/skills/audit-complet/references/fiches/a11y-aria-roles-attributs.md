@@ -5,6 +5,8 @@ domaine: Accessibilité
 severite_type: moyenne
 effort: M
 declencheurs:
+  - "crawl:aria_ref_cassee"
+  - "crawl:aria_label_interdit"
   - "lighthouse:aria-allowed-attr|aria-allowed-role|aria-prohibited-attr|aria-required-attr|aria-required-children|aria-required-parent|aria-roles|aria-valid-attr|aria-valid-attr-value|aria-deprecated-role|aria-conditional-attr|presentation-role-conflict|duplicate-id-aria"
   - "lighthouse:ne correspondent pas à leurs rôles|rôles ARIA sur des éléments incompatibles|attributs ARIA interdits|ne possèdent pas tous les attributs|enfants requis|parent requis|valeurs `\\[role\\]` ne sont pas valides|La valeur des attributs `\\[aria-\\*\\]` n'est pas valide|mal orthographiés|rôles ARIA obsolètes|comme indiqué pour le rôle|présentent des conflits|ID ARIA ne sont pas uniques"
 sources:
