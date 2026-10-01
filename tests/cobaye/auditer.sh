@@ -12,6 +12,7 @@ mkdir -p "$RACINE/audits-cobaye"
 rm -rf "$RACINE/audits-cobaye/$V"   # jamais de données périmées mélangées (V validé ci-dessus)
 docker run --rm --network cobaye --memory=2g \
   -e AUDIT_INSECURE_TLS=1 -e MAX_PAGES=200 -e LH_PAGES=4 \
+  -e AUDIT_IMAGE_DISTANTE=http://images.cobaye.test/cobaye.png \
   -v "$RACINE/audits-cobaye:/audits" -v "$RACINE/tests/cobaye/$V:/projet:ro" \
   --entrypoint bash "$IMAGE" /app/scripts/collect_all.sh "https://$V.cobaye.test/" /projet "/audits/$V"
 code=$?

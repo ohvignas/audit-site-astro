@@ -28,10 +28,11 @@ services:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./nginx/certs:/etc/nginx/certs:ro
       - ./nginx/leurres:/srv/leurres:ro
+      - ./nginx/images:/srv/images:ro   # X06 : image « tierce » servie dans le réseau du banc
     networks:
       cobaye:
-        aliases: [casse.cobaye.test, propre.cobaye.test]
+        aliases: [casse.cobaye.test, propre.cobaye.test, images.cobaye.test]
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --no-check-certificate -O /dev/null https://127.0.0.1/ && wget -q --no-check-certificate --header 'Host: casse.cobaye.test' -O /dev/null https://127.0.0.1/robots.txt"]
+      test: ["CMD-SHELL", "wget -q --no-check-certificate -O /dev/null https://127.0.0.1/ && wget -q --no-check-certificate --header 'Host: casse.cobaye.test' -O /dev/null https://127.0.0.1/robots.txt && wget -q --header 'Host: images.cobaye.test' -O /dev/null http://127.0.0.1/cobaye.png"]
       interval: 5s
       retries: 20

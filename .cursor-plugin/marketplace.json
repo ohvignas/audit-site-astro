@@ -1,0 +1,11 @@
+{
+  "name": "audit-site-astro",
+  "owner": { "name": "ILLITH" },
+  "plugins": [
+    {
+      "name": "audit-site-astro",
+      "source": "plugins/audit-site-astro",
+      "description": "8 skills + scripts de collecte pour auditer un site Astro de A à Z : rapport priorisé, page web et PDF."
+    }
+  ]
+}

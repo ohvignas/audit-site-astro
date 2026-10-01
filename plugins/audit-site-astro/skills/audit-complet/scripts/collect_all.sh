@@ -5,7 +5,13 @@
 #   CHEMIN_PROJET : racine du repo Astro (optionnel : sans lui, audit « vu de l'extérieur » seulement)
 #   DOSSIER_AUDIT : défaut ~/audits-site/<hôte>/<AAAA-MM-JJ> — HORS du dossier servi par le serveur web
 # Variables : MAX_PAGES (500), LH_PAGES (5), RUNS (1), BUILD=1 (build d'audit), PSI_API_KEY (option),
-#             MIN_FREE_MB (1200), SKIP_LIGHTHOUSE=1, AUDIT_INSECURE_TLS=1 (tests uniquement : certificat auto-signé)
+#             MIN_FREE_MB (1200), SKIP_LIGHTHOUSE=1, SKIP_PDF=1 (pas de RAPPORT.pdf ; implicite avec SKIP_LIGHTHOUSE=1),
+#             CHROME_PATH (Chrome pour le PDF), AUDIT_INSECURE_TLS=1 (tests uniquement : certificat auto-signé),
+#             FORCE_PDF=1 (tests uniquement : imprime le PDF même avec SKIP_LIGHTHOUSE=1)
+# Un PDF impossible (Chrome absent, RAM insuffisante) est un avertissement ⚠️ et ne fait pas échouer la collecte.
+# Étape « corrections » : écrit <dossier d'audit>/CORRECTIONS/ (voir corrections.py ; CORRECTIONS/.garder = ne pas l'écraser, le nouveau
+# dossier est alors CORRECTIONS-<horodatage>/) et note son nom dans data/corrections-dossier.txt, que rapport_html.py et l'étape relisent.
+# Dernière étape « historique » : régénère <dossier du site>/index.html (évolution des notes de tous les audits AAAA-MM-JJ du site).
 # Les étapes tournent UNE PAR UNE : l'empreinte mémoire reste < ~1 Go (Chrome pendant Lighthouse).
 #
 # Codes de sortie : 0 = tout est ✅/⚠️/⏭️ ; 1 = au moins une étape ❌ ; 2 = pré-vol en échec : site injoignable
@@ -60,17 +66,44 @@ valid_geo() {
   python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if any(p.get('status')==200 for p in d['pages']) else 1)" \
     "$D/geo/geo.json" 2>/dev/null
 }
+# Étape corrections : le dossier à contrôler est celui que corrections.py a écrit (data/corrections-dossier.txt : une ligne,
+# CORRECTIONS ou CORRECTIONS-<horodatage>, sans séparateur), et son index.json doit dater du début de l'étape (STEP_T0) :
+# un ancien dossier conservé (.garder, suivi commencé) ou l'index d'une exécution précédente ne valide pas l'étape.
+nom_corrections() {  # affiche le nom du dossier désigné par le pointeur, ou rien (code 1) s'il est absent ou invalide
+  python3 - "$AUDIT" 2>/dev/null <<'PY'
+import os, re, sys
+try:
+    with open(os.path.join(sys.argv[1], "data", "corrections-dossier.txt"), encoding="utf-8") as f:
+        nom = f.read(256)
+except (OSError, ValueError):
+    sys.exit(1)
+nom = nom[:-1] if nom.endswith("\n") else nom
+if len(nom) > 64 or not re.fullmatch(r"CORRECTIONS(-[0-9TZ:-]+)?", nom):
+    sys.exit(1)
+print(nom)
+PY
+}
+sortie_corrections() { echo "$AUDIT/$(nom_corrections || echo '(dossier inconnu)')/LISEZ-MOI.md"; }
+valid_corrections() {
+  local nom
+  nom=$(nom_corrections) || return 1
+  # 2 s de tolérance : horodatages à la seconde paire (exFAT/FAT, certains montages réseau)
+  python3 -c "import os,sys; sys.exit(0 if os.stat(sys.argv[1]).st_mtime >= float(sys.argv[2]) - 2 else 1)" \
+    "$AUDIT/$nom/index.json" "${STEP_T0:-0}" 2>/dev/null
+}
 valid_perf() {
   python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if any(not r.get('erreur') for r in d) else 1)" \
     "$D/perf/pagespeed.json" 2>/dev/null
 }
 
-step() {  # $1 nom, $2 sortie principale, $3 validateur, reste = commande
+step() {  # $1 nom, $2 sortie principale ("@fonction" : nom de fonction qui l'affiche une fois la commande finie), $3 validateur, reste = commande
   local name="$1" out="$2" check="$3"; shift 3
   local t0; t0=$(date +%s)
+  STEP_T0=$t0
   echo "▶ ${name}…"
   "$@" > "$D/.log-${name}.txt" 2>&1
   local code=$?
+  case "$out" in @*) out=$("${out#@}");; esac
   local st="✅"
   [ $code -ne 0 ] && st="⚠️ code $code (voir data/.log-${name}.txt)"
   if [ -n "$out" ] && [ ! -e "$out" ]; then
@@ -86,9 +119,10 @@ step() {  # $1 nom, $2 sortie principale, $3 validateur, reste = commande
 prevol || { echo; cat "$LOG"; exit 2; }
 [ "${AUDIT_INSECURE_TLS:-}" = "1" ] && echo "| mode test | ⚠️ TLS non vérifié (AUDIT_INSECURE_TLS=1) | | |" >> "$LOG"
 
-step http "$D/http/http-checks.md" valid_aucun bash "$DIR/http_checks.sh" "$URL" "$D/http"
 step crawl "$D/crawl/pages.json" valid_crawl python3 "$DIR/crawl_site.py" "$URL" --out "$D/crawl" \
      --max-pages "${MAX_PAGES:-500}" --delay 0.3 --check-images 200
+# après le crawl : http_checks y lit les routes dynamiques à tester en soft 404
+step http "$D/http/http-checks.md" valid_aucun bash "$DIR/http_checks.sh" "$URL" "$D/http" "$D/crawl/pages.json"
 step geo "$D/geo/geo.json" valid_geo python3 "$DIR/geo_check.py" "$URL" --out "$D/geo" --crawl "$D/crawl/pages.json" --sample 12
 step securite "$D/securite/security-probe.md" valid_aucun bash "$DIR/security_probe.sh" "$URL" "$D/securite"
 
@@ -137,7 +171,55 @@ else
   echo "| projet / code | ⏭️ ignoré (pas de chemin projet) | | |" >> "$LOG"
 fi
 
-python3 "$DIR/rapport_brut.py" "$AUDIT" 2>/dev/null && echo "| rapport brut | ✅ | | RAPPORT-BRUT.md |" >> "$LOG"
+# Sorties à chemin fixe : effacées avant l'étape, pour qu'un échec ne soit pas masqué par le fichier d'une exécution précédente.
+rm -f "$AUDIT/RAPPORT-BRUT.md"
+step rapport-brut "$AUDIT/RAPPORT-BRUT.md" valid_aucun python3 "$DIR/rapport_brut.py" "$AUDIT"
+# Dossier CORRECTIONS/ (LISEZ-MOI, plan, une fiche par correction) à remettre tel quel à un agent de code ; un échec compte comme les autres étapes.
+if [ -n "$PROJ" ]; then
+  step corrections "@sortie_corrections" valid_corrections python3 "$DIR/corrections.py" "$AUDIT" --projet "$PROJ"
+else
+  step corrections "@sortie_corrections" valid_corrections python3 "$DIR/corrections.py" "$AUDIT"
+fi
+# Ancien dossier conservé (.garder ou suivi commencé) : le signaler à l'écran (step range stderr dans un log) et dans COLLECTE.md.
+NOM_CORR=""
+valid_corrections && NOM_CORR=$(nom_corrections)  # STEP_T0 = début de l'étape corrections : un pointeur périmé ne déclenche rien
+case "$NOM_CORR" in
+  CORRECTIONS-*)
+    grep -E '^\[(attention|info)\]' "$D/.log-corrections.txt" 2>/dev/null | sed 's/^/  ⚠️  /'
+    echo "| corrections (dossier conservé) | ⚠️ l'ancien CORRECTIONS/ est conservé : donner $NOM_CORR/ à l'agent de code | | $NOM_CORR/ |" >> "$LOG"
+    ;;
+esac
+rm -f "$AUDIT/RAPPORT.html"
+step rapport-html "$AUDIT/RAPPORT.html" valid_aucun python3 "$DIR/rapport_html.py" "$AUDIT"
+pdf_step() {  # cas particuliers de rapport_pdf.sh : Chrome absent (2) / RAM insuffisante (3) = avertissement
+  local out="$AUDIT/RAPPORT.pdf" t0 code st
+  t0=$(date +%s)
+  echo "▶ pdf…"
+  bash "$DIR/rapport_pdf.sh" "$AUDIT" > "$D/.log-pdf.txt" 2>&1
+  code=$?
+  case $code in
+    0) if [ -s "$out" ] && head -c 5 "$out" | grep -q '%PDF-'; then st="✅"
+       else st="❌ résultat vide ou inexploitable (voir data/.log-pdf.txt)"; fi;;
+    2) st="⚠️ PDF non généré : Chrome introuvable (CHROME_PATH)";;
+    3) st="⚠️ PDF non généré : RAM insuffisante";;
+    *) st="❌ impression PDF échouée, code $code (voir data/.log-pdf.txt)";;
+  esac
+  case "$st" in ❌*) FAILS=$((FAILS + 1));; esac
+  echo "| pdf | $st | $(( $(date +%s) - t0 )) s | RAPPORT.pdf |" >> "$LOG"
+  echo "  $st"
+}
+if [ "${SKIP_PDF:-0}" = "1" ] || { [ "${SKIP_LIGHTHOUSE:-0}" = "1" ] && [ "${FORCE_PDF:-0}" != "1" ]; }; then
+  echo "| pdf | ⏭️ ignoré (SKIP_PDF=1 ou SKIP_LIGHTHOUSE=1) | | |" >> "$LOG"
+else
+  pdf_step
+fi
+# Historique du site (dossier parent) : toujours en dernier, il reprend le RAPPORT.html/.pdf qu'on vient de produire.
+# Seulement pour un dossier d'audit daté AAAA-MM-JJ (sinon le parent n'est pas un dossier de site : rien n'y est écrit).
+case "$(basename "$AUDIT")" in
+  [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])
+    step historique "$(dirname "$AUDIT")/index.html" valid_aucun python3 "$DIR/historique.py" "$(dirname "$AUDIT")";;
+  *) echo "| historique | ⏭️ ignoré (dossier d'audit non daté AAAA-MM-JJ) | | |" >> "$LOG";;
+esac
 echo >> "$LOG"
 echo "Dossier d'audit : \`$AUDIT\`" >> "$LOG"
 echo

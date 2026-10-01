@@ -72,6 +72,16 @@ def flat_items(det):
     return out
 
 
+def audit_en_echec(a):
+    """Échec réel seulement : binaire à 0, numérique < 0,9. Informatif, manuel, non applicable, erreur : jamais."""
+    mode, score = a.get("scoreDisplayMode"), a.get("score")
+    if mode in ("binary", None):
+        return score == 0
+    if mode in ("numeric", "metricSavings"):
+        return score is not None and score < 0.9
+    return False
+
+
 def summarize_lhr(lhr):
     audits = lhr.get("audits", {})
     cats = {k: round((v.get("score") or 0) * 100) for k, v in lhr.get("categories", {}).items()
@@ -145,8 +155,10 @@ def summarize_lhr(lhr):
     fails = {}
     for cat_id in ("accessibility", "seo", "best-practices"):
         refs = lhr.get("categories", {}).get(cat_id, {}).get("auditRefs", [])
-        fails[cat_id] = [audits[r["id"]].get("title", r["id"]) for r in refs
-                         if r.get("weight", 0) > 0 and audits.get(r["id"], {}).get("score") not in (None, 1)]
+        # titre + [id] : certains titres d'échec traduits se lisent comme un succès
+        # (fr : « Les liens sont identifiables grâce à leur couleur. » = ÉCHEC de link-in-text-block)
+        fails[cat_id] = ["{0} [{1}]".format(audits[r["id"]].get("title", r["id"]), r["id"]) for r in refs
+                         if r.get("weight", 0) > 0 and audit_en_echec(audits.get(r["id"], {}))]
     return {"url": lhr.get("finalDisplayedUrl") or lhr.get("finalUrl") or lhr.get("requestedUrl"),
             "form_factor": (lhr.get("configSettings") or {}).get("formFactor", ""),
             "lighthouse": lhr.get("lighthouseVersion"), "scores": cats, "metriques": metrics,

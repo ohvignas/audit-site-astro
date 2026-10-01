@@ -2,7 +2,7 @@
 """
 score.py — Compare les sorties de l'audit à la vérité terrain du cobaye.
 
-  python3 tests/cobaye/score.py --casse audits-cobaye/casse --propre audits-cobaye/propre --phase 0 \
+  python3 tests/cobaye/score.py --casse audits-cobaye/casse --propre audits-cobaye/propre --phase 1 \
       [--sortie audits-cobaye] [--resume "$GITHUB_STEP_SUMMARY"]
 
 Rappel = défauts requis (phase ≤ N) détectés sur le cobaye cassé.

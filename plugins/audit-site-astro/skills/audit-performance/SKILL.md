@@ -5,7 +5,7 @@ description: Audit de performance d'un site Astro (SSR Node ou statique, backend
 
 # Audit performance — Astro (+ Convex)
 
-Scripts : `../audit-complet/scripts/` (relatif au dossier de ce skill). Format des constats : `../audit-complet/references/format-constat.md`. Sortie : `rapports/performance.md` dans le dossier d'audit.
+Scripts : `../audit-complet/scripts/` (relatif au dossier de ce skill ; sinon, même commande `find` que dans audit-complet §2). Format des constats : `../audit-complet/references/format-constat.md`. Sortie : `rapports/performance.md` dans le dossier d'audit.
 
 ## Données
 

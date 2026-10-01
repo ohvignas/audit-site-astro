@@ -110,7 +110,9 @@ jobs:
       - name: Auditer le jumeau propre
         run: bash tests/cobaye/auditer.sh propre
       - name: Score
-        run: python3 tests/cobaye/score.py --casse audits-cobaye/casse --propre audits-cobaye/propre --phase 0 --sortie audits-cobaye --resume "$GITHUB_STEP_SUMMARY"
+        run: python3 tests/cobaye/score.py --casse audits-cobaye/casse --propre audits-cobaye/propre --phase 1 --sortie audits-cobaye --resume "$GITHUB_STEP_SUMMARY"
+      - name: Test du PDF (Chrome headless)
+        run: RUN_CHROME_TESTS=1 CHROME_PATH="$(command -v google-chrome || command -v chromium)" python3 -m unittest tests.unit.test_rapport_pdf -v
       - name: Journaux des cobayes (en cas d'échec)
         if: failure()
         run: docker compose -f tests/cobaye/docker-compose.yml logs --tail=200

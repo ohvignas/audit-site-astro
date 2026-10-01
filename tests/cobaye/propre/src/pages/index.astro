@@ -5,6 +5,8 @@ import Base from '../layouts/Base.astro';
 import hero from '../assets/hero.jpg';
 import { paragraphes } from '../data/texte';
 import { formations } from '../data/formations';
+import { getCollection } from 'astro:content';
+const articles = await getCollection('blog');
 ---
 <Base title="Cobaye Formation : formations no-code et IA finançables" description="Formations no-code et IA à distance, finançables CPF et OPCO, avec un projet réel accompagné de A à Z.">
   <Image src={hero} alt="Atelier de formation no-code en petit groupe" layout="full-width" priority />
@@ -15,4 +17,6 @@ import { formations } from '../data/formations';
   {paragraphes('personnalisée').filter((_, i) => i !== 2 && i !== 4).map((p) => <p>{p}</p>)}
   <h2>Nos formations</h2>
   <ul>{formations.map((f) => <li><a href={`/formations/${f.slug}`}>{f.titre}</a></li>)}</ul>
+  <h2>Nos articles</h2>
+  <ul>{articles.map((a) => <li><a href={`/blog/${a.id}`}>{a.data.titre}</a></li>)}</ul>
 </Base>

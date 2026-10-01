@@ -5,7 +5,7 @@ description: Audit de sécurité défensif et non intrusif de SON PROPRE site As
 
 # Audit sécurité — Astro + Convex (défensif)
 
-Scripts : `../audit-complet/scripts/`. Format : `../audit-complet/references/format-constat.md`. Sortie : `rapports/securite.md`.
+Scripts : `../audit-complet/scripts/` (sinon, même commande `find` que dans audit-complet §2). Format : `../audit-complet/references/format-constat.md`. Sortie : `rapports/securite.md`.
 
 **Cadre** : uniquement le site et le serveur de l'utilisateur. Pas de force brute, pas d'exploitation, pas de scan de ports agressif, pas de charge. On observe, on lit la config et le code, on recommande. Si une faille est trouvée, on ne l'exploite pas pour la « prouver » : la preuve est la configuration ou le code.
 

@@ -9,8 +9,10 @@ curl() { if [ "${AUDIT_INSECURE_TLS:-}" = "1" ]; then command curl -k "$@"; else
 URL="${1:?usage: security_probe.sh https://site.tld [dossier_sortie]}"
 OUT="${2:-.}"
 mkdir -p "$OUT"
-BASE=$(printf '%s' "$URL" | awk -F/ '{print $1"//"$3}')
 UA="Mozilla/5.0 (compatible; AuditSecu/1.0; audit du proprietaire)"
+# Origine réellement servie (apex → www, http → https…) : sinon chaque sonde ne reçoit qu'une redirection
+FINAL=$(curl -s -o /dev/null -L --max-redirs 10 --max-time 20 -A "$UA" -w '%{url_effective}' "$URL" 2>/dev/null)
+BASE=$(printf '%s' "${FINAL:-$URL}" | awk -F/ '{print $1"//"$3}')
 REPORT="$OUT/security-probe.md"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 exec > >(tee "$REPORT") 2>&1
@@ -68,23 +70,54 @@ check "/backup.zip" "" "haute"
 check "/backup.sql" "INSERT INTO|CREATE TABLE" "critique"
 check "/dump.sql" "INSERT INTO|CREATE TABLE" "critique"
 check "/db.sqlite" "SQLite format" "critique"
-# Debug / outils de dev
-check "/_image?href=https://example.com/x.png" "" "info"
+# Debug / outils de dev (le proxy /_image a sa propre section, avec une vraie image distante)
 check "/__vite_ping" "" "moyenne"
 check "/@vite/client" "import.meta.hot|vite" "haute"
 check "/phpinfo.php" "phpinfo\(\)|PHP Version" "haute"
 check "/server-status" "Apache Server Status" "moyenne"
-check "/.well-known/security.txt" "Contact:" "info"
+# security.txt (RFC 9116) : fichier à PUBLIER, sa présence est une bonne pratique (jamais « exposé »)
+scode=$(curl -s -A "$UA" --max-time 15 -o "$TMP/sectxt" -w '%{http_code}' "$BASE/.well-known/security.txt")
+scode=${scode:-000}
+ssize=$(wc -c < "$TMP/sectxt" 2>/dev/null | tr -d ' ')
+if [ "$scode" = "200" ] && grep -qaiE '^contact:' "$TMP/sectxt"; then
+  sverdict="✅ présent"
+elif [ "$scode" = "200" ] || [ "$scode" = "404" ] || [ "$scode" = "410" ]; then
+  sverdict="⚠️ absent (recommandé, RFC 9116)"
+  [ "$scode" = "200" ] && sverdict="$sverdict — HTTP 200 sans champ Contact: (page générique servie à la place)"
+else
+  sverdict="⚠️ HTTP $scode (security.txt recommandé, RFC 9116)"
+fi
+echo "| /.well-known/security.txt | $scode | ${ssize:-0} | $sverdict |"
 # Restes WordPress (migrations)
 check "/wp-login.php" "wp-submit|user_login" "info"
 check "/xmlrpc.php" "XML-RPC" "info"
 check "/wp-content/debug.log" "PHP (Warning|Notice|Fatal)" "haute"
 
 echo
+echo "## Proxy d'images /_image"
+echo
+# Image PNG réelle sur un domaine tiers : si /_image la transforme, n'importe qui fait travailler le serveur.
+IMG_TIERS="${AUDIT_IMAGE_DISTANTE:-https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png}"
+enc=$(printf '%s' "$IMG_TIERS" | sed -e 's/%/%25/g' -e 's/:/%3A/g' -e 's#/#%2F#g' -e 's/?/%3F/g' -e 's/&/%26/g' -e 's/=/%3D/g')
+r=$(curl -s -o /dev/null -A "$UA" --max-time 30 -w '%{http_code}|%{content_type}' "$BASE/_image?href=$enc&w=16&f=webp")
+icode=${r%%|*}; ictype=${r#*|}
+icode=${icode:-000}
+if [ "$icode" = "200" ] && printf '%s' "$ictype" | grep -qi '^image/'; then
+  echo "- ❌ proxy d'images ouvert : /_image transforme une image d'un domaine tiers ($IMG_TIERS → HTTP 200, $ictype) — n'importe qui peut consommer le CPU et la bande passante du serveur : image.remotePatterns avec un hostname explicite (jamais le protocole seul)"
+else
+  case "$icode" in
+    400|403|404) echo "- ✅ /_image refuse une image d'un domaine tiers (HTTP $icode)";;
+    *) echo "- ⚠️ /_image indéterminé (HTTP $icode) : l'image distante $IMG_TIERS est injoignable depuis le serveur, ou la sonde a reçu une redirection ou une erreur — un 5xx signifie souvent que le domaine est AUTORISÉ mais le téléchargement a échoué : vérifier image.remotePatterns (hostname explicite)";;
+  esac
+fi
+
+echo
 echo "## Source maps JavaScript publiques"
 echo
-curl -s -A "$UA" --max-time 20 "$URL" -o "$TMP/home.html"
-js=$(grep -oE '(src|href)="[^"]+\.js"' "$TMP/home.html" | sed -E 's/^(src|href)="//; s/"$//' | awk '!s[$0]++' | head -8)
+curl -s -A "$UA" --max-time 20 "${FINAL:-$URL}" -o "$TMP/home.html"
+# JS de la page, y compris ceux des îlots Astro (component-url / renderer-url), sans query string
+js=$(grep -oE '(src|href|component-url|renderer-url)="[^"]+\.m?js(\?[^"]*)?"' "$TMP/home.html" \
+  | sed -E 's/^[a-z-]+="//; s/"$//; s/\?.*$//' | awk '!s[$0]++' | head -12)
 found=0
 for j in $js; do
   case "$j" in http*) full="$j";; /*) full="$BASE$j";; *) full="$BASE/$j";; esac
@@ -118,7 +151,7 @@ fi
 echo
 echo "## Méthodes HTTP et CORS"
 echo
-opt=$(curl -s -o /dev/null -D - -X OPTIONS -A "$UA" --max-time 15 "$URL" | grep -iE '^(allow|access-control-allow-origin):' | tr -d '\r')
+opt=$(curl -s -o /dev/null -D - -X OPTIONS -A "$UA" --max-time 15 "${FINAL:-$URL}" | grep -iE '^(allow|access-control-allow-origin):' | tr -d '\r')
 echo "- OPTIONS : ${opt:-aucun en-tête Allow/CORS exposé}"
-cors=$(curl -s -o /dev/null -D - -H "Origin: https://evil.example" -A "$UA" --max-time 15 "$URL" | grep -i '^access-control-allow-origin:' | tr -d '\r')
+cors=$(curl -s -o /dev/null -D - -H "Origin: https://evil.example" -A "$UA" --max-time 15 "${FINAL:-$URL}" | grep -i '^access-control-allow-origin:' | tr -d '\r')
 [ -n "$cors" ] && echo "- ⚠️ CORS sur la page HTML pour une origine arbitraire : $cors" || echo "- ✅ pas de CORS ouvert sur la page HTML"
