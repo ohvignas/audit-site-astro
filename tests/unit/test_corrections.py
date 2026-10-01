@@ -612,7 +612,9 @@ class TestSecrets(Base):
     def test_la_sonde_reelle_ne_sort_pas_de_contenu(self):
         # security_probe.sh n'écrit que chemin, code, taille, verdict et des motifs tronqués à 12 caractères
         script = (SCRIPTS / "security_probe.sh").read_text(encoding="utf-8")
-        self.assertIn("sed -E 's/(.{12}).*/\\1…/'", script)
+        # troncature à 12 caractères désormais dans secrets_js.formater (la sonde ne fait que l'appeler)
+        self.assertIn('python3 "$DIR/secrets_js.py"', script)
+        self.assertIn("valeur[:12]", (SCRIPTS / "secrets_js.py").read_text(encoding="utf-8"))
         self.assertIn('echo "| $path | $code | $size | $verdict |"', script)
 
 
