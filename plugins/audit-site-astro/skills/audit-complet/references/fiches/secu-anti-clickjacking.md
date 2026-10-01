@@ -6,6 +6,7 @@ severite_type: moyenne
 effort: S
 declencheurs:
   - "http:\\| x-frame-options \\| — \\| ❌ absent"
+  - "http:frame-ancestors ignoré dans une CSP <meta>"
 sources:
   - https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/frame-ancestors
   - https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Frame-Options
@@ -19,7 +20,7 @@ sources:
 
 ## Pourquoi c'est important
 
-Dans une attaque de « clickjacking », un site pirate superpose votre page (transparente) à un faux bouton : le visiteur croit cliquer sur autre chose et déclenche une action chez vous (valider un formulaire, confirmer une suppression, se connecter). Le risque est faible sur un site vitrine sans compte, et réel dès qu'il y a des actions authentifiées (espace client, administration). La parade est un simple en-tête : `frame-ancestors` (moderne, dans la CSP) et `X-Frame-Options` (ancien, encore lu par certains navigateurs). L'outil ne signale le constat que si les deux manquent.
+Dans une attaque de « clickjacking », un site pirate superpose votre page (transparente) à un faux bouton : le visiteur croit cliquer sur autre chose et déclenche une action chez vous (valider un formulaire, confirmer une suppression, se connecter). Le risque est faible sur un site vitrine sans compte, et réel dès qu'il y a des actions authentifiées (espace client, administration). La parade est un simple en-tête : `frame-ancestors` (moderne, dans la CSP) et `X-Frame-Options` (ancien, encore lu par certains navigateurs). L'outil ne signale le constat que si les deux manquent ; une directive `frame-ancestors` trouvée uniquement dans une CSP `<meta>` est signalée à part (gravité moyenne) car le navigateur l'ignore.
 
 ## Comment le constater soi-même
 

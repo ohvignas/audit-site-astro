@@ -7,6 +7,7 @@
 #   sans lui, les liens de la page d'accueil servent de repli.
 # Sortie : DOSSIER_SORTIE/http-checks.md (lisible) — aucune modification du site.
 set -u
+DIR="$(cd "$(dirname "$0")" && pwd)"
 curl() { if [ "${AUDIT_INSECURE_TLS:-}" = "1" ]; then command curl -k "$@"; else command curl "$@"; fi; }
 URL="${1:?usage: http_checks.sh https://site.tld [dossier_sortie]}"
 OUT="${2:-.}"
@@ -99,11 +100,9 @@ for h in strict-transport-security content-security-policy x-content-type-option
   short=$(printf '%s' "$val" | cut -c1-90)
   echo "| $h | ${short:-—} | $v |"
 done
-csp=$(hv content-security-policy "$TMP/h_html")
-if [ -n "$csp" ]; then
-  echo "$csp" | grep -q "unsafe-eval" && echo "| CSP | contient 'unsafe-eval' | ⚠️ à éviter |"
-  echo "$csp" | grep -qE "script-src[^;]*'unsafe-inline'" && ! echo "$csp" | grep -qE "nonce-|sha(256|384)-" && echo "| CSP | script-src 'unsafe-inline' sans nonce/hash | ⚠️ protège peu contre le XSS |"
-fi
+# CSP (en-tête ET <meta>, dont security.csp d'Astro ≥ 6) et attributs des cookies (noms seulement, jamais les valeurs) :
+# analyse des seuls en-têtes et corps déjà téléchargés ci-dessus, aucune requête de plus
+python3 "$DIR/entetes_securite.py" "$TMP/h_html" "$TMP/body.html" "$(printf '%s' "$PAGE" | cut -d: -f1)"
 echo
 
 echo "## 4. Cache et compression des ressources statiques"
