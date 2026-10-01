@@ -6,6 +6,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 ICI = pathlib.Path(__file__).resolve().parent
 RACINE = ICI.parents[1]
@@ -346,8 +347,16 @@ class TestLectureDuHtml(unittest.TestCase):
             def resultat(self):
                 return {"ok": 1}
         erreurs = []
-        res = ho.analyser("<p>a</p><![foo]><p>b</p>", {}, "https://ex.fr/",
-                          modules=[("c", types.SimpleNamespace(Observateur=Compte))], erreurs=erreurs)
+        # Une erreur du lecteur HTML (selon la version de Python, « <![foo]> » lève ou non) : on la provoque
+        # de façon déterministe pour tester la remontée, pas le comportement de html.parser.
+        vrai_feed = ho.Diffuseur.feed
+
+        def feed_qui_casse(self, html):
+            vrai_feed(self, "<p>a</p>")
+            raise AssertionError("expected name token")
+        with mock.patch.object(ho.Diffuseur, "feed", feed_qui_casse):
+            res = ho.analyser("<p>a</p><p>b</p>", {}, "https://ex.fr/",
+                              modules=[("c", types.SimpleNamespace(Observateur=Compte))], erreurs=erreurs)
         self.assertEqual(res, {"c": {"ok": 1}})
         self.assertEqual(len(erreurs), 1)
         self.assertTrue(erreurs[0].startswith("parse: "), erreurs)
