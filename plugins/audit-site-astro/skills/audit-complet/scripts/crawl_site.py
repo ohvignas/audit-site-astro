@@ -47,24 +47,10 @@ SKIP_QUERY = re.compile(r"(^|&)(replytocom|share|add-to-cart|add_to_wishlist|pre
 COUNT_TAGS = {"ul", "ol", "table", "time", "main", "article", "iframe", "video", "form", "nav", "script", "link"}
 SKIP_TEXT_TAGS = {"script", "style", "noscript", "svg", "template"}
 # Chemins de CSS/JS nécessaires au rendu : WordPress, Astro (/_astro/), Next.js (/_next/)
-# Éléments sans balise fermante (ne s'empilent pas) ; styles qui masquent un élément
-VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
-STYLE_MASQUE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
-# Classes utilitaires qui masquent (Tailwind, Bootstrap, Bulma) : jetons entiers ; sr-only n'en fait PAS partie
-# (masqué visuellement mais lu par les lecteurs d'écran : un libellé reste requis)
-CLASSES_MASQUE = {"hidden", "d-none", "is-hidden", "invisible"}
-# « hidden md:block » : masqué sur mobile seulement, visible ensuite → pas masqué
-CLASSE_REAFFICHE = re.compile(r"^(sm|md|lg|xl|2xl):(block|inline|inline-block|flex|inline-flex|grid|inline-grid|table|contents|visible)$")
-
-
-def masque(tag, a):
-    """Élément absent de l'arbre d'accessibilité (ignoré par axe/Lighthouse) : hidden, aria-hidden, style, classe
-    utilitaire de masquage, <template>, <noscript>, <dialog> fermé."""
-    classes = a.get("class", "").split()
-    par_classe = bool(CLASSES_MASQUE.intersection(classes)) and not any(CLASSE_REAFFICHE.match(c) for c in classes)
-    return (tag in ("template", "noscript") or (tag == "dialog" and "open" not in a) or "hidden" in a
-            or a.get("aria-hidden", "").lower() == "true" or bool(STYLE_MASQUE.search(a.get("style", "")))
-            or par_classe)
+# Constantes de masquage et contrôles HTML additionnels : html_observateurs.py (une lecture partagée par onze modules,
+# en plus de celle de PageParser)
+import html_observateurs  # noqa: E402
+from html_observateurs import VOID_TAGS, masque  # noqa: E402,F401
 
 
 ASSETS_RX = re.compile(r"\.(css|m?js)\b|wp-content/(themes|plugins)|wp-includes|/_astro\b|/_next/", re.I)
@@ -493,6 +479,23 @@ def parse_sitemaps(start_urls, timeout, limit_maps=200):
 
 # --------------------------------------------------------------------------- analyse
 
+def ecrire_json(chemin, objet):
+    """Écrit `objet` en JSON dans `chemin` de façon atomique : fichier temporaire du même dossier puis os.replace. Si la
+    sérialisation échoue, l'ancien fichier reste intact et aucun fichier temporaire ne traîne."""
+    chemin = Path(chemin)
+    tmp = chemin.with_name(chemin.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(objet, f, ensure_ascii=False, indent=1)
+        os.replace(str(tmp), str(chemin))
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def analyze_page(url, res):
     page = {
         "url": url,
@@ -524,6 +527,10 @@ def analyze_page(url, res):
         parser.feed(html)
     except Exception as e:
         page["error"] = f"parse: {e}"
+    erreurs_lecture = []
+    observations = html_observateurs.analyser(html, res["headers"], url, erreurs=erreurs_lecture)
+    if erreurs_lecture and not page["error"]:
+        page["error"] = erreurs_lecture[0]
     robots_meta = (parser.metas.get("robots", "") + "," + parser.metas.get("googlebot", "")).lower()
     xr = page["x_robots_tag"].lower()
     types, jl_err, _ = jsonld_types(parser.jsonld_raw)
@@ -560,6 +567,7 @@ def analyze_page(url, res):
         "microdata_items": parser.microdata,
         "tag_counts": dict(parser.tags),
         "form_fields_no_label": len(parser.champs_sans_libelle()),
+        "obs": observations,
         "has_author_link": parser.has_author_link,
         "body_class": parser.body_class[:300],
         "astra": "ast-" in parser.body_class or "/themes/astra" in html,
@@ -731,18 +739,34 @@ def crawl(args):
                 broken_imgs[s] = r["status"]
             time.sleep(args.delay / 2)
 
-    issues = build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_links,
-                          nofollow_internal, broken_imgs, host, scheme, canon_targets)
-    if relative_sitemaps:
-        issues["robots_sitemap_relative"] = {"label": "Directive Sitemap relative dans robots.txt (Google exige une URL absolue)",
-                                             "severity": "moyenne", "count": len(relative_sitemaps),
-                                             "examples": relative_sitemaps}
-    for tgt, srcs in utm_links.items():
-        it = issues.setdefault("utm_internal", {"label": "Liens internes avec paramètres UTM (faussent l'analytics, dupliquent les URL)",
-                                                "severity": "basse", "count": 0, "examples": []})
-        it["count"] += 1
-        if len(it["examples"]) < 25:
-            it["examples"].append({"lien": tgt, "depuis": sorted(srcs)[:3]})
+    def constats(ctx_):
+        """issues.json du crawl : build_issues puis les constats ajoutés ici (sitemap relatif, UTM)."""
+        issues_ = build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_links,
+                               nofollow_internal, broken_imgs, host, scheme, canon_targets, ctx_)
+        if relative_sitemaps:
+            issues_["robots_sitemap_relative"] = {
+                "label": "Directive Sitemap relative dans robots.txt (Google exige une URL absolue)",
+                "severity": "moyenne", "count": len(relative_sitemaps), "examples": relative_sitemaps}
+        for tgt, srcs in utm_links.items():
+            it = issues_.setdefault("utm_internal", {
+                "label": "Liens internes avec paramètres UTM (faussent l'analytics, dupliquent les URL)",
+                "severity": "basse", "count": 0, "examples": []})
+            it["count"] += 1
+            if len(it["examples"]) < 25:
+                it["examples"].append({"lien": tgt, "depuis": sorted(srcs)[:3]})
+        return issues_
+
+    # --- pages.json et issues.json provisoires écrits tout de suite (atomiquement) : si le délai de l'étape coupe les
+    #     contrôles réseau, les données et les constats du crawl restent ; les modules n'y ajoutent rien (ctx "provisoire")
+    ecrire_json(out / "pages.json", {"meta": {"start_url": start, "host": host, "pages_crawled": len(pages), "partiel": True},
+                                      "pages": list(pages.values())})
+    ecrire_json(out / "issues.json", constats({"meta": {}, "provisoire": True}))
+    # --- modules du diffuseur : requêtes réseau éventuelles (liens externes, ressources), bornées en temps, puis constats
+    ctx = {"fetch": fetch, "timeout": args.timeout, "delai": args.delay, "host": host, "scheme": scheme,
+           "ua_navigateur": BROWSER_UA, "liens_externes_max": args.liens_externes, "delai_externe": args.delai_externe,
+           "ressources_max": args.ressources, "budget_reseau_s": args.budget_reseau, "meta": {}}
+    html_observateurs.apres_crawl(pages, ctx)
+    issues = constats(ctx)
 
     meta = {
         "start_url": start, "host": host, "pages_crawled": len(pages), "max_pages": args.max_pages,
@@ -752,27 +776,31 @@ def crawl(args):
         "sitemap_files": sm_files, "sitemap_errors": sm_errors, "sitemap_url_count": len(sitemap_set),
         "blocked_by_robots": blocked[:500], "broken_images": broken_imgs,
         "canonical_targets_checked": {u: c["final_status"] for u, c in canon_targets.items()},
+        "modules": ctx["meta"],
         "astra_detected": any(p.get("astra") for p in pages.values()),
         "astro_detected": any(p.get("astro") for p in pages.values()),
     }
-    with open(out / "pages.json", "w", encoding="utf-8") as f:
-        json.dump({"meta": meta, "pages": list(pages.values())}, f, ensure_ascii=False, indent=1)
-    with open(out / "issues.json", "w", encoding="utf-8") as f:
-        json.dump(issues, f, ensure_ascii=False, indent=1)
+    ecrire_json(out / "pages.json", {"meta": meta, "pages": list(pages.values())})
+    ecrire_json(out / "issues.json", issues)
     write_csv(out / "pages.csv", pages.values())
     write_summary(out / "summary.md", meta, pages, issues)
+    for nom, msg in sorted(modules_en_erreur(meta).items()):
+        print(f"⚠️ module {nom} désactivé : {msg.split(':')[0]}", file=sys.stderr)  # reste dans .log-crawl.txt
     print(f"[ok] {len(pages)} pages — résultats dans {out}", file=sys.stderr)
 
 
 # --------------------------------------------------------------------------- problèmes
 
 def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_links, nofollow_internal,
-                 broken_imgs, host, scheme, canon_targets=None):
+                 broken_imgs, host, scheme, canon_targets=None, ctx=None):
     issues = {}
     canon_targets = canon_targets or {}
+    ctx = ctx if ctx is not None else {"meta": {}}
 
-    def add(key, label, sev, example=None, n=1):
+    def add(key, label, sev, example=None, n=1, domaine=None):
         it = issues.setdefault(key, {"label": label, "severity": sev, "count": 0, "examples": []})
+        if domaine:
+            it["domaine"] = domaine
         it["count"] += n
         if example is not None and len(it["examples"]) < 25:
             it["examples"].append(example)
@@ -965,6 +993,11 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
         add("nofollow_internal", "Liens internes en nofollow", "basse", {"url": tgt, "n": n}, n=n)
     for src, st in broken_imgs.items():
         add("broken_images", "Images cassées", "moyenne", {"src": src, "status": st})
+    if not ctx.get("provisoire"):  # issues.json provisoire (avant les contrôles réseau) : sans les constats des modules
+        html_observateurs.issues(pages, add, ctx)
+        # un module en erreur n'est jamais silencieux : ses contrôles manquent au rapport, il faut le dire
+        for nom in sorted(ctx["meta"].get("erreurs_modules", {})):
+            add("modules_en_erreur", "Modules d'analyse du crawl en erreur (contrôles désactivés ou incomplets)", "haute", nom)
     return issues
 
 
@@ -987,6 +1020,11 @@ def write_csv(path, pages):
                         ",".join(p.get("jsonld_types", []) or []), p.get("lang")])
 
 
+def modules_en_erreur(meta):
+    """{module: « Type: message… »} des modules du diffuseur en erreur pendant ce crawl (vide si tout va bien)."""
+    return (meta.get("modules") or {}).get("erreurs_modules", {})
+
+
 def write_summary(path, meta, pages, issues):
     order = {"critique": 0, "haute": 1, "moyenne": 2, "basse": 3, "info": 4}
     st = Counter(p["final_status"] if not p["redirect_hops"] else p["status"] for p in pages.values())
@@ -1007,6 +1045,10 @@ def write_summary(path, meta, pages, issues):
              ]
     if ttfbs:
         lines.append(f"- TTFB crawler : médiane {ttfbs[len(ttfbs) // 2]} s, max {ttfbs[-1]} s")
+    if modules_en_erreur(meta):
+        lines += ["", "## Modules en erreur", "",
+                  "Ces contrôles du crawl n'ont pas (ou pas entièrement) tourné ; les constats correspondants manquent :", ""]
+        lines += [f"- `{nom}` : {msg}" for nom, msg in sorted(modules_en_erreur(meta).items())]
     lines += ["", "## Problèmes détectés", "", "| Sévérité | Problème | Nb |", "|---|---|---|"]
     for k, it in sorted(issues.items(), key=lambda x: (order.get(x[1]["severity"], 9), -x[1]["count"])):
         lines.append(f"| {it['severity']} | {it['label']} (`{k}`) | {it['count']} |")
@@ -1026,6 +1068,10 @@ def main():
     ap.add_argument("--timeout", type=int, default=20)
     ap.add_argument("--ignore-robots", action="store_true", help="crawler aussi les URL bloquées par robots.txt")
     ap.add_argument("--check-images", type=int, default=0, help="vérifier le statut de N images uniques")
+    ap.add_argument("--liens-externes", type=int, default=300, help="liens externes vérifiés au plus (0 = aucun)")
+    ap.add_argument("--delai-externe", type=float, default=1.0, help="pause minimale entre deux requêtes vers un même hôte externe (s)")
+    ap.add_argument("--ressources", type=int, default=400, help="ressources du site vérifiées au plus (0 = aucune)")
+    ap.add_argument("--budget-reseau", type=float, default=300, help="temps maximal des requêtes de chaque module réseau (s)")
     crawl(ap.parse_args())
 
 
