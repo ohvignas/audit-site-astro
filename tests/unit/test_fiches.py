@@ -362,9 +362,13 @@ class TestCouverture(unittest.TestCase):
         self.assertEqual(trous, [], f"constats astro_scan.py (cobaye casse/propre) sans fiche : {trous}")
 
     def test_messages_du_source_d_astro_scan(self):
-        appels = extraction.appels(_lire("astro_scan.py"), "add", 2)
+        source = _lire("astro_scan.py")
+        appels = extraction.appels(source, "add", 2)
         self.assertGreaterEqual(len(appels), 60, "extraction des add(...) d'astro_scan.py dégradée")
-        echantillons = sorted({m for msgs in appels for m in msgs} - set(self.ASTRO_SANS_FICHE_VOULU))
+        # constats sur l'entrée du scan (fichiers ignorés, budget, étape en erreur) : add_entree(...), fiche code-modules-audit-en-erreur
+        entrees = extraction.appels(source, "add_entree", 2)
+        self.assertEqual(len(entrees), 3, "extraction des add_entree(...) d'astro_scan.py dégradée")
+        echantillons = sorted({m for msgs in appels + entrees for m in msgs} - set(self.ASTRO_SANS_FICHE_VOULU))
         self._verifier("astro_scan", "code", echantillons)
 
     # (c) fixture ----------------------------------------------------------------------------------------------------------
