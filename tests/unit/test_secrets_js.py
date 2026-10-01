@@ -171,9 +171,14 @@ class TestDetection(unittest.TestCase):
 
     def test_hexadecimale_dans_un_nom_de_fichier_ou_une_classe(self):
         h = HEX32[3:]
-        for t in ("/assets/sk-" + h + ".css", "import('./sk-" + h + ".js')", "u='sk-" + h + ".png'", "https://x.fr/y/sk-" + h,
-                  ".sk-" + h + "{color:red}", '<i class="a sk-' + h + '">', "sk-" + h + ".mjs", "sk-" + h + ".map"):
+        for t in ("/assets/sk-" + h + ".css", "import('./sk-" + h + ".js')", "u='sk-" + h + ".png'",
+                  ".sk-" + h + "{color:red}", ".a,.sk-" + h + ",.b{x:1}", ".sk-" + h + " .b{x:1}",
+                  '<i class="a sk-' + h + '">', "sk-" + h + ".mjs", "sk-" + h + ".map"):
             self.assertEqual(self.noms(t), [], t)
+        # une clé dans un chemin d'URL ou une propriété est une clé (revue N4) : seuls l'extension, le sélecteur CSS et class l'écartent
+        for t in ("https://h/v1/sk-" + h, "https://h/sk-" + h + "/chat", "fetch('/sk-" + h + "')", "//sk-" + h, "x='\\/sk-" + h + "'",
+                  "cfg.sk-" + h, "u='https://h/v1/sk-" + h + "?a=1'"):
+            self.assertEqual(self.noms(t), ["Clé sk- (hexadécimale)"], t)
         self.assertEqual(self.noms("t='" + HEX32 + "'."), ["Clé sk- (hexadécimale)"])  # un point final de phrase n'est pas une extension
 
     def test_faux_positifs_du_vrai_site_et_classes_css(self):

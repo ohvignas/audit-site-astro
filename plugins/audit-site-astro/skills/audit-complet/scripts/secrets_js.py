@@ -99,7 +99,8 @@ def _hexadecimale_plausible(texte, m):
     corps = m.group(0).rsplit("-", 1)[-1] if m.group(0).startswith("sk-or-v1-") else m.group(0)[3:]
     if DANS_CLASSE.search(texte[max(0, m.start() - 200):m.start()]):
         return False
-    if texte[max(0, m.start() - 1):m.start()] in (".", "/") or EXTENSION.match(texte, m.end()):  # classe CSS, chemin, nom de fichier haché
+    # nom de fichier haché (extension) ou sélecteur CSS « .sk-<hex>{ », « .sk-<hex>, », « .sk-<hex> » ; un chemin d'URL reste une clé
+    if EXTENSION.match(texte, m.end()) or (texte[max(0, m.start() - 1):m.start()] == "." and re.match(r"[{,\s]", texte[m.end():m.end() + 1])):
         return False
     return bool(re.search(r"\d", corps) and re.search(r"[a-f]", corps)) and entropie(corps) >= 3.0
 
