@@ -54,7 +54,7 @@ class TestCsp(unittest.TestCase):
         # sans en-tête de protection : constat (plafonné à ⚠️ = moyenne, jamais ❌)
         lignes = es.lignes_csp(pols, False)
         self.assertEqual(lignes[0], "| CSP (meta) | frame-ancestors ignoré dans une CSP <meta> | ⚠️ anti-clickjacking inopérant : envoyer "
-                                    "X-Frame-Options ou frame-ancestors dans l'en-tête HTTP |")
+                                    "X-Frame-Options ou frame-ancestors dans l'en-tête HTTP [moyenne] |")
         self.assertEqual(lignes[1], "| CSP (meta) | report-uri, sandbox ignorés dans une CSP <meta> | ℹ️ ces directives ne fonctionnent que dans l'en-tête HTTP |")
         self.assertFalse(any("❌" in l for l in lignes))
         # avec X-Frame-Options : plus de constat, une info seulement
@@ -76,8 +76,14 @@ class TestCsp(unittest.TestCase):
 
     def test_lignes(self):
         self.assertEqual(es.lignes_csp([("meta", "script-src 'self' 'unsafe-inline'; frame-ancestors 'none'")], False), [
-            "| CSP | script-src 'unsafe-inline' sans nonce/hash (meta) | ⚠️ protège peu contre le XSS |",
-            "| CSP (meta) | frame-ancestors ignoré dans une CSP <meta> | ⚠️ anti-clickjacking inopérant : envoyer X-Frame-Options ou frame-ancestors dans l'en-tête HTTP |"])
+            "| CSP | script-src 'unsafe-inline' sans nonce/hash (meta) | ⚠️ protège peu contre le XSS [moyenne] |",
+            "| CSP (meta) | frame-ancestors ignoré dans une CSP <meta> | ⚠️ anti-clickjacking inopérant : envoyer X-Frame-Options ou frame-ancestors dans l'en-tête HTTP [moyenne] |"])
+
+    def test_marqueur_moyenne_sur_les_seules_lignes_moyennes(self):
+        lignes = es.lignes_csp([("meta", "script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'unsafe-inline'; frame-ancestors 'none'")], False)
+        marques = {c for c, g in es.GRAVITES.items() if g == "moyenne"}
+        self.assertEqual(marques, {"script_unsafe_inline", "frame_ancestors_meta"})
+        self.assertEqual([("[moyenne]" in l) for l in lignes], [True, False, False, False, True])
 
     def test_gravites(self):
         self.assertEqual(es.GRAVITES, {"script_unsafe_inline": "moyenne", "unsafe_eval": "basse", "script_source_large": "basse",

@@ -92,7 +92,17 @@ cc=$(hv cache-control "$TMP/h_html"); echo "| Cache-Control HTML | ${cc:-absent}
 alt=$(hv alt-svc "$TMP/h_html"); echo "| HTTP/3 (alt-svc) | ${alt:-non annoncé} | $([ -n "$alt" ] && echo ✅ || echo 'ℹ️ optionnel') |"
 srv=$(hv server "$TMP/h_html"); pw=$(hv x-powered-by "$TMP/h_html")
 echo "| Server / X-Powered-By | ${srv:-—} / ${pw:-—} | $(echo "$srv$pw" | grep -qE '[0-9]+\.[0-9]+' && echo '⚠️ version exposée' || echo ✅) |"
-for h in strict-transport-security content-security-policy x-content-type-options referrer-policy permissions-policy x-frame-options cross-origin-opener-policy; do
+meta_csp=$(python3 "$DIR/entetes_securite.py" --meta "$TMP/h_html" "$TMP/body.html")
+# CSP : en-tête, sinon <meta> seulement (Astro ≥ 6 security.csp : une CSP existe, mais sans frame-ancestors, report-uri ni sandbox), sinon absente
+csp_h=$(hv content-security-policy "$TMP/h_html")
+if [ -n "$csp_h" ]; then
+  echo "| content-security-policy | $(printf '%s' "$csp_h" | cut -c1-90) | ✅ |"
+elif [ "$meta_csp" = "oui" ]; then
+  echo "| content-security-policy | — | ⚠️ en <meta> seulement (pas de frame-ancestors, report-uri ni sandbox ; préférer l'en-tête) |"
+else
+  echo "| content-security-policy | — | ❌ absent |"
+fi
+for h in strict-transport-security x-content-type-options referrer-policy permissions-policy x-frame-options cross-origin-opener-policy; do
   val=$(hv "$h" "$TMP/h_html")
   if [ -n "$val" ]; then v="✅"; else v="❌ absent"; fi
   [ "$h" = "x-frame-options" ] && [ -z "$val" ] && grep -qi 'frame-ancestors' "$TMP/h_html" && v="✅ (frame-ancestors dans la CSP)"

@@ -3,9 +3,11 @@
 entetes_securite.py — Analyse de la CSP (en-tête et <meta>) et des attributs des cookies, au niveau de MDN HTTP Observatory.
 
 Usage : python3 entetes_securite.py FICHIER_ENTETES PAGE_HTML SCHEMA(http|https)
+        python3 entetes_securite.py --meta FICHIER_ENTETES PAGE_HTML      (affiche « oui » ou « non » : CSP <meta> présente ?)
 Écrit des lignes du tableau « Contrôle | Valeur | Verdict » de http-checks.md §3. Aucune requête réseau : les en-têtes et la page
 déjà téléchargés par http_checks.sh suffisent. Seuls les NOMS des cookies sont écrits, jamais leurs valeurs.
 
+Marqueur de gravité : une ligne ⚠️ de gravité moyenne se termine par « [moyenne] » dans sa cellule Verdict (T27 : signaux.py le lit).
 Gravités (le pipeline lit ❌ = haute, ⚠️ = basse/moyenne, ℹ️ = info, sans signal) :
   script-src 'unsafe-inline' sans nonce/hash/strict-dynamic ........ moyenne (⚠️)
   script-src 'unsafe-inline' avec nonce/hash/strict-dynamic ......... info (ℹ️) : ignoré par les navigateurs modernes
@@ -104,13 +106,13 @@ def analyser_csp(pols, xfo):
 
 
 MODELES = {
-    "script_unsafe_inline": "| CSP | script-src 'unsafe-inline' sans nonce/hash ({o}) | ⚠️ protège peu contre le XSS |",
+    "script_unsafe_inline": "| CSP | script-src 'unsafe-inline' sans nonce/hash ({o}) | ⚠️ protège peu contre le XSS [moyenne] |",
     "unsafe_eval": "| CSP | contient 'unsafe-eval' ({o}) | ⚠️ à éviter |",
     "script_source_large": "| CSP | source trop large dans script-src : {l} ({o}) | ⚠️ autorise des scripts de n'importe quel domaine |",
     "style_unsafe_inline": "| CSP | style-src 'unsafe-inline' ({o}) | ⚠️ risque limité : injection de styles, pas de script |",
     # Plafonné à ⚠️ (moyenne) : la CSP <meta> reste utile pour les scripts ; seul l'anti-clickjacking manque
     "frame_ancestors_meta": "| CSP (meta) | frame-ancestors ignoré dans une CSP <meta> | ⚠️ anti-clickjacking inopérant : envoyer "
-                            "X-Frame-Options ou frame-ancestors dans l'en-tête HTTP |",
+                            "X-Frame-Options ou frame-ancestors dans l'en-tête HTTP [moyenne] |",
 }
 
 
@@ -181,6 +183,13 @@ def lignes_cookies(entetes_txt, https):
 
 
 def main():
+    if sys.argv[1:2] == ["--meta"]:  # « oui » si la page porte une CSP <meta> : sert au verdict de la ligne content-security-policy
+        try:
+            html = open(sys.argv[3], encoding="utf-8", errors="replace").read()
+        except (OSError, IndexError):
+            html = ""
+        print("oui" if any(o == "meta" for o, _ in politiques("", html)[0]) else "non")
+        return
     try:
         entetes = open(sys.argv[1], encoding="utf-8", errors="replace").read()
     except (OSError, IndexError):

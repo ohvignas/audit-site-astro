@@ -6,6 +6,7 @@ severite_type: moyenne
 effort: M
 declencheurs:
   - "http:\\| content-security-policy \\| — \\| ❌ absent"
+  - "http:\\| content-security-policy \\| — \\| ⚠️ en <meta> seulement"
   - "code:Aucune Content-Security-Policy"
 versions_astro: ">=6.0"
 sources:
