@@ -22,12 +22,14 @@ SPF liste les serveurs autorisés à envoyer du courrier pour le domaine ; DMARC
 
 L'outil règle la gravité selon le courrier réellement géré par le domaine :
 
-- **SPF `+all`** (ou `all` nu) : n'importe quel serveur est autorisé, l'usurpation est ouverte (haute) ; `?all` : aucune protection (basse).
+- **SPF `+all`** (ou `all` nu) : n'importe quel serveur est autorisé, l'usurpation est ouverte (haute) ; `?all` : aucune protection (basse). Seul le premier mécanisme `all` compte (RFC 7208 §5.1 : `-all +all` est un `-all`) ; un `+all` hérité d'un `include:` ou d'un `redirect=` est détecté de la même façon.
 - **SPF multiple** (plusieurs enregistrements `v=spf1`) ou **plus de 10 requêtes DNS** : le SPF est invalide (erreur permanente, RFC 7208), les destinataires l'ignorent (moyenne).
 - **DMARC absent** : moyenne si le domaine reçoit des e-mails (enregistrement MX non nul), basse sinon (durcissement recommandé : un domaine sans e-mail devrait publier `v=spf1 -all` et `p=reject`).
-- **SPF absent** : basse. **DMARC en `p=none`** : info (surveillance seule, étape normale d'un déploiement).
+- **SPF absent** : moyenne si le domaine reçoit des e-mails (MX non nul), basse sinon (même règle que DMARC). **DMARC en `p=none`** : info (surveillance seule, étape normale d'un déploiement). Un DMARC sans `p=` valide est signalé « invalide » (les destinataires l'ignorent).
 
-DMARC est cherché sur le nom exact du site, puis sur le domaine organisationnel (`www.exemple.fr` puis `exemple.fr`) ; la politique `sp=` du domaine organisationnel prime pour les sous-domaines. DKIM n'est pas testé (le sélecteur est inconnu : vérifier chez le fournisseur d'envoi).
+Le domaine contrôlé est le domaine enregistrable de la Public Suffix List (`www.exemple.fr` et `beta.exemple.fr` donnent `exemple.fr` ; `www.exemple.co.uk` donne `exemple.co.uk`). DMARC est cherché sur le nom exact du site, puis sur ses ancêtres jusqu'au domaine enregistrable ; la politique `sp=` prime pour les sous-domaines quand l'enregistrement est publié sur un ancêtre. DKIM n'est pas testé (le sélecteur est inconnu : vérifier chez le fournisseur d'envoi).
+
+**Site hébergé sur un sous-domaine de plateforme** (`monsite.github.io`, `monsite.vercel.app`, `monsite.netlify.app`, `monsite.pages.dev`, `monsite.herokuapp.com`…) : SPF, DMARC, CAA et DNSSEC appartiennent à la plateforme, pas au propriétaire du site. L'outil n'émet alors aucun constat (statut « plateforme partagée ») ; ces contrôles ne s'appliquent qu'avec un domaine personnalisé.
 
 ## Comment le constater soi-même
 
@@ -60,7 +62,9 @@ _dmarc.exemple.fr.  TXT  "v=DMARC1; p=none; rua=mailto:dmarc@exemple.fr"
 
    Lire les rapports agrégés quelques semaines, corriger les expéditeurs oubliés, puis passer à `p=quarantine`, puis à `p=reject`. Domaine sans e-mail : `"v=DMARC1; p=reject"` directement.
 
-3. **Plus de 10 requêtes DNS** : retirer les services inutilisés, remplacer les `include:` redondants par les adresses `ip4:`/`ip6:` fixes, ou faire aplatir le SPF par le fournisseur d'envoi. Ne jamais publier deux enregistrements SPF : les fusionner en un seul.
+3. **Mécanisme `ptr`** : déprécié (RFC 7208 §5.5), à retirer : lent, peu fiable et coûteux en requêtes DNS.
+
+4. **Plus de 10 requêtes DNS** : retirer les services inutilisés, remplacer les `include:` redondants par les adresses `ip4:`/`ip6:` fixes, ou faire aplatir le SPF par le fournisseur d'envoi. Ne jamais publier deux enregistrements SPF : les fusionner en un seul.
 
 ## Critères d'acceptation
 

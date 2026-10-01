@@ -17,15 +17,19 @@ import domaine_check as dc  # noqa: E402
 import fiches  # noqa: E402
 
 # Aucun test ne fait de vraie requête Internet : tout passe par un résolveur DoH simulé (réponses application/dns-json enregistrées).
-_GARDE = mock.patch("urllib.request.urlopen", side_effect=AssertionError("requête réseau réelle interdite dans les tests unitaires"))
+_GARDES = [mock.patch("urllib.request.urlopen", side_effect=AssertionError("requête réseau réelle interdite dans les tests unitaires")),
+           mock.patch("urllib.request.OpenerDirector.open", side_effect=AssertionError("requête réseau réelle interdite")),
+           mock.patch("socket.socket.connect", side_effect=AssertionError("connexion réseau réelle interdite"))]
 
 
 def setUpModule():
-    _GARDE.start()
+    for g in _GARDES:
+        g.start()
 
 
 def tearDownModule():
-    _GARDE.stop()
+    for g in _GARDES:
+        g.stop()
 
 
 SOA = {"Status": 0, "AD": False, "Answer": [{"type": 6, "data": "ns1.ex.fr. hostmaster.ex.fr. 1 2 3 4 5"}]}
@@ -201,10 +205,14 @@ class TestGravite(unittest.TestCase):
         self.assertIn("durcissement", r["issues"]["dmarc_absent"]["label"])
         self.assertIn("durcissement", r["issues"]["spf_absent"]["label"])
 
-    def test_avec_mx_spf_absent_en_basse(self):
+    def test_avec_mx_spf_absent_est_moyenne(self):
         r = dc.verifier("www.ex.fr", resolveur({**SAIN, **{("ex.fr", "TXT"): VIDE}}))
-        self.assertEqual(sev(r), {"spf_absent": "basse"})
+        self.assertEqual(sev(r), {"spf_absent": "moyenne"})
         self.assertIn("MX", r["issues"]["spf_absent"]["label"])
+
+    def test_sans_mx_spf_absent_reste_basse_et_dmarc_present(self):
+        table = {**SAIN, **{("ex.fr", "MX"): VIDE, ("ex.fr", "TXT"): VIDE}}
+        self.assertEqual(sev(dc.verifier("www.ex.fr", resolveur(table))), {"spf_absent": "basse"})
 
     def test_mx_nul_rfc7505_vaut_absence_de_mx(self):
         table = {**SAIN, **{("ex.fr", "MX"): mx("0 ."), ("_dmarc.ex.fr", "TXT"): {"Status": 3}}}
@@ -237,6 +245,18 @@ class TestDomaineOrganisationnel(unittest.TestCase):
         self.assertIsNone(dc.domaine_organisationnel("inconnu.fr", resolveur({("fr", "SOA"): SOA})))
         self.assertIsNone(dc.domaine_organisationnel("localhost", resolveur({})))
 
+    def test_jamais_un_suffixe_public_multi_etiquettes(self):
+        # co.uk a un SOA mais est un registre : x.inconnu.co.uk n'a pas de domaine enregistrable résolu
+        self.assertIsNone(dc.domaine_organisationnel("x.inconnu.co.uk", resolveur({("co.uk", "SOA"): SOA})))
+        self.assertEqual(dc.domaine_organisationnel("a.b.ex.com.au", resolveur({("ex.com.au", "SOA"): SOA, ("com.au", "SOA"): SOA})), "ex.com.au")
+
+    def test_soa_par_cname_ignore(self):
+        # www CNAME @ : la réponse SOA pour un nom contient le SOA d'un autre nom ; seul le SOA du nom demandé compte
+        autre = {"Status": 0, "Answer": [{"name": "cdn.autre.net.", "type": 6, "data": "ns. h. 1 2 3 4 5"}]}
+        self.assertIsNone(dc.domaine_organisationnel("www.ex.fr", resolveur({("ex.fr", "SOA"): autre})))
+        propre = {"Status": 0, "Answer": [{"name": "Ex.Fr.", "type": 6, "data": "ns. h. 1 2 3 4 5"}]}
+        self.assertEqual(dc.domaine_organisationnel("www.ex.fr", resolveur({("ex.fr", "SOA"): propre})), "ex.fr")
+
     def test_dmarc_cherche_sur_le_domaine_organisationnel(self):
         table = {**SAIN, **{("beta.ex.fr", "A"): {"Status": 0, "AD": True, "Answer": [{"type": 1, "data": "1.2.3.4"}]},
                             ("beta.ex.fr", "AAAA"): {"Status": 0, "Answer": [{"type": 28, "data": "2001:db8::2"}]}}}
@@ -253,7 +273,7 @@ class TestDomaineOrganisationnel(unittest.TestCase):
                             ("www.sub.ex.fr", "A"): SAIN[("www.ex.fr", "A")], ("www.sub.ex.fr", "AAAA"): SAIN[("www.ex.fr", "AAAA")]}}
         appels = []
         r = dc.verifier("www.sub.ex.fr", resolveur(table, appels))
-        self.assertEqual((r["domaine"], r["issues"]), ("sub.ex.fr", {}))
+        self.assertEqual((r["domaine"], r["issues"]), ("ex.fr", {}))
         self.assertEqual([n for n, t in appels if n.startswith("_dmarc.")], ["_dmarc.www.sub.ex.fr", "_dmarc.sub.ex.fr", "_dmarc.ex.fr"])
 
     def test_dmarc_propre_au_sous_domaine_prioritaire(self):
@@ -508,6 +528,273 @@ class TestCli(unittest.TestCase):
             dc.main(["https://www.ex.fr/", "--out", d], transport=resolveur(BASE))
             sortie = "".join(p.read_text(encoding="utf-8") for p in pathlib.Path(d).iterdir())
         self.assertNotIn("http", sortie)
+
+
+class TestPlateformesPartagees(unittest.TestCase):
+    """Sous-domaine d'un suffixe PRIVÉ de la PSL : le DNS est celui de la plateforme, aucun constat."""
+
+    HOTES = ("site.vercel.app", "foo.netlify.app", "x.github.io", "a.pages.dev", "app.herokuapp.com", "a.b.github.io")
+
+    def test_statut_et_aucun_constat(self):
+        for hote in self.HOTES:
+            with self.subTest(hote=hote):
+                appels = []
+                r = dc.verifier(hote, resolveur({}, appels))
+                self.assertEqual((r["statut"], r["issues"], r["non_verifies"]), ("plateforme partagée", {}, []))
+                self.assertEqual(appels, [], "aucune requête DNS pour une plateforme partagée")
+                self.assertTrue(any(x.startswith("- ⏭️") for x in r["lignes"]), r["lignes"])
+
+    def test_meme_avec_des_enregistrements_publies_par_la_plateforme(self):
+        # ni un DMARC p=none, ni l'absence de DNSSEC de la plateforme ne sont imputés au propriétaire du site
+        table = {("vercel.app", "SOA"): SOA, ("_dmarc.vercel.app", "TXT"): txt("v=DMARC1; p=none"), ("vercel.app", "MX"): mx("10 mx.v.app.")}
+        r = dc.verifier("site.vercel.app", resolveur(table))
+        self.assertEqual((r["statut"], r["issues"]), ("plateforme partagée", {}))
+
+    def test_ligne_explicative(self):
+        r = dc.verifier("site.vercel.app", resolveur({}))
+        ligne = " ".join(r["lignes"])
+        self.assertIn("vercel.app", ligne)
+        self.assertIn("plateforme", ligne)
+        self.assertIn("domaine personnalisé", ligne)
+        self.assertEqual(r["suffixe"], "vercel.app")
+
+    def test_ecriture_et_cli(self):
+        with tempfile.TemporaryDirectory() as d:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(dc.main(["https://site.vercel.app/", "--out", d], transport=resolveur({})), 0)
+            self.assertEqual(json.loads(pathlib.Path(d, "issues.json").read_text(encoding="utf-8")), {})
+            md = pathlib.Path(d, "domaine.md").read_text(encoding="utf-8")
+        self.assertIn("# Domaine — site.vercel.app", md)
+        self.assertIn("⏭️", md)
+
+    def test_domaine_personnalise_non_concerne(self):
+        self.assertEqual(dc.verifier("www.ex.fr", resolveur(SAIN))["statut"], "ok")
+
+    def test_domaine_enregistrable_sous_suffixe_multi_etiquettes(self):
+        table = {**SAIN, ("ex.co.uk", "SOA"): SOA, ("ex.co.uk", "MX"): mx("10 mx.ex.fr.")}
+        r = dc.verifier("www.ex.co.uk", resolveur(table))
+        self.assertEqual(r["domaine"], "ex.co.uk")
+
+
+class TestSpfExact(unittest.TestCase):
+    """RFC 7208 : le premier « all » l'emporte ; redirect= et include: sont suivis pour trouver un « +all » hérité."""
+
+    def r(self, table_spf):
+        return dc.verifier("www.ex.fr", resolveur({**SAIN, **{k: txt(v) for k, v in table_spf.items()}}))
+
+    def test_premier_all_gagne_moins_all_puis_plus_all(self):
+        self.assertEqual(self.r({("ex.fr", "TXT"): "v=spf1 mx -all +all"})["issues"], {})
+
+    def test_premier_all_gagne_plus_all_puis_moins_all(self):
+        r = self.r({("ex.fr", "TXT"): "v=spf1 mx +all -all"})
+        self.assertEqual(sev(r), {"spf_permissif": "haute"})
+
+    def test_all_nu_est_plus_all_et_tilde_puis_plus_all_sans_constat(self):
+        self.assertEqual(sev(self.r({("ex.fr", "TXT"): "v=spf1 mx all"})), {"spf_permissif": "haute"})
+        self.assertEqual(self.r({("ex.fr", "TXT"): "v=spf1 mx ~all +all"})["issues"], {})
+
+    def test_redirect_vers_plus_all(self):
+        r = self.r({("ex.fr", "TXT"): "v=spf1 redirect=_s.ex.fr", ("_s.ex.fr", "TXT"): "v=spf1 +all"})
+        self.assertEqual(sev(r), {"spf_permissif": "haute"})
+        self.assertEqual(r["issues"]["spf_permissif"]["examples"][0]["via"], "_s.ex.fr")
+
+    def test_chaine_de_redirect(self):
+        r = self.r({("ex.fr", "TXT"): "v=spf1 redirect=_a.ex.fr", ("_a.ex.fr", "TXT"): "v=spf1 redirect=_b.ex.fr",
+                    ("_b.ex.fr", "TXT"): "v=spf1 redirect=_c.ex.fr", ("_c.ex.fr", "TXT"): "v=spf1 ip4:1.2.3.4 +all"})
+        self.assertEqual(sev(r), {"spf_permissif": "haute"})
+
+    def test_redirect_vers_moins_all_ou_point_d_interrogation(self):
+        self.assertEqual(self.r({("ex.fr", "TXT"): "v=spf1 redirect=_s.ex.fr", ("_s.ex.fr", "TXT"): "v=spf1 -all"})["issues"], {})
+        r = self.r({("ex.fr", "TXT"): "v=spf1 redirect=_s.ex.fr", ("_s.ex.fr", "TXT"): "v=spf1 ?all"})
+        self.assertEqual(sev(r), {"spf_permissif": "basse"})
+
+    def test_redirect_ignore_quand_un_all_est_present(self):
+        r = self.r({("ex.fr", "TXT"): "v=spf1 -all redirect=_s.ex.fr", ("_s.ex.fr", "TXT"): "v=spf1 +all"})
+        self.assertEqual(r["issues"], {})
+
+    def test_include_vers_plus_all(self):
+        r = self.r({("ex.fr", "TXT"): "v=spf1 include:_s.ex.fr -all", ("_s.ex.fr", "TXT"): "v=spf1 +all"})
+        self.assertEqual(sev(r), {"spf_permissif": "haute"})
+        self.assertEqual(r["issues"]["spf_permissif"]["examples"][0]["via"], "_s.ex.fr")
+
+    def test_include_imbrique_vers_plus_all(self):
+        r = self.r({("ex.fr", "TXT"): "v=spf1 include:_a.ex.fr -all", ("_a.ex.fr", "TXT"): "v=spf1 include:_b.ex.fr ~all",
+                    ("_b.ex.fr", "TXT"): "v=spf1 ip4:1.2.3.4 all"})
+        self.assertEqual(sev(r), {"spf_permissif": "haute"})
+
+    def test_include_qui_ne_correspond_pas_pour_toute_adresse(self):
+        # ?all, ~all, -all dans l'include : pas de correspondance générale, le « -all » de l'enregistrement racine s'applique
+        for fin in ("?all", "~all", "-all"):
+            with self.subTest(fin=fin):
+                r = self.r({("ex.fr", "TXT"): "v=spf1 include:_s.ex.fr -all", ("_s.ex.fr", "TXT"): "v=spf1 ip4:1.2.3.4 " + fin})
+                self.assertEqual(r["issues"], {})
+
+    def test_include_avec_qualificateur_moins_vers_plus_all_n_est_pas_permissif(self):
+        r = self.r({("ex.fr", "TXT"): "v=spf1 -include:_s.ex.fr +all", ("_s.ex.fr", "TXT"): "v=spf1 +all"})
+        self.assertEqual(r["issues"], {})
+
+    def test_boucle_include_et_redirect(self):
+        for racine in ("v=spf1 include:ex.fr -all", "v=spf1 redirect=ex.fr", "v=spf1 redirect=_a.ex.fr"):
+            with self.subTest(racine=racine):
+                r = self.r({("ex.fr", "TXT"): racine, ("_a.ex.fr", "TXT"): "v=spf1 redirect=ex.fr"})
+                self.assertNotIn("spf_permissif", r["issues"])
+
+    def test_profondeur_bornee_par_la_limite_des_requetes(self):
+        table = {("ex.fr", "TXT"): "v=spf1 redirect=r0.ex.fr"}
+        for i in range(40):
+            table[("r{0}.ex.fr".format(i), "TXT")] = "v=spf1 redirect=r{0}.ex.fr".format(i + 1)
+        table[("r40.ex.fr", "TXT")] = "v=spf1 +all"
+        appels = []
+        table = {**SAIN, **{k: txt(v) for k, v in table.items()}}
+        r = dc.verifier("www.ex.fr", resolveur(table, appels))
+        self.assertNotIn("spf_permissif", r["issues"])  # au-delà de 10 requêtes l'évaluation s'arrête (PermError)
+        self.assertLess(len([a for a in appels if a[1] == "TXT" and a[0].startswith("r")]), 15)
+
+    def test_redirect_non_compte_quand_un_all_est_present(self):
+        q = resolveur({("ex.fr", "TXT"): txt("v=spf1 -all redirect=_s.ex.fr"), ("_s.ex.fr", "TXT"): txt("v=spf1 include:a.ex.fr -all")})
+        self.assertEqual(dc.lookups_spf(q, "ex.fr"), 0)
+
+    def test_termes_apres_le_premier_all_non_comptes(self):
+        q = resolveur({("ex.fr", "TXT"): txt("v=spf1 a -all include:a.ex.fr mx")})
+        self.assertEqual(dc.lookups_spf(q, "ex.fr"), 1)
+
+    def test_redirect_compte_sans_all(self):
+        q = resolveur({("ex.fr", "TXT"): txt("v=spf1 mx redirect=_s.ex.fr"), ("_s.ex.fr", "TXT"): txt("v=spf1 a -all")})
+        self.assertEqual(dc.lookups_spf(q, "ex.fr"), 3)
+
+    def test_panne_sur_include_garde_le_constat_trouve(self):
+        def q(nom, type_):
+            if nom == "_x.ex.fr":
+                raise OSError("réseau")
+            return {**SAIN, ("ex.fr", "TXT"): txt("v=spf1 include:_x.ex.fr +all")}.get((nom, type_), VIDE)
+        r = dc.verifier("www.ex.fr", q)
+        self.assertEqual(sev(r), {"spf_permissif": "haute"})
+        self.assertTrue(any("+all" in x for x in r["lignes"]))
+        self.assertFalse(any(x.startswith("- ⚠️ SPF : non vérifié") for x in r["lignes"]))
+
+    def test_panne_sur_include_sans_constat_est_non_verifie(self):
+        def q(nom, type_):
+            if nom == "_x.ex.fr":
+                raise OSError("réseau")
+            return {**SAIN, ("ex.fr", "TXT"): txt("v=spf1 include:_x.ex.fr -all")}.get((nom, type_), VIDE)
+        r = dc.verifier("www.ex.fr", q)
+        self.assertEqual((r["issues"], r["non_verifies"]), ({}, ["SPF"]))
+
+    def test_libelle_spf_multiple(self):
+        r = dc.verifier("www.ex.fr", resolveur({**SAIN, **{("ex.fr", "TXT"): txt("v=spf1 -all", "v=spf1 mx -all")}}))
+        self.assertIn("PermError", r["issues"]["spf_multiple"]["label"])
+
+
+class TestDetails(unittest.TestCase):
+    def test_nom_invalide_sans_requete(self):
+        for hote in (("a" * 64) + ".ex.fr", "a..ex.fr", ".".join(["abcdefghi"] * 30)):
+            with self.subTest(hote=hote[:20]):
+                appels = []
+                r = dc.verifier(hote, resolveur(SAIN, appels))
+                self.assertEqual((r["statut"], r["issues"]), ("nom invalide", {}))
+                self.assertEqual(appels, [])
+
+    def test_nombre_de_noms_interroges_borne(self):
+        hote = ".".join(["a"] * 100) + ".ex.fr"
+        appels = []
+        r = dc.verifier(hote, resolveur({**SAIN}, appels))
+        self.assertEqual(r["statut"], "ok")
+        dmarc = [n for n, t in appels if n.startswith("_dmarc.")]
+        self.assertLessEqual(len(dmarc), 8, dmarc)
+        self.assertEqual(dmarc[0], "_dmarc." + hote)
+        self.assertEqual(dmarc[-1], "_dmarc.ex.fr")
+        self.assertLessEqual(len(appels), 40, len(appels))
+
+    def test_redirection_de_resolveur_refusee(self):
+        import urllib.request
+        h = dc._SansRedirection()
+        req = urllib.request.Request("https://cloudflare-dns.com/dns-query?name=a&type=A")
+        for code in (301, 302, 307, 308):
+            self.assertIsNone(h.redirect_request(req, io.BytesIO(), code, "Moved", {}, "http://evil.test/x"), code)
+
+    def test_opener_par_defaut_sans_redirection(self):
+        self.assertTrue(any(isinstance(h, dc._SansRedirection) for h in dc._ouvreur().handlers))
+
+    def test_dmarc_sans_p_est_invalide_pas_en_place(self):
+        r = dc.verifier("www.ex.fr", resolveur({**SAIN, **{("_dmarc.ex.fr", "TXT"): txt("v=DMARC1; rua=mailto:x@ex.fr")}}))
+        ligne = [x for x in r["lignes"] if "DMARC" in x]
+        self.assertEqual(len(ligne), 1, ligne)
+        self.assertTrue(ligne[0].startswith("- ⚠️ DMARC"), ligne)
+        self.assertIn("invalide", ligne[0])
+        self.assertNotIn("✅", ligne[0])
+        self.assertEqual(r["issues"], {})
+
+    def test_dmarc_politique_illisible(self):
+        r = dc.verifier("www.ex.fr", resolveur({**SAIN, **{("_dmarc.ex.fr", "TXT"): txt("v=DMARC1; p=bidon")}}))
+        self.assertTrue(any(x.startswith("- ⚠️ DMARC") and "invalide" in x for x in r["lignes"]), r["lignes"])
+
+    def test_dmarc_sp_dans_le_libelle(self):
+        table = {**SAIN, **{("_dmarc.ex.fr", "TXT"): txt("v=DMARC1; p=reject; sp=none"), ("beta.ex.fr", "AAAA"): SAIN[("www.ex.fr", "AAAA")],
+                            ("beta.ex.fr", "A"): SAIN[("www.ex.fr", "A")]}}
+        r = dc.verifier("beta.ex.fr", resolveur(table))
+        self.assertIn("sp=", r["issues"]["dmarc_none"]["label"])
+
+    def test_dmarc_plusieurs_enregistrements(self):
+        r = dc.verifier("www.ex.fr", resolveur({**SAIN, **{("_dmarc.ex.fr", "TXT"): txt("v=DMARC1; p=reject", "v=DMARC1; p=none")}}))
+        self.assertIn("plusieurs", r["issues"]["dmarc_absent"]["label"])
+
+    def test_caa_iodef_seul_n_est_pas_en_place(self):
+        caa = {"Status": 0, "Answer": [{"type": 257, "data": '0 iodef "mailto:secu@ex.fr"'}]}
+        r = dc.verifier("www.ex.fr", resolveur({**SAIN, ("ex.fr", "CAA"): caa}))
+        self.assertEqual(sev(r), {"caa_absent": "info"})
+        ligne = [x for x in r["lignes"] if "CAA" in x]
+        self.assertTrue(ligne[0].startswith("- ⚠️"), ligne)
+        self.assertIn("issue", ligne[0])
+        with tempfile.TemporaryDirectory() as d:
+            dc.ecrire(r, d)
+            self.assertNotIn("secu@", "".join(p.read_text(encoding="utf-8") for p in pathlib.Path(d).iterdir()))
+
+    def test_caa_issue_ou_issuewild_en_place(self):
+        for data in ('0 issue "letsencrypt.org"', '0 issuewild "letsencrypt.org"', '128 ISSUE "pki.goog"', '0 issue ";"'):
+            with self.subTest(data=data):
+                caa = {"Status": 0, "Answer": [{"type": 257, "data": data}]}
+                self.assertNotIn("caa_absent", dc.verifier("www.ex.fr", resolveur({**SAIN, ("ex.fr", "CAA"): caa}))["issues"])
+
+    def test_ipv6_apex_et_www(self):
+        a = {"Status": 0, "AD": True, "Answer": [{"type": 1, "data": "1.2.3.4"}]}
+        aaaa = {"Status": 0, "Answer": [{"type": 28, "data": "2001:db8::1"}]}
+        base = {**SAIN, ("ex.fr", "A"): a, ("www.ex.fr", "A"): a}
+        # apex en IPv6, www sans AAAA (alors qu'il a un A) : le défaut est signalé sur www, nommé
+        r = dc.verifier("ex.fr", resolveur({**base, ("ex.fr", "AAAA"): aaaa, ("www.ex.fr", "AAAA"): VIDE}))
+        self.assertEqual(sev(r), {"ipv6_absent": "info"})
+        self.assertIn("www.ex.fr", r["issues"]["ipv6_absent"]["label"])
+        self.assertEqual(r["issues"]["ipv6_absent"]["examples"][0]["sans_ipv6"], ["www.ex.fr"])
+        # l'inverse : URL en www, apex sans AAAA
+        r = dc.verifier("www.ex.fr", resolveur({**base, ("ex.fr", "AAAA"): VIDE, ("www.ex.fr", "AAAA"): aaaa}))
+        self.assertEqual(r["issues"]["ipv6_absent"]["examples"][0]["sans_ipv6"], ["ex.fr"])
+        # les deux
+        r = dc.verifier("www.ex.fr", resolveur({**base, ("ex.fr", "AAAA"): VIDE, ("www.ex.fr", "AAAA"): VIDE}))
+        self.assertEqual(r["issues"]["ipv6_absent"]["examples"][0]["sans_ipv6"], ["www.ex.fr", "ex.fr"])
+        # les deux en IPv6 : rien
+        r = dc.verifier("www.ex.fr", resolveur({**base, ("ex.fr", "AAAA"): aaaa, ("www.ex.fr", "AAAA"): aaaa}))
+        self.assertEqual(r["issues"], {})
+
+    def test_ipv6_nom_jumeau_inexistant_ignore(self):
+        # apex sans enregistrement A (le jumeau www n'existe pas) : seul le nom audité compte
+        a = {"Status": 0, "AD": True, "Answer": [{"type": 1, "data": "1.2.3.4"}]}
+        aaaa = {"Status": 0, "Answer": [{"type": 28, "data": "2001:db8::1"}]}
+        r = dc.verifier("ex.fr", resolveur({**SAIN, ("ex.fr", "A"): a, ("ex.fr", "AAAA"): aaaa}))
+        self.assertEqual(r["issues"], {})
+
+    def test_ipv6_sous_domaine_autre_que_www_un_seul_nom(self):
+        appels = []
+        dc.verifier("beta.ex.fr", resolveur(SAIN, appels))
+        self.assertEqual([n for n, t in appels if t == "AAAA"], ["beta.ex.fr"])
+
+    def test_libelle_dnssec_mentionne_la_ds(self):
+        r = dc.verifier("www.ex.fr", resolveur(BASE))
+        self.assertIn("DS", r["issues"]["dnssec_absent"]["label"])
+
+    def test_aide_resolveur_mentionne_dnssec_et_validation(self):
+        with mock.patch("sys.stdout", new=io.StringIO()) as sortie:
+            with self.assertRaises(SystemExit):
+                dc.main(["--help"])
+        self.assertIn("valid", sortie.getvalue())
 
 
 if __name__ == "__main__":

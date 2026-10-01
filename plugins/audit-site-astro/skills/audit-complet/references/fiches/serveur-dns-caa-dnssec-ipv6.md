@@ -20,7 +20,9 @@ sources:
 
 Ce sont des bonus de robustesse, jamais une urgence : l'outil les classe en information. **CAA** restreint les autorités de certification autorisées à émettre un certificat pour le domaine (limite les certificats frauduleux). **DNSSEC** signe les réponses DNS pour empêcher leur falsification en route. **IPv6** rend le site joignable par les réseaux qui n'ont plus (ou peu) d'IPv4, sans passer par une traduction. internet.nl les mesure et pénalise leur absence dans le score d'un site.
 
-DNSSEC est détecté par le bit AD (« données authentifiées ») d'un résolveur validant, lu sur le SOA du domaine et sur l'adresse du site ; CAA est cherché en remontant l'arbre depuis le nom du site (RFC 8659) ; IPv6 par la présence d'un enregistrement AAAA sur le nom du site.
+DNSSEC est détecté par le bit AD (« données authentifiées ») d'un résolveur validant (Cloudflare et Google le sont ; un résolveur personnalisé qui ne valide pas donnerait un faux « non signé »), lu sur le SOA du domaine et sur l'adresse du site. Le bit AD absent signifie : zone non signée, ou signée mais DS absente chez le registrar. Si le TLD lui-même n'est pas signé, l'activation est impossible. Un domaine dont la signature est cassée fait répondre SERVFAIL : le contrôle est alors « non vérifié ». CAA est cherché en remontant l'arbre depuis le nom du site jusqu'au domaine enregistrable (RFC 8659) ; un ensemble CAA qui ne contient que `iodef` (sans `issue` ni `issuewild`) ne restreint rien et est signalé comme tel. IPv6 : enregistrement AAAA sur le nom audité et sur son jumeau apex/`www` quand celui-ci a une adresse IPv4 ; le constat nomme le ou les noms sans IPv6.
+
+Un site sur un sous-domaine de plateforme (`*.github.io`, `*.vercel.app`, `*.netlify.app`, `*.pages.dev`…) n'est pas contrôlé : ces réglages appartiennent à la plateforme.
 
 ## Comment le constater soi-même
 
@@ -65,7 +67,7 @@ internet.nl/test-site/ refait le contrôle complet (IPv6, DNSSEC, HTTPS, e-mail)
 
 ## Pièges et retour arrière
 
-- Un CAA qui ne nomme pas l'autorité de renouvellement bloque l'émission du certificat suivant : lister toutes les autorités utilisées (certificat du site, du CDN, de l'hébergeur de messagerie).
+- Un CAA qui ne nomme pas l'autorité de renouvellement bloque l'émission du certificat suivant : lister toutes les autorités utilisées (certificat du site, du CDN, de l'hébergeur de pages).
 - Une mauvaise DS (ou un changement de fournisseur DNS sans transfert de la signature) rend le domaine injoignable pour les résolveurs validants : retour arrière en retirant la DS chez le registrar (le délai dépend du TTL de la DS).
 - Une AAAA vers un serveur qui n'écoute pas en IPv6 casse le site pour les visiteurs IPv6 : tester avec `curl -6` avant de publier.
 - Le résultat est « non vérifié » (⚠️) si les résolveurs DNS-over-HTTPS (Cloudflare, Google) ne répondent pas : relancer, ce n'est pas un défaut du site.
