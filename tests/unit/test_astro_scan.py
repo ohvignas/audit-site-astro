@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 RACINE = pathlib.Path(__file__).resolve().parents[2]
 SCAN = RACINE / "plugins/audit-site-astro/skills/audit-complet/scripts/astro_scan.py"
@@ -137,7 +138,7 @@ class TestAstro7(unittest.TestCase):
         t = textes(scanner({"astro.config.mjs": cfg, "src/actions/index.ts": self.SANS_INPUT.replace("accept: 'form', ", "accept: 'form', input: schema, ")}))
         self.assertNotIn("Action Astro", t)
         self.assertNotIn("session configurée", t)
-        self.assertNotIn("experimental", t)
+        self.assertNotIn("Options experimental à retirer", t)
 
     # --- précisions de la tâche 25 (vérifiées contre docs.astro.build, lu le 2026-10-01)
     def _actions(self, source):
@@ -156,10 +157,15 @@ class TestAstro7(unittest.TestCase):
                "  d: defineAction({ accept: 'form', input: z.object({ nom: z.string() }), handler: async (d) => ({ ok: 1 }) }),\n};\n")
         self.assertEqual(self._actions(src), [("Action Astro sans validation input (1)", ["src/actions/index.ts:2"])])
 
-    def test_action_sans_donnees_en_entree_pas_signalee(self):
+    def test_action_sans_donnees_en_entree_pas_signalee(self):  # I3 : déconnexion, « moi », rafraîchir : le handler n'utilise pas d'entrée
         src = ("export const server = {\n  heure: defineAction({ handler: async () => new Date().toISOString() }),\n"
-               "  ping: defineAction({ handler() { return 1; } }),\n  lire: defineAction({ handler: async (_, ctx) => ctx.locals.user }),\n};\n")
-        self.assertEqual(self._actions(src), [("Action Astro sans validation input (1)", ["src/actions/index.ts:4"])])
+               "  ping: defineAction({ handler() { return 1; } }),\n  lire: defineAction({ handler: async (_, ctx) => ctx.locals.user }),\n"
+               "  quitter: defineAction({ handler: async (_input, context) => { context.session?.destroy(); } }),\n"
+               "  moi: defineAction({ accept: 'json', handler: async (_: unknown, { locals }) => locals.user }),\n"
+               "  fleche: defineAction({ handler: async _ => 1 }),\n"
+               "  noter: defineAction({ handler: async (d) => d }),\n"
+               "  chercher: defineAction({ handler: async ({ id }, ctx) => id }),\n};\n")
+        self.assertEqual(self._actions(src), [("Action Astro sans validation input (2)", ["src/actions/index.ts:8", "src/actions/index.ts:9"])])
 
     def test_actions_dans_plusieurs_fichiers_et_accolades_dans_les_chaines(self):
         a = "export const a = defineAction({ handler: async (d) => '}' + d });\n"
@@ -203,29 +209,143 @@ class TestAstro7(unittest.TestCase):
         c = scanner({"astro.config.mjs": self.CFG, "src/actions/index.ts": src})
         self.assertNotIn("SECRET123", json.dumps(c))
 
+    # --- revue de T25 : I2 (autonomie), minors M1-M5, M7
+    def _projet_tmp(self, fichiers):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        racine = pathlib.Path(d.name, "p")
+        for chemin, contenu in dict({"package.json": json.dumps({"dependencies": {"astro": "^7.3.0"}})}, **fichiers).items():
+            f = racine / chemin
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(contenu, encoding="utf-8")
+        sys.path.insert(0, str(SCAN.parent))
+        import astro_scan
+        os.environ["ASTRO_SCAN_HORS_LIGNE"] = "1"
+        astro_scan.reinitialiser(racine)
+        self.addCleanup(astro_scan.reinitialiser)
+        return astro_scan, racine
+
+    def test_scan_astro7_seul_lit_package_json(self):  # I2
+        for fichiers in ({"package.json": json.dumps({"dependencies": {"astro": "^7.3.0", "@astrojs/db": "^0.14"}})},
+                         {"package.json": json.dumps({"devDependencies": {"@astrojs/db": "^0.14"}})}):
+            m, racine = self._projet_tmp(dict({"astro.config.mjs": self.CFG}, **fichiers))
+            m.scan_astro7(racine, {})
+            c = [f for f in m.findings if "@astrojs/db" in f["constat"]]
+            self.assertEqual([f["ou"] for f in c], [["package.json"]])
+
+    def test_db_dans_la_configuration_seulement(self):
+        m, racine = self._projet_tmp({"astro.config.mjs": "import db from '@astrojs/db';\nexport default defineConfig({ integrations: [db()] });\n"})
+        m.scan_astro7(racine, {})
+        self.assertEqual([f["ou"] for f in m.findings if "@astrojs/db" in f["constat"]], [["astro.config.mjs"]])
+
+    def test_tous_les_scan_s_appellent_seuls_avec_un_rapport_vide(self):
+        m, racine = self._projet_tmp({"astro.config.mjs": self.CFG, "src/pages/index.astro": "<h1>Ok</h1>\n"})
+        for etape in (m.scan_package, m.scan_astro_config, m.scan_src, m.scan_astro_features, m.scan_astro7, m.scan_convex, m.scan_repo):
+            etape(racine, {})
+        m.scan_dist(racine, None, {})
+
+    def test_backtick_dans_une_regex_ne_masque_pas_la_suite(self):  # M1
+        src = ("const re = /`/g;\nconst s = txt.replace(/['\"]/g, '');\nconst t = x.replace(/{/g, '');\n"
+               "export const server = {\n  a: defineAction({ handler: async (d) => d }),\n};\n")
+        self.assertEqual(self._actions(src), [("Action Astro sans validation input (1)", ["src/actions/index.ts:5"])])
+        cfg = "const re = /`/g;\nexport default defineConfig({ site: 'https://ex.fr', experimental: { cache: true } });\n"
+        self.assertIn("Options experimental", textes(scanner({"astro.config.mjs": cfg})))
+
+    def test_division_et_regex_ne_se_confondent_pas(self):
+        src = ("const moitie = total / 2; const part = a / b / c;\nconst ok = /a\\/b[/]c/.test(x);\n"
+               "export const server = {\n  a: defineAction({ input: z.number(), handler: async (d) => d / 2 }),\n};\n")
+        self.assertEqual(self._actions(src), [])
+
+    def test_cles_entre_guillemets(self):  # M2
+        cfg = ("export default defineConfig({ site: 'https://ex.fr',\n  'experimental': { 'rustCompiler': true, \"cache\": {} },\n"
+               "  'session': { 'driver': 'fs', 'ttl': 60 } });\n")
+        t = textes(scanner({"astro.config.mjs": cfg}))
+        self.assertIn("Options experimental à retirer ou à sortir avant Astro 7 : cache, rustCompiler", t)
+        self.assertNotIn("session configurée", t)
+        src = "export const server = {\n  a: defineAction({ 'input': z.string(), handler: async (d) => d }),\n};\n"
+        self.assertEqual(self._actions(src), [])
+
+    def test_experimental_et_session_au_premier_niveau_seulement(self):  # M4
+        cfg = ("export default defineConfig({ site: 'https://ex.fr',\n  integrations: [foo({ experimental: { cache: true, logger: 1 } }),"
+               " auth({ session: { strategy: 'jwt' } })],\n  vite: { experimental: { cache: 1 }, session: { a: 1 } },\n"
+               "  adapter: node({ mode: 'standalone', session: { x: 1 } }) });\n")
+        t = textes(scanner({"astro.config.mjs": cfg}))
+        self.assertNotIn("Options experimental", t)
+        self.assertNotIn("session configurée", t)
+
+    def test_config_dans_une_variable_ou_export_default_objet(self):
+        for cfg in ("const config = { site: 'https://ex.fr', experimental: { cache: true } };\nexport default config;\n",
+                    "export default { site: 'https://ex.fr', experimental: { cache: true } };\n",
+                    "export default defineConfig({ site: 'https://ex.fr', experimental: { cache: true } }) satisfies X;\n"):
+            self.assertIn("Options experimental à retirer ou à sortir avant Astro 7 : cache", textes(scanner({"astro.config.mjs": cfg})), cfg)
+
+    def test_session_spread_ou_ttl_raccourci_sans_constat(self):  # M3
+        for session in ("{ ...sessionOptions }", "{ driver: 'fs', ttl }"):
+            cfg = f"export default defineConfig({{ site: 'https://ex.fr', session: {session} }});\n"
+            self.assertNotIn("session configurée", textes(scanner({"astro.config.mjs": cfg})), session)
+
+    def test_flag_en_raccourci(self):
+        cfg = "export default defineConfig({ site: 'https://ex.fr', experimental: { cache, svgOptimizer: x } });\n"
+        self.assertIn("Options experimental à retirer ou à sortir avant Astro 7 : cache", textes(scanner({"astro.config.mjs": cfg})))
+
+    def test_gravite_selon_la_version_installee(self):  # M5 : rien avant Astro 6, anticipation en 6, constat en 7
+        cfg = "export default defineConfig({ site: 'https://ex.fr', experimental: { cache: true } });\n"
+        db = {"dependencies": {"@astrojs/db": "^0.14"}}
+
+        def constats(version):
+            pk = json.dumps({"dependencies": dict(db["dependencies"], astro=version)})
+            c = scanner({"astro.config.mjs": cfg, "package.json": pk, "src/fetch.ts": "export default {};\n"})
+            return {x["constat"].split(" :")[0].split(" est ")[0].split(" n'est")[0]: x["severite"] for x in c
+                    if any(k in x["constat"] for k in ("Options experimental", "@astrojs/db", "src/fetch.ts"))}
+        self.assertEqual(constats("^5.4.0"), {})
+        self.assertEqual(constats("^6.2.0"), {"Options experimental à retirer ou à sortir avant Astro 7": "basse",
+                                              "@astrojs/db": "basse", "src/fetch.ts": "basse"})
+        self.assertEqual(constats("^7.3.0"), {"Options experimental à retirer ou à sortir avant Astro 7": "moyenne",
+                                              "@astrojs/db": "moyenne"})
+
+    def test_limite_calculee_par_produit(self):  # M7
+        for expr, attendu in (("10 * 1024 * 1024", "10485760"), ("10_485_760", "10485760")):
+            cfg = f"export default defineConfig({{ site: 'https://ex.fr', security: {{ actionBodySizeLimit: {expr} }} }});\n"
+            self.assertIn(f"security.actionBodySizeLimit relevé à {attendu} octets", textes(scanner({"astro.config.mjs": cfg})), expr)
+
+    def test_budget_epuise_dans_les_actions(self):
+        m, racine = self._projet_tmp({"astro.config.mjs": self.CFG, "src/actions/a.ts": "export const a = defineAction({ handler: async (d) => d });\n"})
+        budget = m.BUDGET_S
+        self.addCleanup(setattr, m, "BUDGET_S", budget)
+        m.BUDGET_S = -1
+        m.scan_astro7(racine, {})
+        self.assertTrue(m.INTERROMPU)
+        self.assertEqual(m.NON_LUS, {"src/actions/a.ts"})
+        self.assertEqual([f for f in m.findings if "Action Astro" in f["constat"]], [])
+
 
 class TestMonorepo(unittest.TestCase):
-    """M6 (revue de T8) : en workspace, node_modules et le lockfile sont à la racine du workspace, pas dans apps/web."""
+    """M6 (revue de T8) : en workspace, node_modules et le lockfile sont à la racine du workspace, pas dans apps/web.
+    Hermétique : HOME factice = dossier temporaire, la remontée ne dépasse jamais HOME (donc jamais le TMPDIR de la machine)."""
 
-    def _projet(self, d, fichiers):
+    def _ecrire(self, d, fichiers):
         for chemin, contenu in fichiers.items():
             f = pathlib.Path(d, chemin)
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_text(contenu, encoding="utf-8")
-        sys.path.insert(0, str(SCAN.parent))
-        return pathlib.Path(d, "apps/web")
 
-    def _scan(self, fichiers, marqueur="pnpm-workspace.yaml"):
-        base = {"apps/web/package.json": json.dumps({"dependencies": {"astro": "catalog:"}}),
-                "apps/web/astro.config.mjs": "export default defineConfig({ site: 'https://ex.fr' });\n",
-                "apps/web/.gitignore": ".env\n", "apps/web/src/fetch.ts": "export default {};\n"}
+    def _scan(self, fichiers, marqueur="pnpm-workspace.yaml", racine_projet="ws/apps/web", prefixe="ws/"):
+        base = {"ws/apps/web/package.json": json.dumps({"dependencies": {"astro": "catalog:"}}),
+                "ws/apps/web/astro.config.mjs": "export default defineConfig({ site: 'https://ex.fr' });\n",
+                "ws/apps/web/.gitignore": ".env\n", "ws/apps/web/src/fetch.ts": "export default {};\n"}
         if marqueur:
-            base[marqueur] = "packages:\n  - apps/*\n" if marqueur.endswith(".yaml") else ""
+            base["ws/" + marqueur] = "packages:\n  - apps/*\n" if marqueur.endswith(".yaml") else ""
         with tempfile.TemporaryDirectory() as d:
-            web = self._projet(d, dict(base, **fichiers))
-            subprocess.run([sys.executable, str(SCAN), str(web), "--out", str(pathlib.Path(d, "out"))], check=True,
-                           capture_output=True, timeout=120, env=dict(os.environ, ASTRO_SCAN_HORS_LIGNE="1"))
+            self._ecrire(d, dict(base, **{prefixe + k: v for k, v in fichiers.items()}))
+            subprocess.run([sys.executable, str(SCAN), str(pathlib.Path(d, racine_projet)), "--out", str(pathlib.Path(d, "out"))],
+                           check=True, capture_output=True, timeout=120,
+                           env=dict(os.environ, ASTRO_SCAN_HORS_LIGNE="1", HOME=d))
             return json.loads(pathlib.Path(d, "out/code-scan.json").read_text(encoding="utf-8"))
+
+    def _module(self):
+        sys.path.insert(0, str(SCAN.parent))
+        import astro_scan
+        return astro_scan
 
     def test_node_modules_et_lockfile_du_workspace(self):
         rap = self._scan({"node_modules/astro/package.json": json.dumps({"name": "astro", "version": "6.4.1"}),
@@ -235,10 +355,26 @@ class TestMonorepo(unittest.TestCase):
         self.assertIn("src/fetch.ts est un fichier réservé", t)  # version trouvée dans le node_modules remonté
         self.assertNotIn("Aucun lockfile", t)
         self.assertEqual(rap["package"]["lockfile"], ["pnpm-lock.yaml"])
+        self.assertEqual(rap["package"]["lockfile_dans"], os.path.join("..", ".."))
 
-    def test_workspace_npm_champ_workspaces(self):
+    def test_workspace_npm_champ_workspaces(self):  # dans un dépôt (.git au-dessus) : le package.json avec "workspaces" est lu
+        rap = self._scan({"packages/mono/node_modules/astro/package.json": json.dumps({"version": "6.0.0"}),
+                          "packages/mono/package-lock.json": "{}", "packages/mono/package.json": json.dumps({"workspaces": ["apps/*"]}),
+                          "packages/mono/apps/web/package.json": json.dumps({"dependencies": {"astro": "catalog:"}}),
+                          "packages/mono/apps/web/astro.config.mjs": "export default defineConfig({ site: 'https://ex.fr' });\n"},
+                         marqueur=".git", racine_projet="ws/packages/mono/apps/web")
+        self.assertEqual(rap["astro_version"]["installee"], "6.0.0")
+        self.assertNotIn("Aucun lockfile", textes(rap["constats"]))
+
+    def test_workspace_npm_sans_git_pas_lu(self):  # I1 : sans dépôt connu, aucun package.json d'ancêtre n'est lu
         rap = self._scan({"node_modules/astro/package.json": json.dumps({"version": "6.0.0"}), "package-lock.json": "{}",
                           "package.json": json.dumps({"workspaces": ["apps/*"]})}, marqueur=None)
+        self.assertEqual(rap["astro_version"]["installee"], "0.0.0")
+        self.assertIn("Aucun lockfile", textes(rap["constats"]))
+
+    def test_workspace_borne_par_git(self):
+        rap = self._scan({"node_modules/astro/package.json": json.dumps({"version": "6.0.0"}), "package-lock.json": "{}"},
+                         marqueur=".git")
         self.assertEqual(rap["astro_version"]["installee"], "6.0.0")
         self.assertNotIn("Aucun lockfile", textes(rap["constats"]))
 
@@ -252,32 +388,90 @@ class TestMonorepo(unittest.TestCase):
         rap = self._scan({"node_modules/astro/package.json": json.dumps({"version": "6.4.1"}), "pnpm-lock.yaml": ""}, marqueur=None)
         self.assertEqual(rap["astro_version"]["installee"], "0.0.0")
         self.assertIn("Aucun lockfile", textes(rap["constats"]))
+        self.assertNotIn("lockfile_dans", rap["package"])
 
     def test_la_remontee_s_arrete_a_la_racine_du_workspace(self):
-        with tempfile.TemporaryDirectory() as d:
-            for chemin, contenu in {"node_modules/astro/package.json": json.dumps({"version": "5.0.0"}), "pnpm-lock.yaml": "",
-                                    "mono/pnpm-workspace.yaml": "packages: []\n", "mono/apps/web/package.json": "{}"}.items():
-                f = pathlib.Path(d, chemin)
-                f.parent.mkdir(parents=True, exist_ok=True)
-                f.write_text(contenu, encoding="utf-8")
-            sys.path.insert(0, str(SCAN.parent))
-            import astro_scan
-            web = pathlib.Path(d, "mono/apps/web")
+        astro_scan = self._module()
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"HOME": d}):
+            self._ecrire(d, {"o/node_modules/astro/package.json": json.dumps({"version": "5.0.0"}), "o/pnpm-lock.yaml": "",
+                             "o/mono/pnpm-workspace.yaml": "packages: []\n", "o/mono/apps/web/package.json": "{}"})
+            web = pathlib.Path(d, "o/mono/apps/web")
             self.assertEqual(astro_scan.dossiers_workspace(web), [web, web.parent, web.parent.parent])
-            self.assertEqual(astro_scan.racine_workspace(web), pathlib.Path(d, "mono"))
-            self.assertEqual(astro_scan.racine_workspace(pathlib.Path(d)), pathlib.Path(d))
+            self.assertEqual(astro_scan.racine_workspace(web), pathlib.Path(d, "o/mono"))
             self.assertIsNone(astro_scan.astro_version(web))
+            self.assertEqual(astro_scan.racine_workspace(pathlib.Path(d, "o")), pathlib.Path(d, "o"))
 
     def test_marqueur_git_fichier_ou_dossier(self):
-        with tempfile.TemporaryDirectory() as d:
+        astro_scan = self._module()
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"HOME": d}):
             for sous in ("a", "b"):
                 (pathlib.Path(d, sous, "apps/web")).mkdir(parents=True)
             pathlib.Path(d, "a/.git").mkdir()
             pathlib.Path(d, "b/.git").write_text("gitdir: ../x\n")  # worktree : .git est un fichier
-            sys.path.insert(0, str(SCAN.parent))
-            import astro_scan
             self.assertEqual(astro_scan.racine_workspace(pathlib.Path(d, "a/apps/web")), pathlib.Path(d, "a"))
             self.assertEqual(astro_scan.racine_workspace(pathlib.Path(d, "b/apps/web")), pathlib.Path(d, "b"))
+
+    # --- I1 (revue T25) : plafond du répertoire personnel, jamais de lecture hors du dépôt
+    def _home_parasite(self, d, avec_git=True):
+        self._ecrire(d, {"home/package-lock.json": "{}", "home/node_modules/astro/package.json": json.dumps({"version": "4.0.0"}),
+                         "home/package.json": json.dumps({"workspaces": ["*/*"]}),
+                         "home/Sites/monsite/package.json": json.dumps({"dependencies": {"astro": "^6.0.0"}}),
+                         "home/Sites/monsite/astro.config.mjs": "export default defineConfig({ site: 'https://ex.fr' });\n",
+                         "home/Sites/monsite/.gitignore": ".env\n"})
+        if avec_git:
+            pathlib.Path(d, "home/.git").mkdir()
+        return pathlib.Path(d, "home/Sites/monsite")
+
+    def test_home_avec_git_et_lockfile_egares_ne_sont_pas_le_workspace(self):
+        astro_scan = self._module()
+        with tempfile.TemporaryDirectory() as d:
+            projet = self._home_parasite(d)
+            with mock.patch.dict(os.environ, {"HOME": str(pathlib.Path(d, "home"))}):
+                self.assertEqual(astro_scan.racine_workspace(projet), projet)
+                self.assertEqual(astro_scan.dossiers_workspace(projet), [projet])
+                self.assertEqual(astro_scan.astro_version(projet), (6, 0, 0))
+            r = subprocess.run([sys.executable, str(SCAN), str(projet), "--out", str(pathlib.Path(d, "out"))], check=True,
+                               capture_output=True, timeout=120,
+                               env=dict(os.environ, ASTRO_SCAN_HORS_LIGNE="1", HOME=str(pathlib.Path(d, "home"))))
+            rap = json.loads(pathlib.Path(d, "out/code-scan.json").read_text(encoding="utf-8"))
+            self.assertEqual(rap["astro_version"]["installee"], "6.0.0")
+            self.assertIn("Aucun lockfile", textes(rap["constats"]))
+            self.assertNotIn("lockfile_dans", rap["package"])
+
+    def test_aucune_lecture_hors_du_depot(self):
+        astro_scan = self._module()
+        lus = []
+        lire = pathlib.Path.read_text
+
+        def espion(self_, *a, **k):
+            lus.append(str(self_))
+            return lire(self_, *a, **k)
+
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"HOME": str(pathlib.Path(d, "home"))}):
+            # (a) aucun .git au-dessus : seul le package.json du projet est lu, pas ceux des ancêtres (jusqu'à HOME exclu)
+            projet = self._home_parasite(d, avec_git=False)
+            self._ecrire(d, {"home/Sites/package.json": json.dumps({"workspaces": ["*"]})})
+            with mock.patch.object(pathlib.Path, "read_text", espion):
+                self.assertEqual(astro_scan.racine_workspace(projet), projet)
+            self.assertEqual([l for l in lus if not l.startswith(str(projet))], [])
+            # (b) dépôt trouvé : on s'arrête à son premier .git, rien au-dessus n'est lu
+            self._ecrire(d, {"home/Sites/depot/apps/web/package.json": "{}", "home/Sites/depot/package.json": "{}"})
+            pathlib.Path(d, "home/Sites/depot/.git").mkdir()
+            lus.clear()
+            with mock.patch.object(pathlib.Path, "read_text", espion):
+                self.assertEqual(astro_scan.racine_workspace(pathlib.Path(d, "home/Sites/depot/apps/web")),
+                                 pathlib.Path(d, "home/Sites/depot"))
+            self.assertTrue(all(l.startswith(str(pathlib.Path(d, "home/Sites/depot"))) for l in lus), lus)
+
+    def test_pnpm_workspace_sans_git_reste_detecte(self):  # archive dézippée d'un monorepo : existence seule, aucune lecture
+        astro_scan = self._module()
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"HOME": d}):
+            self._ecrire(d, {"mono/pnpm-workspace.yaml": "packages: []\n", "mono/apps/web/package.json": "{}"})
+            self.assertEqual(astro_scan.racine_workspace(pathlib.Path(d, "mono/apps/web")), pathlib.Path(d, "mono"))
+
+    def test_racine_du_systeme_jamais_examinee(self):
+        astro_scan = self._module()
+        self.assertEqual(astro_scan.dossiers_workspace(pathlib.Path("/")), [pathlib.Path("/")])
 
 
 class TestEntreesAutonomes(unittest.TestCase):

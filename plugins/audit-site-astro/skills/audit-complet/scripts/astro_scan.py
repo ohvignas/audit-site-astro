@@ -337,11 +337,13 @@ def lignes_completes(text, rx, limit=50):
 
 # --------------------------------------------------------------------------- package.json / config
 
-def _marque_workspace(d):
-    """`d` est la racine d'un workspace/dépôt : pnpm-workspace.yaml, package.json avec "workspaces", ou .git (dossier ou fichier
-    de worktree)."""
+def _marque_workspace(d, lire=True):
+    """`d` est la racine d'un workspace/dépôt : pnpm-workspace.yaml, .git (dossier ou fichier de worktree) ou, si `lire`,
+    un package.json avec "workspaces"."""
     if (d / "pnpm-workspace.yaml").exists() or (d / ".git").exists():
         return True
+    if not lire:
+        return False
     try:
         pj = d / "package.json"
         if pj.stat().st_size > MAX_OCTETS:
@@ -351,20 +353,45 @@ def _marque_workspace(d):
         return False
 
 
+def _chaine_bornee(root):
+    """`root` puis ses ancêtres, sans jamais le répertoire personnel (un ~/.git de dotfiles ou un lockfile égaré n'est pas la
+    racine d'un workspace) ni la racine du système."""
+    try:
+        home = os.path.realpath(Path.home())
+    except (RuntimeError, KeyError, OSError):
+        home = None
+    chaine = []
+    for d in (root, *root.parents):
+        if d != root and (d.parent == d or os.path.realpath(d) == home):
+            break
+        chaine.append(d)
+    return chaine
+
+
 def racine_workspace(root):
     """Racine du workspace (monorepo pnpm / npm / yarn) qui contient `root`, `root` lui-même s'il n'y en a pas : le premier dossier,
-    en remontant, qui contient pnpm-workspace.yaml, un package.json avec "workspaces" ou .git. La remontée s'arrête là
-    (jamais au-delà) et n'a pas lieu du tout hors d'un workspace."""
+    en remontant, qui contient pnpm-workspace.yaml, un package.json avec "workspaces" ou .git (le premier .git est la limite
+    du dépôt : on ne regarde jamais au-dessus). Bornes : jamais le répertoire personnel ni la racine du système. Sans .git au-dessus,
+    les ancêtres ne sont regardés que pour un pnpm-workspace.yaml (existence seule) : aucun package.json hors du projet ou
+    de son dépôt n'est lu."""
     root = Path(os.path.abspath(root))
-    return next((d for d in (root, *root.parents) if _marque_workspace(d)), root)
+    chaine = _chaine_bornee(root)
+    git = next((i for i, d in enumerate(chaine) if (d / ".git").exists()), None)
+    for i, d in enumerate(chaine):
+        if git is not None and i > git:
+            break
+        if _marque_workspace(d, lire=git is not None or i == 0):
+            return d
+    return root
 
 
 def dossiers_workspace(root):
     """De `root` jusqu'à la racine du workspace incluse : là où chercher node_modules et le lockfile (en monorepo, les
     dépendances sont hissées à la racine du workspace, pas dans apps/web). Contrairement à Node, qui remonte sans limite."""
     root = Path(os.path.abspath(root))
+    chaine = _chaine_bornee(root)
     haut = racine_workspace(root)
-    return [root, *(d for d in root.parents if _dans(str(d), str(haut)))] if haut != root else [root]
+    return chaine[:chaine.index(haut) + 1] if haut in chaine else [root]
 
 
 @entree_autonome
@@ -928,9 +955,112 @@ FLAGS_ASTRO7 = ("rustCompiler", "queuedRendering", "advancedRouting", "cache", "
 LIMITE_CORPS_DEFAUT = 1048576  # security.actionBodySizeLimit
 
 
+_AVANT_REGEX = set("(,=:[!&|?{;+-*%<>~^")  # un « / » après l'un de ces caractères ouvre un littéral regex (sinon : division)
+_MOTS_AVANT_REGEX = {"return", "typeof", "case", "delete", "void", "throw", "in", "of", "new", "await", "yield", "else", "do"}
+
+
+def _vide(texte):
+    return "".join("\n" if c == "\n" else " " for c in texte)
+
+
+def _lex(t, i=0, garder=False, stop=False):
+    """(texte, fin) : le code de `t` sans commentaires, avec les littéraux regex et les chaînes vidés (`garder=False`) ou intacts
+    (`garder=True`, pour y chercher un nom de module). Les retours à la ligne sont conservés (numéros de ligne). Une clé citée
+    (`'experimental': {`) est rendue nue. Les gabarits `…${expr}…` sont lus récursivement ; `stop` s'arrête à la `}` qui ferme `${`.
+    Un littéral regex (backtick, guillemet, accolade dedans) ne masque plus la suite du fichier."""
+    out, n, prof, prev = [], len(t), 0, ""
+    while i < n:
+        c = t[i]
+        if c in " \t\r\n":
+            out.append(c)
+            i += 1
+        elif t.startswith("//", i):
+            j = t.find("\n", i)
+            i = n if j < 0 else j
+        elif t.startswith("/*", i):
+            j = t.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append("\n" * t.count("\n", i, j))
+            i = j
+        elif c in "'\"":
+            j = i + 1
+            while j < n and t[j] != c and t[j] != "\n":
+                j += 2 if t[j] == "\\" else 1
+            j = min(j, n)
+            ferme = j < n and t[j] == c
+            corps = t[i + 1:j]
+            if garder:
+                out.append(t[i:j + 1] if ferme else t[i:j])
+            elif ferme and re.fullmatch(r"[\w$]+", corps) and re.match(r"\s*:", t[j + 1:j + 40]):
+                out.append(corps)  # clé citée : 'experimental': {…}
+            else:
+                out.append(c + _vide(corps) + (c if ferme else ""))
+            i = j + 1 if ferme else j
+            prev = c
+        elif c == "`":
+            out.append("`")
+            i += 1
+            while i < n and t[i] != "`":
+                if t[i] == "\\":
+                    out.append(t[i:i + 2] if garder else _vide(t[i:i + 2]))
+                    i += 2
+                elif t.startswith("${", i):
+                    sous, i = _lex(t, i + 2, garder, True)
+                    out.append("${" + sous + "}")
+                    i += 1
+                else:
+                    out.append(t[i] if garder or t[i] == "\n" else " ")
+                    i += 1
+            out.append("`" if i < n else "")
+            i += 1
+            prev = "`"
+        elif c == "/":
+            if prev == "" or prev in _AVANT_REGEX or prev in _MOTS_AVANT_REGEX:  # littéral regex ?
+                j, classe = i + 1, False
+                while j < n and t[j] != "\n":
+                    if t[j] == "\\":
+                        j += 2
+                        continue
+                    if t[j] == "[":
+                        classe = True
+                    elif t[j] == "]":
+                        classe = False
+                    elif t[j] == "/" and not classe:
+                        break
+                    j += 1
+                if j < n and t[j] == "/" and j > i + 1:
+                    k = j + 1
+                    while k < n and t[k].isalpha():
+                        k += 1
+                    out.append(t[i:k] if garder else "/" + " " * (j - i - 1) + "/" + t[j + 1:k])
+                    i, prev = k, "x"
+                    continue
+            out.append(c)
+            i += 1
+            prev = c
+        elif c.isalnum() or c in "_$":
+            j = i
+            while j < n and (t[j].isalnum() or t[j] in "_$"):
+                j += 1
+            prev = t[i:j]
+            out.append(prev)
+            i = j
+        else:
+            if c == "{":
+                prof += 1
+            elif c == "}":
+                if stop and prof == 0:
+                    return "".join(out), i
+                prof -= 1
+            out.append(c)
+            i += 1
+            prev = c
+    return "".join(out), i
+
+
 def _structure(t):
-    """Code sans commentaires ni texte de chaînes : seule la structure reste (accolades, clés). Les numéros de ligne sont conservés."""
-    return sans_texte_litteral(sans_commentaires(t))
+    """Code sans commentaires ni texte de chaînes ni regex : seule la structure reste (accolades, clés). Lignes conservées."""
+    return _lex(t)[0]
 
 
 def _bloc_equilibre(n, ouvrante):
@@ -963,9 +1093,33 @@ def _a_cle(premier_niveau, cle):
     return bool(re.search(rf"(?<![\w$.]){cle}\s*(?::|,|\Z)", premier_niveau))
 
 
-def _handler_sans_parametre(bloc, n0):
-    """Le handler (clé de premier niveau) ne déclare aucun paramètre : il ne reçoit aucune donnée, rien à valider."""
-    return any(re.match(r"\s*(?::\s*(?:async\s*)?(?:function\s*\w*\s*)?)?\(\s*\)", bloc[m.end():])
+def _objet_config(n):
+    """(bloc, premier niveau) de l'objet de configuration d'Astro : argument de `defineConfig({…})`, `export default {…}` ou variable
+    exportée par défaut (`const config = {…}; export default config`). None si introuvable : on ne conclut alors rien."""
+    m = re.search(r"\bdefineConfig\s*\(\s*\{", n) or re.search(r"\bexport\s+default\s*\{", n)
+    if not m:
+        v = re.search(r"\bexport\s+default\s+([\w$]+)\s*(?:satisfies\b[^;\n]*)?;?\s*$", n, re.M)
+        if v:
+            m = re.search(rf"\b(?:const|let|var)\s+{re.escape(v.group(1))}\b[^=;{{]*=\s*(?:defineConfig\s*\(\s*)?\{{", n)
+    if not m:
+        return None
+    bloc = _bloc_equilibre(n, m.end() - 1)
+    return bloc, _premier_niveau(bloc)
+
+
+def _sous_bloc(objet, cle):
+    """Contenu de `cle: {…}` au premier niveau de l'objet (jamais dans `vite`, `integrations`, `adapter`…), sinon None."""
+    if not objet:
+        return None
+    bloc, n0 = objet
+    m = re.search(rf"(?<![\w$.]){cle}\s*:\s*\{{", n0)
+    return _bloc_equilibre(bloc, m.end() - 1) if m else None
+
+
+def _handler_sans_entree(bloc, n0):
+    """Le handler (clé de premier niveau) n'utilise aucune donnée : aucun paramètre, ou premier paramètre ignoré (`_`, `_input`…)
+    — déconnexion, « moi », rafraîchir : actions légitimes sans `input`."""
+    return any(re.match(r"\s*(?::\s*(?:async\s*)?(?:function\s*\w*\s*)?)?(?:\(\s*(?:\)|_\w*\s*[,):?=])|_\w*\s*=>)", bloc[m.end():])
                for m in re.finditer(r"(?<![\w$.])handler\b", n0))
 
 
@@ -978,8 +1132,9 @@ def _blocs_define_action(texte):
 
 
 def _action_sans_validation(bloc, n0):
-    """Pas d'`input` au premier niveau, pas de `...autres` (qui peut l'apporter : on ne conclut pas), et un handler qui reçoit des données."""
-    return not _a_cle(n0, "input") and "..." not in n0 and not _handler_sans_parametre(bloc, n0)
+    """Pas d'`input` au premier niveau, pas de `...autres` (qui peut l'apporter : on ne conclut pas), et un handler qui utilise
+    des données (sinon : rien à valider)."""
+    return not _a_cle(n0, "input") and "..." not in n0 and not _handler_sans_entree(bloc, n0)
 
 
 def _octets(expr):
@@ -990,12 +1145,28 @@ def _octets(expr):
     return total
 
 
+def _dependances(root, report):
+    """Noms des dépendances : celles de scan_package si cette étape a tourné, sinon lues dans package.json (étape appelable seule)."""
+    pk = report.get("package")
+    if pk:
+        return set(pk.get("integrations") or [])
+    try:
+        data = json.loads(read(root / "package.json", root) or "{}")
+    except ValueError:
+        return set()
+    if not isinstance(data, dict):
+        return set()
+    return {d for cle in ("dependencies", "devDependencies") if isinstance(data.get(cle), dict) for d in data[cle]}
+
+
 @entree_autonome
 def scan_astro7(root, report):
     cfg = next((root / f for f in ("astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts")
                 if (root / f).exists()), None)
-    t = sans_commentaires(read(cfg, root)) if cfg else ""
-    n = _structure(t)
+    brut = read(cfg, root) if cfg else ""
+    n = _structure(brut)                 # structure seule (accolades, clés)
+    t = _lex(brut, garder=True)[0]       # sans commentaires, chaînes intactes (noms de modules)
+    objet = _objet_config(n)
     cname = rel(cfg, root) if cfg else "astro.config"
     v = astro_version(root) or (0, 0, 0)
     # --- Actions : validation des entrées
@@ -1019,28 +1190,29 @@ def scan_astro7(root, report):
     if m and _octets(m.group(1)) > LIMITE_CORPS_DEFAUT:
         add("basse", "securite", f"security.actionBodySizeLimit relevé à {_octets(m.group(1))} octets (défaut 1 Mo)", [cname],
             "ne relever que pour les actions d'envoi de fichiers, et vérifier l'identité avant de lire le corps")
-    # --- Montée en Astro 7
-    exp = set()
-    for e in re.finditer(r"\bexperimental\s*:\s*\{", n):
-        n0 = _premier_niveau(_bloc_equilibre(n, e.end() - 1))
-        exp.update(f for f in FLAGS_ASTRO7 if re.search(rf"(?<![\w$.]){f}\s*:", n0))
-    if exp:
-        add("moyenne", "code", f"Options experimental à retirer ou à sortir avant Astro 7 : {', '.join(sorted(exp))}", [cname],
-            f"suivre {DOC}/guides/upgrade-to/v7/")
-    pk = (report.get("package") or {})
-    ou_db = (["package.json"] if "@astrojs/db" in (pk.get("integrations") or []) else []) + \
-            ([cname] if "@astrojs/db" in t else [])
-    if ou_db:
-        add("moyenne", "code", "@astrojs/db n'est plus pris en charge par Astro 7", ou_db, f"voir {DOC}/guides/upgrade-to/v7/")
-    fetch = [rel(f, root) for f in (root / "src/fetch.ts", root / "src/fetch.js") if f.exists()]
-    if fetch and v[0] and v[0] < 7 and not re.search(r"\bfetchFile\s*:", n):
-        add("basse", "code", "src/fetch.ts est un fichier réservé à partir d'Astro 7", fetch,
-            "renommer le fichier avant la montée de version (ou fixer fetchFile dans la configuration)")
-    # --- Sessions (session.ttl : en secondes, infini par défaut)
-    for s_ in re.finditer(r"\bsession\s*:\s*\{", n):
-        if not _a_cle(_premier_niveau(_bloc_equilibre(n, s_.end() - 1)), "ttl"):
+    # --- Montée en Astro 7 : sans objet avant Astro 6 (une majeure à la fois), anticipation en 6, constat en 7 (version inconnue : comme en 7)
+    if not 0 < v[0] <= 5:
+        gravite = "basse" if v[0] == 6 else "moyenne"
+        suite = f" (Astro {v[0]}.x installé : à faire avant la montée)" if v[0] == 6 else ""
+        exp = _sous_bloc(objet, "experimental")
+        flags = sorted(f for f in FLAGS_ASTRO7 if exp is not None and _a_cle(_premier_niveau(exp), f))
+        if flags:
+            add(gravite, "code", f"Options experimental à retirer ou à sortir avant Astro 7 : {', '.join(flags)}", [cname],
+                f"suivre {DOC}/guides/upgrade-to/v7/{suite}")
+        ou_db = (["package.json"] if "@astrojs/db" in _dependances(root, report) else []) + \
+                ([cname] if re.search(r"""['"]@astrojs/db['"]""", t) else [])
+        if ou_db:
+            add(gravite, "code", "@astrojs/db n'est plus pris en charge par Astro 7", ou_db, f"voir {DOC}/guides/upgrade-to/v7/{suite}")
+        fetch = [rel(f, root) for f in (root / "src/fetch.ts", root / "src/fetch.js") if f.exists()]
+        if fetch and v[0] == 6 and not re.search(r"\bfetchFile\s*:", n):
+            add("basse", "code", "src/fetch.ts est un fichier réservé à partir d'Astro 7", fetch,
+                "renommer le fichier avant la montée de version (ou fixer fetchFile dans la configuration)")
+    # --- Sessions (session.ttl : en secondes, infini par défaut) ; `session: { ...x }` : indécidable, aucun constat
+    ses = _sous_bloc(objet, "session")
+    if ses is not None:
+        n0 = _premier_niveau(ses)
+        if "..." not in n0 and not _a_cle(n0, "ttl"):
             add("info", "securite", "session configurée sans ttl : sessions sans expiration", [cname], "session: { ttl: 60 * 60 * 24 * 7 }")
-            break
 
 
 # --------------------------------------------------------------------------- Convex

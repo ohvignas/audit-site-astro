@@ -8,7 +8,7 @@ declencheurs:
   - "code:Options experimental à retirer ou à sortir avant Astro 7"
   - "code:@astrojs/db n'est plus pris en charge"
   - "code:src/fetch\\.ts est un fichier réservé"
-versions_astro: ">=7.0"
+versions_astro: ">=6.0 pour préparer la montée ; ces corrections se font avant de passer en 7.0"
 sources:
   - https://docs.astro.build/en/guides/upgrade-to/v7/
 ---
@@ -19,7 +19,7 @@ sources:
 
 ## Pourquoi c'est important
 
-Astro 7 a stabilisé ou retiré plusieurs options expérimentales, supprimé le paquet `@astrojs/db` et réservé le fichier `src/fetch.ts`. Un projet qui les garde ne se construit plus (option inconnue, paquet absent) ou se comporte autrement (un `src/fetch.ts` à vous est lu comme le fichier de routage avancé d'Astro). Les corriger avant la montée, une majeure à la fois, évite un week-end de débogage en production.
+Astro 7 a stabilisé ou retiré plusieurs options expérimentales, supprimé le paquet `@astrojs/db` et réservé le fichier `src/fetch.ts`. Sur Astro 6 le constat est une anticipation (gravité basse) ; sur Astro 7 il est à traiter tout de suite. Un projet qui les garde ne se construit plus (option inconnue, paquet absent) ou se comporte autrement (un `src/fetch.ts` à vous est lu comme le fichier de routage avancé d'Astro). Les corriger avant la montée, une majeure à la fois, évite un week-end de débogage en production.
 
 ## Comment le constater soi-même
 
