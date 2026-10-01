@@ -235,6 +235,23 @@ class TestAstroGtmBom(unittest.TestCase):
             with self.subTest(contenu=contenu):
                 self.assertEqual(res(page("<noscript>" + contenu + '</noscript><title>T</title><link rel="canonical" href="/x">')), [])
 
+    def test_noscript_avec_element_valide_dans_la_tete_ne_ferme_pas_la_tete(self):
+        # « in head noscript » retraite le jeton dans la tête : script, template, title, base, noscript y sont permis
+        for contenu in ('<script src="/x.js"></script>', '<template><div></div></template>', '<title>T</title>', '<base href="/">',
+                        '<noscript></noscript>', '<script>1</script><link rel="stylesheet" href="/a.css">'):
+            with self.subTest(contenu=contenu):
+                self.assertEqual(res(page("<noscript>" + contenu + '</noscript><link rel="canonical" href="/x">')), [])
+        # un élément invalide après un élément valide du noscript ferme bien la tête
+        self.assertEqual(res(page('<noscript><script></script><img src="/p.gif"></noscript><link rel="canonical" href="/x">')),
+                         ["<noscript><img> (sans JavaScript) puis : link canonical"])
+
+    def test_pas_de_double_signature_quand_l_interruption_avec_javascript_rapporte_les_memes_pertes(self):
+        tete = GTM_NOSCRIPT + '<meta name="description" content="d"><video></video><meta name="description" content="d">'
+        self.assertEqual(res(page(tete)), ["<video> puis : meta description"])
+        # pertes plus nombreuses sans JavaScript : les deux signatures restent
+        self.assertEqual(res(page(GTM_NOSCRIPT + '<title>T</title><video></video><meta name="description" content="d">')),
+                         ["<video> puis : meta description", "<noscript><iframe> (sans JavaScript) puis : title, meta description"])
+
     def test_noscript_invalide_perd_aussi_ce_qui_suit_dans_le_noscript(self):
         self.assertEqual(res(page('<noscript><img src="/p.gif"><link rel="canonical" href="/x"></noscript>')),
                          ["<noscript><img> (sans JavaScript) puis : link canonical"])

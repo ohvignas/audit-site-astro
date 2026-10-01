@@ -11,8 +11,9 @@ est ignoré, comme dans un navigateur.
 
 <noscript> a deux lectures. Avec JavaScript (rendu de Googlebot) son contenu est du texte brut : un pixel <noscript><img>
 n'interrompt rien et le constat « haute/moyenne » ne le concerne pas. Sans JavaScript (première lecture du HTML brut, autres
-robots, aperçus de liens) c'est le mode « in head noscript » (§13.2.6.4.5) : seuls basefont, bgsound, link, meta, noframes et
-style y sont permis, tout autre élément (iframe de GTM, img d'un pixel, div) ou texte ferme la tête. Ce cas est signalé à part,
+robots, aperçus de liens) c'est le mode « in head noscript » (§13.2.6.4.5) : basefont, bgsound, link, meta, noframes et style
+y restent ; tout autre jeton dépile le <noscript> et est retraité dans la tête, donc ne la ferme que s'il y est invalide aussi
+(iframe de GTM, img d'un pixel, div, texte : oui ; script, template, title, base : non). Ce cas est signalé à part,
 avec la mention « (sans JavaScript) » et une sévérité plafonnée à « moyenne » : Google, qui rend avec JavaScript, n'est pas
 concerné d'après sa documentation.
 
@@ -29,8 +30,6 @@ VALIDES = {"base", "basefont", "bgsound", "link", "meta", "noframes", "noscript"
 BRUTS_SANS_NOSCRIPT = ("title", "script", "style", "noframes", "template", "iframe", "noembed", "xmp", "textarea", "svg", "math")
 # Avec JavaScript actif, le contenu de <noscript> est aussi du texte brut
 BRUTS = BRUTS_SANS_NOSCRIPT + ("noscript",)
-# Permis dans <noscript> d'une tête quand JavaScript est désactivé (« in head noscript »)
-NOSCRIPT_VALIDES = {"basefont", "bgsound", "link", "meta", "noframes", "style"}
 BLANCS = "\t\n\f\r "
 BOM = "﻿"
 META_SEO = ("description", "robots", "googlebot", "viewport", "theme-color")
@@ -106,7 +105,7 @@ class Observateur(ho.Observateur):
                 c = classer(t, a)
                 if c:
                     self._perdue(self.ignorees_sans_js, c)
-            elif self.interrompu is None and self._noscript_de_tete(pile) and t not in NOSCRIPT_VALIDES:
+            elif self.interrompu is None and self._noscript_de_tete(pile) and t not in VALIDES:
                 self.sans_js = "<noscript><{0}>".format(t)
         # Lecture avec JavaScript : contenu de <noscript> = texte brut
         if ho.dans(pile, *BRUTS):
@@ -144,7 +143,8 @@ class Observateur(ho.Observateur):
         out = []
         if self.interrompu and self.ignorees:
             out.append({"signature": "{0} puis : {1}".format(self.interrompu, ", ".join(self.ignorees)), "n": 1})
-        if self.sans_js and self.ignorees_sans_js:
+        # Même pertes déjà rapportées par l'interruption avec JavaScript (au moins aussi grave) : pas de double signature
+        if self.sans_js and self.ignorees_sans_js and not (self.interrompu and set(self.ignorees_sans_js) <= set(self.ignorees)):
             out.append({"signature": "{0}{1} puis : {2}".format(self.sans_js, SANS_JS, ", ".join(self.ignorees_sans_js)), "n": 1,
                         "exemple": EXPLICATION_SANS_JS})
         return {"interruptions": out}
@@ -162,11 +162,11 @@ def issues(pages, add, ctx):
     groupes = ho.collecter_groupes(pages, NOM, "interruptions")
     sans_js = {s: g for s, g in groupes.items() if SANS_JS in s}
     avec_js = {s: g for s, g in groupes.items() if s not in sans_js}
-    libelle = "<head> interrompu par un élément invalide : les métadonnées suivantes sont ignorées par Google"
-    libelle_sans_js = ("<noscript> invalide dans le <head> : les balises suivantes sont perdues par les robots sans JavaScript et "
-                       "à la première lecture du HTML (Google, qui rend avec JavaScript, n'est pas concerné d'après sa documentation)")
+    # Libellé unique et neutre (fixé par le premier ajout) : valable pour les exemples avec et sans JavaScript
+    libelle = ("<head> interrompu par un élément invalide : les balises suivantes sont perdues (ignorées par Google ; pour les exemples "
+               "« (sans JavaScript) », perdues par les robots qui n'exécutent pas JavaScript seulement, Google n'est pas concerné)")
     # Un seul constat : libellé et sévérité sont fixés par le premier ajout, donc les cas graves d'abord
-    for severite, choisis, lib in (("haute", {s: g for s, g in avec_js.items() if grave(s)}, libelle),
-                                   ("moyenne", {s: g for s, g in avec_js.items() if not grave(s)}, libelle),
-                                   ("moyenne", sans_js, libelle_sans_js)):
-        ho.ajouter_groupes(add, "tete_interrompue", lib, severite, choisis, "SEO technique")
+    for severite, choisis in (("haute", {s: g for s, g in avec_js.items() if grave(s)}),
+                              ("moyenne", {s: g for s, g in avec_js.items() if not grave(s)}),
+                              ("moyenne", sans_js)):
+        ho.ajouter_groupes(add, "tete_interrompue", libelle, severite, choisis, "SEO technique")

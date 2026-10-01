@@ -19,7 +19,7 @@ sources:
 
 Google lit les métadonnées jusqu'au premier élément invalide. Une canonical ignorée laisse Google choisir lui-même l'URL de référence (doublons) ; un `noindex` ignoré laisse indexer une page privée ; des hreflang ignorés cassent le ciblage par langue. La signature du constat indique l'élément fautif et les balises perdues. Le constat est « haute » quand une canonical, un robots ou des hreflang sont perdus, « moyenne » quand seuls title, description, viewport, Open Graph, twitter:*, theme-color, manifest, alternate ou un préchargement d'image (LCP) le sont.
 
-**Cas « (sans JavaScript) »** : un `<noscript>` au contenu invalide placé dans `<head>` avant ces balises (iframe de Google Tag Manager, pixel Meta en `<img>`, `<div>`) ferme la tête pour les robots qui n'exécutent pas JavaScript et pour la première lecture du HTML brut (aperçus de liens, outils SEO, `curl`). Google, qui rend la page avec JavaScript, n'est pas concerné d'après sa documentation : ce cas est donc plafonné à « moyenne ». Dans un `<noscript>` de la tête, seuls `link`, `style`, `meta`, `basefont`, `bgsound` et `noframes` sont permis (`<noscript><link …></noscript>` reste valide).
+**Cas « (sans JavaScript) »** : un `<noscript>` au contenu invalide placé dans `<head>` avant ces balises (iframe de Google Tag Manager, pixel Meta en `<img>`, `<div>`) ferme la tête pour les robots qui n'exécutent pas JavaScript et pour la première lecture du HTML brut (aperçus de liens, outils SEO, `curl`). Google, qui rend la page avec JavaScript, n'est pas concerné d'après sa documentation : ce cas est donc plafonné à « moyenne ». Un `<noscript>` de la tête ne ferme la tête que s'il contient un élément invalide dans la tête aussi (`iframe`, `img`, `div`, texte) : `<noscript><link …></noscript>`, `<noscript><style>` ou `<noscript><script>` restent valides.
 
 ## Comment le constater soi-même
 
@@ -37,7 +37,7 @@ import sys, re
 h = sys.stdin.read().split("</head>")[0]
 print(re.findall(r"<noscript\b.*?</noscript>", h, re.S | re.I))'
 ```
-Tout `<noscript>` contenant autre chose que `link`, `style` ou `meta` est à déplacer.
+Tout `<noscript>` contenant une `iframe`, une `img`, un `div` ou du texte est à déplacer.
 
 Souvent un composant Astro placé dans le `<head>` du layout (bandeau, pixel `<img>`, `<iframe>` de chat, `<div>` d'un script tiers).
 
