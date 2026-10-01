@@ -10,7 +10,7 @@ Faux positifs = matchers qui se déclenchent sur le jumeau propre (sauf "propre"
   Sur le propre, les filtres d'emplacement propres au cassé (contient / ou_contient / exemple_contient)
   sont retirés : la seule présence de la détection (clé du crawl, regex du code ou de Lighthouse) compte.
   Un défaut peut fournir un "matcher_propre" explicite, utilisé tel quel à la place.
-Inattendus = constats Critique/Haute du jumeau propre (crawl + code) : à examiner.
+Inattendus = constats Critique/Haute du jumeau propre (issues.json de crawl, rendu, domaine, terrain + code) : à examiner.
 
 Codes de sortie : 0 = seuils respectés ; 1 = seuil violé ; 2 = audit invalide (collecte incomplète, fichiers manquants).
 """
@@ -115,6 +115,11 @@ def valider_audit(audit, phase=0):
     for rel in FICHIERS_REQUIS + (("rendu/issues.json",) if phase >= 2 else ()):
         if not (data / rel).is_file():
             problemes.append("data/{0} manquant".format(rel))
+    # Un fichier d'issues vide, tronqué ou non-objet serait lu comme « aucun constat » : un propre illisible
+    # passerait pour un propre sans faux positif. « {} » reste valide (aucun constat légitime).
+    for rel in FICHIERS_ISSUES:
+        if (data / rel).is_file() and not isinstance(_json(data / rel), dict):
+            problemes.append("data/{0} illisible (JSON de type objet attendu)".format(rel))
     return problemes
 
 

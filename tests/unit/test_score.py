@@ -256,14 +256,17 @@ class TestSourcesV21(unittest.TestCase):
             self.assertFalse(score.detecte({"type": "crawl_issue", "cle": "axe:color-contrast"}, a), "défaut : crawl/issues.json")
 
     def test_inattendus_de_toutes_les_sources(self):
+        def it(sev):
+            return {"label": "l", "severity": sev, "count": 1, "examples": []}
         with tempfile.TemporaryDirectory() as d:
             a = self._audit(d, {
-                "crawl/issues.json": {"noindex": {"label": "n", "severity": "info", "count": 1, "examples": []}},
-                "rendu/issues.json": {"axe:link-name": {"label": "Liens sans nom", "severity": "haute", "count": 1, "examples": []}},
-                "domaine/issues.json": {"spf_permissif": {"label": "SPF +all", "severity": "haute", "count": 1, "examples": []}},
-                "terrain/issues.json": {"terrain_lcp": {"label": "LCP", "severity": "moyenne", "count": 1, "examples": []}}})
-            sources = sorted((i["source"], i["cle"]) for i in score._inattendus(a))
-        self.assertEqual(sources, [("domaine", "spf_permissif"), ("rendu", "axe:link-name")])
+                "crawl/issues.json": {"http_5xx": it("haute"), "noindex": it("info"), "lent": it("moyenne")},
+                "rendu/issues.json": {"axe:link-name": it("haute")},
+                "domaine/issues.json": {"spf_permissif": it("critique")},
+                "terrain/issues.json": {"terrain_lcp": it("haute"), "terrain_cls": it("moyenne")}})
+            inattendus = score._inattendus(a)
+        self.assertEqual(sorted((i["source"], i["cle"]) for i in inattendus),
+                         [("crawl", "http_5xx"), ("domaine", "spf_permissif"), ("rendu", "axe:link-name"), ("terrain", "terrain_lcp")])
 
     def test_rendu_requis_a_partir_de_la_phase_2(self):
         with tempfile.TemporaryDirectory() as d:
@@ -271,6 +274,40 @@ class TestSourcesV21(unittest.TestCase):
             (a / "data/COLLECTE.md").write_text("| crawl | ✅ | 1 s | x |\n", encoding="utf-8")
             self.assertEqual(score.valider_audit(a, phase=1), [])
             self.assertEqual(score.valider_audit(a, phase=2), ["data/rendu/issues.json manquant"])
+
+    def _propre_valide(self, d, **extra):
+        fichiers = {"crawl/issues.json": {}, "geo/geo.json": {}, "code/code-scan.json": {}, "perf/pagespeed.json": [],
+                    "rendu/issues.json": {}}
+        fichiers.update(extra)
+        a = self._audit(d, {k: v for k, v in fichiers.items() if v is not None})
+        (a / "data/COLLECTE.md").write_text("| crawl | ✅ | 1 s | x |\n", encoding="utf-8")
+        return a
+
+    def test_issues_vide_valide_mais_illisible_refuse(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = self._propre_valide(d)
+            self.assertEqual(score.valider_audit(a, phase=2), [], "{} = aucun constat, valide")
+            cible = a / "data/rendu/issues.json"
+            for contenu in ("", '{"axe:region": {"severity": "haute", "examples": [', "[]", "null"):
+                cible.write_text(contenu, encoding="utf-8")
+                self.assertEqual(score.valider_audit(a, phase=2),
+                                 ["data/rendu/issues.json illisible (JSON de type objet attendu)"], repr(contenu))
+
+    def test_issues_illisible_refuse_pour_toutes_les_sources(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = self._propre_valide(d)
+            for rel in ("crawl", "domaine", "terrain"):
+                (a / "data" / rel).mkdir(parents=True, exist_ok=True)
+                (a / "data" / rel / "issues.json").write_text("{", encoding="utf-8")
+            self.assertEqual(score.valider_audit(a, phase=1), [
+                "data/crawl/issues.json illisible (JSON de type objet attendu)",
+                "data/domaine/issues.json illisible (JSON de type objet attendu)",
+                "data/terrain/issues.json illisible (JSON de type objet attendu)"])
+
+    def test_matcher_propre_garde_la_source_domaine_terrain(self):
+        for src in ("rendu", "domaine", "terrain"):
+            m = {"type": "crawl_issue", "fichier": src + "/issues.json", "cle": "k", "contient": "x"}
+            self.assertEqual(score.matcher_propre(m), {"type": "crawl_issue", "fichier": src + "/issues.json", "cle": "k"})
 
 
 if __name__ == "__main__":
