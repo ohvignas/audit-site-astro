@@ -1,6 +1,6 @@
 {
   "name": "audit-site-astro",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "description": "Audit A→Z de sites Astro (+ Convex) : performance & Core Web Vitals, SEO technique, contenu, GEO (ChatGPT, Perplexity, Claude, Gemini, AI Overviews), qualité du code, sécurité, accessibilité — rapport priorisé et corrections après validation.",
   "author": { "name": "ILLITH" },
   "license": "MIT",
