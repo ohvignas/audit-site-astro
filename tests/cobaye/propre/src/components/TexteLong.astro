@@ -1,0 +1,9 @@
+---
+// Texte d'environ 430 mots pour les pages du banc v2.1 du jumeau propre : sous 300 mots, le crawl lèverait thin_content.
+import { paragraphes } from '../data/texte';
+interface Props { sujet: string; complement: string }
+const { sujet, complement } = Astro.props;
+---
+{paragraphes(sujet).map((p) => <p>{p}</p>)}
+<h2>Pour aller plus loin {complement}</h2>
+{paragraphes(complement).filter((_, i) => i !== 2 && i !== 4).map((p) => <p>{p}</p>)}

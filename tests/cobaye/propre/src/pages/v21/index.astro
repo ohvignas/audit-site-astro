@@ -1,0 +1,13 @@
+---
+export const prerender = true;
+import Base from '../../layouts/Base.astro';
+import TexteLong from '../../components/TexteLong.astro';
+// Banc v2.1 : chaque contrôle ajoute sa page ./<sujet>.astro ; elle est listée ici et dans le sitemap sans autre modification.
+const pages = Object.keys(import.meta.glob('./*.astro')).filter((p) => p !== './index.astro').map((p) => p.slice(2, -6)).sort();
+---
+<Base title="Laboratoire des bonnes pratiques du site" description="Chaque page de ce laboratoire montre la version correcte d'un contrôle ajouté à l'outil d'audit en version 2.1.">
+  <h1>Laboratoire des bonnes pratiques</h1>
+  <TexteLong sujet="du laboratoire" complement="sur les bonnes pratiques" />
+  <h2>Pages du laboratoire</h2>
+  <ul>{pages.map((p) => <li><a href={`/v21/${p}`}>Bonne pratique : {p}</a></li>)}</ul>
+</Base>
