@@ -94,12 +94,12 @@ def _decompress(body, enc):
     return body
 
 
-def fetch(url, timeout=20, method="GET", max_bytes=8_000_000, ua=UA, extra_headers=None):
-    """GET/HEAD en suivant les redirections à la main pour conserver la chaîne complète."""
+def fetch(url, timeout=20, method="GET", max_bytes=8_000_000, ua=UA, extra_headers=None, max_hops=10):
+    """GET/HEAD en suivant les redirections à la main pour conserver la chaîne complète (max_hops sauts au plus)."""
     chain = []
     current = url
     t_start = time.time()
-    for _ in range(10):
+    for _ in range(max_hops):
         headers = {
             "User-Agent": ua,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -141,7 +141,7 @@ def fetch(url, timeout=20, method="GET", max_bytes=8_000_000, ua=UA, extra_heade
         return {"url": url, "final_url": current, "status": status, "error": None, "chain": chain,
                 "headers": {k.lower(): v for k, v in hdrs.items()}, "body": body, "raw_bytes": raw_len,
                 "ttfb": round(ttfb, 3), "time": round(time.time() - t_start, 3)}
-    return {"url": url, "final_url": current, "status": -1, "error": "plus de 10 redirections", "chain": chain,
+    return {"url": url, "final_url": current, "status": -1, "error": f"plus de {max_hops} redirections", "chain": chain,
             "headers": {}, "body": b"", "raw_bytes": 0, "ttfb": None, "time": round(time.time() - t_start, 3)}
 
 
@@ -166,6 +166,46 @@ def normalize(u):
     if (p.scheme == "http" and netloc.endswith(":80")) or (p.scheme == "https" and netloc.endswith(":443")):
         netloc = netloc.rsplit(":", 1)[0]
     return urlunparse((p.scheme.lower(), netloc, p.path or "/", p.params, p.query, ""))
+
+
+def origine_du_crawl(u, host, scheme):
+    """Pour une URL de l'hôte audité ou de ses variantes http/www : (même chemin sur l'hôte et le schéma du crawl,
+    est-ce une variante). None pour un hôte tiers : jamais sondé, jamais compté. Sans réseau."""
+    p = urlparse(u)
+    bare = host[4:] if host.startswith("www.") else host
+    if p.netloc not in (host, bare, "www." + bare):
+        return None
+    return (urlunparse((scheme, host, p.path or "/", p.params, p.query, "")),
+            p.scheme != scheme or p.netloc != host)
+
+
+def sonder_sitemap(sitemap_set, pages, host, scheme, robots, fetch_fn, timeout=20, delai=0.0, budget_s=300,
+                   ignore_robots=False, max_sondes=5, par_groupe=2, max_examinees=200):
+    """Preuve réseau, bornée, d'une redirection d'URL du sitemap non visitées (limite de pages atteinte) : un HEAD,
+    premier saut seulement, sur 5 URL au plus (2 par couple schéma/hôte), en priorité celles dont l'équivalent n'est pas
+    déjà crawlé. Jamais d'hôte tiers ; robots.txt respecté ; arrêt après 3 échecs de suite ou budget de temps dépassé.
+    Le comptage des URL concernées se fait sans réseau et le verdict se prend par groupe (build_issues)."""
+    timeout = min(timeout, 8)  # simple preuve : timeout court
+    cands = []
+    for u in sitemap_set:
+        o = None if u in pages else origine_du_crawl(u, host, scheme)
+        if o:
+            cands.append((o[1] and o[0] in pages, u))
+    cands.sort()
+    sondes, groupes, echecs, t0 = {}, Counter(), 0, time.time()
+    for _, u in cands[:max_examinees]:
+        if len(sondes) >= max_sondes or echecs >= 3 or time.time() - t0 > budget_s:
+            break
+        g = urlparse(u)[:2]
+        if groupes[g] >= par_groupe or not (ignore_robots or robots.allowed("Googlebot", u)):
+            continue
+        groupes[g] += 1
+        r = fetch_fn(u, timeout=timeout, method="HEAD", max_hops=1)
+        statut = r["chain"][0]["status"] if r["chain"] else r["status"]
+        sondes[u] = {"statut": statut, "vers": normalize(r["final_url"]) or r["final_url"]}
+        echecs = echecs + 1 if statut <= 0 else 0
+        time.sleep(delai)
+    return sondes
 
 
 # --------------------------------------------------------------------------- robots.txt (sémantique Google)
@@ -761,10 +801,14 @@ def crawl(args):
     ecrire_json(out / "pages.json", {"meta": {"start_url": start, "host": host, "pages_crawled": len(pages), "partiel": True},
                                       "pages": list(pages.values())})
     ecrire_json(out / "issues.json", constats({"meta": {}, "provisoire": True}))
+    # --- URL du sitemap non visitées (limite de pages atteinte) : quelques HEAD de preuve, bornés (voir sonder_sitemap)
+    sitemap_sondes = sonder_sitemap(sitemap_set, pages, host, scheme, robots, fetch, timeout=args.timeout,
+                                    delai=args.delay, budget_s=args.budget_reseau, ignore_robots=args.ignore_robots)
     # --- modules du diffuseur : requêtes réseau éventuelles (liens externes, ressources), bornées en temps, puis constats
     ctx = {"fetch": fetch, "timeout": args.timeout, "delai": args.delay, "host": host, "scheme": scheme,
            "ua_navigateur": BROWSER_UA, "liens_externes_max": args.liens_externes, "delai_externe": args.delai_externe,
-           "ressources_max": args.ressources, "budget_reseau_s": args.budget_reseau, "meta": {}}
+           "ressources_max": args.ressources, "budget_reseau_s": args.budget_reseau, "meta": {},
+           "sitemap_sondes": sitemap_sondes}
     html_observateurs.apres_crawl(pages, ctx)
     issues = constats(ctx)
 
@@ -806,10 +850,18 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
             it["examples"].append(example)
 
     html_ok = [p for p in pages.values() if p.get("is_html") and p["final_status"] == 200 and not p["redirect_hops"]]
+    sondes = ctx.get("sitemap_sondes", {})
+
+    def equivalent(u):
+        """Page crawlée équivalente à une URL du sitemap jamais visitée : même chemin sur l'hôte et le schéma du crawl
+        (sitemap en http:// derrière un proxy, variante www). Sans elle, la page passait pour absente du sitemap."""
+        o = None if u in pages else origine_du_crawl(u, host, scheme)
+        return o[0] if o and o[1] and o[0] in pages else None
+
     sitemap_eff = set()
     for u in sitemap_set:
         sp = pages.get(u)
-        sitemap_eff.add(sp["final_url"] if sp and sp["redirect_hops"] else u)
+        sitemap_eff.add(sp["final_url"] if sp and sp["redirect_hops"] else (equivalent(u) or u))
     indexable = []
     for p in html_ok:
         canon = p.get("canonicals") or []
@@ -874,8 +926,10 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
                 add("deep_page", "Pages à plus de 3 clics de l'accueil", "moyenne", {"url": u, "profondeur": p["depth"]})
             if not p.get("jsonld_types"):
                 add("no_jsonld", "Aucune donnée structurée JSON-LD", "basse", u)
-            if not (p.get("og_title") and p.get("og_image")):
-                add("og_missing", "Open Graph incomplet (og:title / og:image)", "basse", u)
+            if not p.get("og_title"):
+                add("og_title_absent", "Open Graph : og:title absent (titre de l'aperçu de partage)", "basse", u)
+            if not p.get("og_image"):
+                add("og_image_absent", "Open Graph : og:image absent (aucune image d'aperçu de partage)", "basse", u)
             if sm_urls and p["url"] not in sitemap_eff:
                 add("not_in_sitemap", "Pages indexables absentes du sitemap", "moyenne", u)
         canon = p.get("canonicals") or []
@@ -952,15 +1006,47 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
 
     if not sitemap_set:
         add("no_sitemap", "Aucun sitemap XML trouvé (robots.txt, /sitemap_index.xml, /wp-sitemap.xml)", "haute")
-    for u in sitemap_set:
-        p = pages.get(u)
+    lib_redir = "URL du sitemap qui redirigent (souvent http:// ou slash final incohérent)"
+    # verdict par groupe (schéma, hôte) : 3xx = redirection, 2xx = réponse sans redirection ; 0, 4xx, 5xx (WAF, limitation de
+    # débit, panne) ne concluent pas. Un groupe entièrement en 2xx est compté en entier ; un groupe mixte reste une redirection.
+    groupes = {}
+    for u, sd in sondes.items():
+        g = groupes.setdefault(urlparse(u)[:2], {"redir": 0, "ok": []})
+        if 300 <= sd["statut"] < 400:
+            g["redir"] += 1
+        elif 200 <= sd["statut"] < 300:
+            g["ok"].append(sd["statut"])
+    # le comptage des variantes (schéma ou hôte différent du crawl) ne demande aucun réseau ; les sondes ne font que
+    # prouver : leurs URL passent en premier pour que le code observé figure dans les exemples
+    for u in sorted(sitemap_set, key=lambda x: (x not in sondes, x)):
+        p, eq, s = pages.get(u), equivalent(u), sondes.get(u)
+        o = None if p else origine_du_crawl(u, host, scheme)
+        variante = bool(o and o[1])
         if not p:
-            continue
-        cible = p
-        if p["redirect_hops"]:
-            add("sitemap_redirect", "URL du sitemap qui redirigent (souvent http:// ou slash final incohérent)", "moyenne",
-                {"url": u, "vers": p["final_url"]})
-            cible = pages.get(p["final_url"]) or p
+            g = groupes.get(urlparse(u)[:2], {}) if variante else {}
+            redir, oks = g.get("redir", 0), g.get("ok", [])
+            if variante and oks and not redir:  # tout le groupe répond en 2xx : aucune redirection
+                add("sitemap_sans_redirection",
+                    "URL du sitemap sur une variante d'hôte ou de schéma qui répond sans rediriger", "moyenne",
+                    {"url": u, "statut": s["statut"] if s else "non vérifié (groupe sondé : %d)" % oks[0]})
+            elif s and 300 <= s["statut"] < 400:
+                add("sitemap_redirect", lib_redir, "moyenne", {"url": u, "vers": s["vers"], "statut": s["statut"]})
+            elif variante:  # déduit sans réseau (ou sonde non concluante)
+                if redir and oks:
+                    st = "non vérifié (groupe mixte : redirections et réponses 2xx)"
+                elif s:
+                    st = "non vérifié (sonde : %s)" % s["statut"]
+                else:
+                    st = "non vérifié (limite de crawl atteinte)" if eq else "non vérifié"
+                add("sitemap_redirect", lib_redir, "moyenne", {"url": u, "vers": o[0], "statut": st})
+            if not eq:
+                continue
+            cible = pages[eq]
+        else:
+            cible = p
+            if p["redirect_hops"]:
+                add("sitemap_redirect", lib_redir, "moyenne", {"url": u, "vers": p["final_url"]})
+                cible = pages.get(p["final_url"]) or p
         # une redirection ne masque plus l'état de la cible : 404 et noindex restent signalés
         if cible["final_status"] != 200:
             add("sitemap_non200", "URL du sitemap en erreur", "haute", {"url": u, "status": cible["final_status"]})
@@ -970,7 +1056,7 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
             add("sitemap_canonicalized", "URL du sitemap canonisées ailleurs", "moyenne",
                 {"url": u, "canonical": cible["canonicals"][0]})
     home_url = next(iter(pages), None)
-    for u in sitemap_eff:
+    for u in sorted(sitemap_eff):
         p = pages.get(u)
         if p and not inlinks.get(u) and p.get("final_status") == 200 and not p["redirect_hops"] and u != home_url:
             add("orphan", "Pages orphelines (dans le sitemap, aucun lien interne trouvé)", "moyenne", u)
