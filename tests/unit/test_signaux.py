@@ -215,3 +215,46 @@ class TestAvertissementsEnListe(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLectureTolerante(unittest.TestCase):
+    """Un octet invalide dans un fichier de collecte ne doit pas faire planter le rapport."""
+
+    MAUVAIS = b"\xff\xfe\x80"
+
+    def _audit(self, fichiers):
+        t = tempfile.TemporaryDirectory()
+        self.addCleanup(t.cleanup)
+        for rel, contenu in fichiers.items():
+            p = pathlib.Path(t.name, "data", rel)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(contenu)
+        return t.name
+
+    def test_project_checks_avec_octet_invalide(self):
+        import signaux
+        brut = "- ❌ astro check : 2 erreur(s) de diagnostic\n- ⚠️ ligne ".encode("utf-8") + self.MAUVAIS + " fin\n".encode("utf-8")
+        s = [x for x in signaux.collecter(self._audit({"code/project-checks.md": brut})) if x["source"] == "projet"]
+        self.assertTrue(any("astro check : 2 erreur(s)" in x["texte"] for x in s), s)
+        self.assertEqual(len(s), 2)
+
+    def test_sondes_http_et_securite_avec_octet_invalide(self):
+        import signaux
+        brut = "| Contrôle | Valeur | Verdict |\n| HSTS | — | ❌ |\n".encode("utf-8") + b"| x | " + self.MAUVAIS + b" | \xe2\x9a\xa0\xef\xb8\x8f |\n"
+        s = signaux.collecter(self._audit({"http/http-checks.md": brut, "securite/security-probe.md": brut}))
+        self.assertEqual({x["source"] for x in s}, {"http", "securite"})
+        self.assertTrue(all(any("HSTS" in x["texte"] for x in s if x["source"] == src) for src in ("http", "securite")))
+
+    def test_json_avec_octet_invalide_reste_lu(self):
+        import signaux
+        brut = b'{"liens_casses": {"label": "Liens cass\xe9s ' + self.MAUVAIS + b'", "severity": "haute", "count": 2, "examples": []}}'
+        s = signaux.collecter(self._audit({"crawl/issues.json": brut}))
+        self.assertTrue(any(x["source"] == "crawl" and x["cle"] == "liens_casses" for x in s), s)
+
+
+class TestDomainesSynchronises(unittest.TestCase):
+    def test_domaines_connus_couvre_les_domaines_des_fiches(self):
+        """signaux.DOMAINES_CONNUS reprend exactement fiches.DOMAINES, plus « Bonnes pratiques » (Lighthouse hors catégories suivies)."""
+        import fiches
+        import signaux
+        self.assertEqual(set(signaux.DOMAINES_CONNUS), set(fiches.DOMAINES) | {"Bonnes pratiques"})
