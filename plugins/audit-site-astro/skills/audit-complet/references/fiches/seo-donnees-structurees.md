@@ -8,6 +8,7 @@ declencheurs:
   - "crawl:no_jsonld"
   - "crawl:jsonld_invalid"
   - "crawl:jsonld_proprietes_requises"
+  - "crawl:jsonld_cours_incomplet"
   - "crawl:jsonld_type_sans_effet"
   - "crawl:jsonld_prix_absent_du_texte"
 sources:
@@ -121,7 +122,7 @@ const fil = {
 4. Réparer un bloc invalide : trouver l'écriture manuelle (`<script type="application/ld+json">` avec du JSON en dur, ou un modèle qui injecte du texte avec guillemets) et passer par le composant ci-dessus.
 5. Dates au format ISO 8601, URL absolues, champs conformes à la documentation Google du type concerné (les propriétés obligatoires diffèrent selon le résultat enrichi visé).
 6. Ne balisez que ce qui est visible (une `FAQPage` seulement si la FAQ est affichée).
-7. Propriétés requises par Google (signalées par `jsonld_proprietes_requises`) : Event : `name`, `startDate`, `location` ; Product : `name` et au moins un de `offers`, `review`, `aggregateRating` ; Course (liste de cours, au moins trois cours) : `name`, `description` ; JobPosting : `datePosted`, `description`, `hiringOrganization`, `jobLocation` (ou `applicantLocationRequirements` en télétravail), `title` ; LocalBusiness et sous-types : `name`, `address` ; Recipe : `name`, `image` ; VideoObject : `name`, `thumbnailUrl`, `uploadDate` ; BreadcrumbList : `itemListElement` ; Review : `author`, `reviewRating` ; AggregateRating : `ratingValue` et `ratingCount` ou `reviewCount`. Compléter le gabarit avec des valeurs réelles, jamais inventées.
+7. Propriétés requises par Google (signalées par `jsonld_proprietes_requises`) : Event (et ses sous-types) : `name`, `startDate`, `location` avec `location.name` et `location.address` ; Product : `name` et au moins un de `offers`, `review`, `aggregateRating` ; Course (liste de cours, au moins trois cours) : `name`, `description` (sans liste de trois cours, l'absence est un constat `jsonld_cours_incomplet`, basse : Google ne montre pas de résultat pour un cours isolé) ; JobPosting : `datePosted`, `description`, `hiringOrganization`, `jobLocation` (ou `applicantLocationRequirements` en télétravail), `title` ; LocalBusiness et sous-types : `name`, `address` ; Recipe : `name`, `image` ; VideoObject : `name`, `thumbnailUrl`, `uploadDate` ; BreadcrumbList : `itemListElement` ; Review : `author`, `reviewRating` ; AggregateRating : `ratingValue` et `ratingCount` ou `reviewCount`. SoftwareApplication : `name`, `offers.price`, `aggregateRating` ou `review`. Seuls les objets que Google évalue sont contrôlés (racine, `@graph`, `mainEntity`, `item` d'un `ListItem`, `review` et `aggregateRating`), pas les objets valeurs d'une autre propriété (`itemOffered`, `provider`, `location`…). Compléter le gabarit avec des valeurs réelles, jamais inventées.
 8. Types retirés (ClaimReview, Course Info, Estimated salary, Learning video, Special announcement, Vehicle listing, Practice problem, How-to, FAQ, boîte de recherche de sitelinks) : les garder seulement s'ils servent schema.org et les assistants IA ; ne plus en attendre d'affichage Google. Ne pas confondre avec ce qui reste actif : liste de cours (Course avec `name` et `description`), Dataset (Dataset Search), Book actions, Event, Product, Organization, BreadcrumbList.
 
 ## Critères d'acceptation

@@ -71,8 +71,20 @@ class TestDonnees(unittest.TestCase):
         self.assertEqual(r["manquantes"], [])  # Google exige seulement name et description pour la liste de cours
         self.assertEqual(r["retires"], ["Course Info (hasCourseInstance) : documentation supprimée le 09/09/2025"])
 
-    def test_course_sans_description_est_signale(self):
-        self.assertEqual(une({"@type": "Course", "name": "C"})["manquantes"], ["Course : description"])
+    def test_course_sans_description_est_basse_hors_liste(self):
+        # Google n'affiche « liste de cours » que pour au moins trois cours : un cours isolé est un constat à part (basse)
+        r = une({"@type": "Course", "name": "C"})
+        self.assertEqual((r["manquantes"], r["cours_isoles"]), ([], ["Course : description"]))
+
+    def test_course_sans_description_dans_une_liste_de_trois_est_moyenne(self):
+        cours = [{"@type": "Course", "name": "C1", "description": "d"}, {"@type": "Course", "name": "C2"},
+                 {"@type": "Course", "name": "C3", "description": "d"}]
+        liste = {"@type": "ItemList", "itemListElement": [{"@type": "ListItem", "position": i + 1, "item": c} for i, c in enumerate(cours)]}
+        r = une(liste)
+        self.assertEqual((r["manquantes"], "cours_isoles" in r), (["Course : description"], False))
+        r = res(cours)  # trois cours de premier niveau : même chose
+        self.assertEqual(r["manquantes"], ["Course : description"])
+        self.assertNotIn("cours_isoles", r)
 
     # --- types retirés ou restreints --------------------------------------------------------------------------------------
 
@@ -159,6 +171,105 @@ class TestDonnees(unittest.TestCase):
         # mais un objet imbriqué plus riche est vérifié, et un objet de premier niveau l'est toujours
         r = une({"@type": "WebPage", "mainEntity": {"@type": "Event", "name": "Atelier", "offers": {"@type": "Offer", "price": "5"}}})
         self.assertEqual(r["manquantes"], ["Event : startDate, location"])
+
+    # --- relecture 1 : seuls les objets que Google évalue (I1) ---------------------------------------------------------------
+
+    def test_valeurs_d_autres_proprietes_ne_sont_pas_des_pages_candidates(self):
+        cas = {
+            "itemOffered": {"@type": "Offer", "price": "5", "itemOffered": {"@type": "Product", "name": "X", "sku": "1"}},
+            "itemReviewed": {"@type": "Review", "author": "A", "reviewRating": {"@type": "Rating", "ratingValue": 4},
+                             "itemReviewed": {"@type": "Product", "name": "X", "brand": "B"}},
+            "catalogue": {"@type": "EducationalOrganization", "name": "O", "hasOfferCatalog": {
+                "@type": "OfferCatalog", "itemListElement": [{"@type": "Offer", "itemOffered": {
+                    "@type": "Course", "name": "C", "provider": {"@type": "Organization", "name": "O"}}}]}},
+            "provider": {"@type": "Service", "name": "S", "provider": {"@type": "LocalBusiness", "name": "L", "telephone": "1"}},
+            "location": {"@type": "Organization", "name": "O", "event": {"@type": "Event", "name": "E", "location": {
+                "@type": "LocalBusiness", "name": "Lieu", "telephone": "1"}, "startDate": "2026-01-01"}},
+            "author": {"@type": "Article", "headline": "H", "author": {"@type": "Event", "name": "pas un événement", "startDate": "x"},
+                       "publisher": {"@type": "Product", "name": "P"}},
+        }
+        for nom, bloc in cas.items():
+            self.assertEqual(une(bloc), {"manquantes": [], "retires": []}, nom)
+
+    def test_objets_evalues_par_google_restent_controles(self):
+        # racine, @graph, mainEntity, item d'un ListItem, Review et AggregateRating imbriqués
+        self.assertEqual(une({"@type": "WebPage", "mainEntity": {"@type": "Product", "name": "P", "sku": "1"}})["manquantes"],
+                         ["Product : offers|review|aggregateRating"])
+        self.assertEqual(une({"@type": "ItemList", "itemListElement": [
+            {"@type": "ListItem", "position": 1, "item": {"@type": "Product", "name": "P"}}]})["manquantes"],
+            ["Product : offers|review|aggregateRating"])
+        r = une({"@type": "Product", "name": "P", "review": {"@type": "Review", "author": "A"},
+                 "aggregateRating": {"@type": "AggregateRating", "ratingValue": 4}})
+        self.assertEqual(r["manquantes"], ["AggregateRating : ratingCount|reviewCount", "Review : reviewRating"])
+
+    # --- relecture 1 : @id résolus (M1) ----------------------------------------------------------------------------------
+
+    def test_id_resolus_dans_le_graphe(self):
+        graphe = {"@graph": [{"@type": "Product", "@id": "#p", "name": "X"},
+                             {"@type": "Offer", "price": "10", "itemOffered": {"@id": "#p"}}]}
+        self.assertEqual(une(graphe)["manquantes"], [])
+        graphe = {"@graph": [{"@type": "Product", "@id": "#p", "name": "X"},
+                             {"@type": "Review", "author": "A", "reviewRating": {"@type": "Rating", "ratingValue": 5},
+                              "itemReviewed": {"@id": "#p"}}]}
+        self.assertEqual(une(graphe)["manquantes"], [])
+        # même @id décrit en deux nœuds : les propriétés se cumulent
+        graphe = {"@graph": [{"@type": "Event", "@id": "#e", "name": "A"},
+                             {"@id": "#e", "startDate": "2026-01-01", "location": {"@type": "Place", "name": "L", "address": "a"}}]}
+        self.assertEqual(une(graphe)["manquantes"], [])
+        # sans offre qui le désigne, le produit reste signalé
+        graphe = {"@graph": [{"@type": "Product", "@id": "#p", "name": "X"}, {"@type": "Offer", "price": "10", "itemOffered": {"@id": "#autre"}}]}
+        self.assertEqual(une(graphe)["manquantes"], ["Product : offers|review|aggregateRating"])
+
+    # --- relecture 1 : types préfixés et sous-types (M2) -----------------------------------------------------------------
+
+    def test_types_prefixes_et_sous_types(self):
+        for t in ("https://schema.org/Event", "http://schema.org/Event", "schema:Event", "MusicEvent", "EducationEvent", "BusinessEvent"):
+            self.assertEqual(une({"@type": t, "name": "E"})["manquantes"], [t.rsplit("/", 1)[-1].replace("schema:", "") + " : startDate, location"], t)
+        for t in ("MobileApplication", "WebApplication", "schema:SoftwareApplication"):
+            self.assertEqual(une({"@type": t, "name": "A"})["manquantes"], [t.replace("schema:", "") + " : offers, aggregateRating|review"], t)
+        self.assertEqual(une({"@type": "schema:ClaimReview"})["retires"][0][:11], "ClaimReview")
+        # CourseInstance est un sous-type d'Event en schema.org mais n'est pas un résultat « événement »
+        self.assertEqual(une({"@type": "CourseInstance", "courseMode": "Onsite"})["manquantes"], [])
+
+    # --- relecture 1 : sous-propriétés exigées par les pages Google (M3, M4) ---------------------------------------------
+
+    def test_event_exige_location_name_et_address(self):
+        base = {"@type": "Event", "name": "E", "startDate": "2026-11-05"}
+        place = {"@type": "Place", "name": "Centre", "address": "1 rue de Paris"}
+        self.assertEqual(une(dict(base, location=place))["manquantes"], [])
+        self.assertEqual(une(dict(base, location={"@type": "Place", "name": "Centre"}))["manquantes"], ["Event : location.address"])
+        self.assertEqual(une(dict(base, location={"@type": "Place", "address": "a"}))["manquantes"], ["Event : location.name"])
+        self.assertEqual(une(dict(base, location={"@type": "Place"}))["manquantes"], ["Event : location.name, location.address"])
+        # lieu en ligne, texte libre et renvoi non résolu : pas de jugement
+        self.assertEqual(une(dict(base, location={"@type": "VirtualLocation", "url": "https://ex.fr/live"}))["manquantes"], [])
+        self.assertEqual(une(dict(base, location="Paris"))["manquantes"], [])
+        self.assertEqual(une(dict(base, location={"@id": "https://ex.fr/#lieu"}))["manquantes"], [])
+        graphe = {"@graph": [dict(base, location={"@id": "#l"}), {"@type": "Place", "@id": "#l", "name": "L", "address": "a"}]}
+        self.assertEqual(une(graphe)["manquantes"], [])
+        graphe = {"@graph": [dict(base, location={"@id": "#l"}), {"@type": "Place", "@id": "#l", "name": "L"}]}
+        self.assertEqual(une(graphe)["manquantes"], ["Event : location.address"])
+
+    def test_application_exige_offers_price(self):
+        base = {"@type": "SoftwareApplication", "name": "A", "aggregateRating": {"@type": "AggregateRating", "ratingValue": 4, "ratingCount": 3}}
+        self.assertEqual(une(dict(base, offers={"@type": "Offer", "price": 0}))["manquantes"], [])
+        self.assertEqual(une(dict(base, offers={"@type": "Offer", "price": "1.00", "priceCurrency": "EUR"}))["manquantes"], [])
+        self.assertEqual(une(dict(base, offers={"@type": "Offer"}))["manquantes"], ["SoftwareApplication : offers.price"])
+        self.assertEqual(une(dict(base, offers=[{"@type": "Offer"}, {"@type": "Offer", "price": 2}]))["manquantes"], [])
+
+    # --- relecture 1 : prix démesurés ou non finis (M6) et espaces insécables (M7) ----------------------------------------
+
+    def test_prix_demesures_ne_font_pas_perdre_les_autres_constats(self):
+        bloc_event = {"@type": "Event", "name": "E"}
+        for prix in (10 ** 400, float("inf"), float("nan"), "9" * 500, 1e300, "1e400"):
+            r = res([bloc_event, self.offre(prix)], TEXTE)
+            self.assertEqual(r["manquantes"], ["Event : startDate, location"], repr(prix)[:30])
+            self.assertNotIn("incoherentes", r, repr(prix)[:30])
+
+    def test_prix_avec_espaces_insecables(self):
+        for texte in ("1&nbsp;490&nbsp;€", "1&#8239;490 €", "1\u00a0490\u00a0€", "1\u202f490 €", "1&thinsp;490 €"):
+            r = une(self.offre("1490"), TEXTE + "<p>" + texte + "</p>")
+            self.assertNotIn("incoherentes", r, texte)
+        self.assertEqual(une(self.offre("1490"), TEXTE + "<p>1&nbsp;990&nbsp;€</p>")["incoherentes"], ["Offer : prix 1490 absent du texte visible"])
 
     def test_json_invalide_ou_exotique_sans_erreur(self):
         brut = ('<script type="application/ld+json">{invalide</script><script type="application/ld+json"></script>'
