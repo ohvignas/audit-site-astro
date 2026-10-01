@@ -1,0 +1,12 @@
+---
+export const prerender = true;
+import Base from '../../layouts/Base.astro';
+import TexteLong from '../../components/TexteLong.astro';
+const etapes = ['Cadrage', 'Maquette', 'Automatisation', 'Tests', 'Mise en ligne', 'Suivi', 'Formation', 'Support', 'Bilan', 'Évolution', 'Documentation', 'Communauté'];
+---
+<Base title="Parcours illustré : icônes accessibles" description="Douze étapes illustrées par des icônes masquées aux lecteurs d'écran et une jauge de progression correctement nommée.">
+  <h1>Parcours illustré en douze étapes</h1>
+  <ul>{etapes.map((e) => <li><span class="icone"><svg viewBox="0 0 24 24" fill="none" width="24" height="24" stroke="currentColor" aria-hidden="true" focusable="false"><path d="M5 12h14" /></svg></span> {e}</li>)}</ul>
+  <svg role="img" aria-labelledby="jauge-titre" viewBox="0 0 8 8" width="24" height="24"><title id="jauge-titre">Progression : 3 étapes sur 12</title><circle cx="4" cy="4" r="3" /></svg>
+  <TexteLong sujet="du parcours illustré" complement="sur les icônes accessibles" />
+</Base>
