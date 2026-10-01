@@ -109,6 +109,18 @@ class TestCsp(unittest.TestCase):
                 ("name seulement", '<head><meta name="Content-Security-Policy" content="script-src *"></head>')):
             self.assertEqual(meta(page), [], nom)
 
+    def test_head_borne_et_pas_quadratique(self):
+        import time
+        t = time.time()
+        self.assertEqual(es.politiques("", "<html><head>" + "<meta " * 20000)[0], [])
+        self.assertEqual(es.politiques("", "<head><title>t</title>" + "<meta " * 20000 + "</head>")[0], [])
+        self.assertLess(time.time() - t, 1.0)
+        m = '<meta http-equiv="Content-Security-Policy" content="script-src \'self\'">'
+        self.assertEqual(es.politiques("", "<head>" + m + "</head><body>" + "<p>" * 300000)[0], [("meta", "script-src 'self'")])
+        # au-delà de 200 000 caractères : hors du head lu
+        self.assertEqual(es.politiques("", "<head>" + " " * 200000 + m)[0], [])
+        self.assertEqual(es.politiques("", "<HEAD>" + m + "</HEAD >")[0], [("meta", "script-src 'self'")])
+
     def test_meta_commentaire_ne_donne_pas_de_meta_seulement(self):
         self.assertEqual(es.politiques("", "<head><!-- <meta http-equiv=\"Content-Security-Policy\" content=\"script-src *\"> --></head>")[0], [])
 
@@ -145,8 +157,8 @@ class TestCookies(unittest.TestCase):
         self.assertEqual(lignes, [
             "| Cookie session_cobaye | Path=/ | ❌ sans Secure ; ❌ sans SameSite ; ❌ sans HttpOnly (cookie de session) |",
             "| Cookie __Host-sid | Path=/; Secure; HttpOnly; SameSite=Lax | ✅ |",
-            "| Cookie pref | Domain=ex.fr; Secure; SameSite=None | ℹ️ sans HttpOnly (normal s'il est lu par JavaScript) |",
-            "| Cookie __Host-mal | Path=/admin; Secure; SameSite=Lax; HttpOnly | ⚠️ préfixe __Host- non respecté (Path=/, Secure, sans Domain) |"])
+            "| Cookie pref | Domain=…; Secure; SameSite=None | ℹ️ sans HttpOnly (normal s'il est lu par JavaScript) |",
+            "| Cookie __Host-mal | Path=…; Secure; SameSite=Lax; HttpOnly | ⚠️ préfixe __Host- non respecté (Path=/, Secure, sans Domain) |"])
         self.assertNotIn("valeur-secrete", "\n".join(lignes))
 
     def test_site_http_secure_non_exige(self):
@@ -183,7 +195,7 @@ class TestCookies(unittest.TestCase):
             "b=1; Secure; SameSite=SECRETXYZ; Domain=SECRETXYZ/.fr; HttpOnly",   # SameSite et Domain invalides
             "c=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT, autre=SECRETXYZ; Path=/",  # deux cookies fusionnés
             "d=1; SECRETXYZ=SECRETXYZ; Priority=SECRETXYZ; X-Inconnu; Secure",    # attributs inconnus
-            "SECRETXYZ%20nom=1; Secure",                                          # nom qui ressemble à un jeton
+            "SECRETXYZ:nom=1; Secure",                                            # nom hors jeton RFC 6265 (« : »)
             "e=1; Max-Age=SECRETXYZ; Partitioned; Secure; SameSite=Lax; HttpOnly"))
         for https in (True, False):
             sortie = "\n".join(es.lignes_cookies(entetes, https))
@@ -196,8 +208,33 @@ class TestCookies(unittest.TestCase):
 
     def test_attributs_en_liste_blanche(self):
         self.assertEqual(es.lignes_cookies("Set-Cookie: k=v; path=/a/b; DOMAIN=ex.fr; samesite=strict; SECURE; httponly; Expires=Thu, 01 Jan 2099 00:00:00 GMT\r\n", True),
-                         ["| Cookie k | Path=/a/b; Domain=ex.fr; SameSite=Strict; Secure; HttpOnly; Expires | ✅ |"])
+                         ["| Cookie k | Path=…; Domain=…; SameSite=Strict; Secure; HttpOnly; Expires | ✅ |"])
+        self.assertEqual(es.lignes_cookies("Set-Cookie: k=v; Path=/; Domain=.Ex.fr; Secure; HttpOnly; SameSite=Lax\r\n", True, "ex.fr"),
+                         ["| Cookie k | Path=/; Domain=ex.fr; Secure; HttpOnly; SameSite=Lax | ✅ |"])
         self.assertIn("⚠️ sans SameSite", es.lignes_cookies("Set-Cookie: k=v; SameSite=Foo; Secure\r\n", True)[0])
+
+    def test_path_et_domain_masques(self):
+        entetes = "".join("Set-Cookie: " + c + "\r\n" for c in (
+            "a=1; Path=/SECRETPATH; Secure; SameSite=Lax; HttpOnly",
+            "b=1; Path=/reset/SECRETTOKEN123456; Domain=SECRETDOMAIN.example.com; Secure; SameSite=Lax; HttpOnly",
+            "c=1; Path=/; Domain=autre.example.com; Secure; SameSite=Lax; HttpOnly"))
+        for hote in ("", "www.exemple.fr"):
+            sortie = "\n".join(es.lignes_cookies(entetes, True, hote))
+            self.assertNotIn("SECRET", sortie)
+            self.assertNotIn("autre.example.com", sortie)
+        self.assertEqual(es.lignes_cookies(entetes, True, "www.exemple.fr"), [
+            "| Cookie a | Path=…; Secure; SameSite=Lax; HttpOnly | ✅ |",
+            "| Cookie b | Path=…; Domain=…; Secure; SameSite=Lax; HttpOnly | ✅ |",
+            "| Cookie c | Path=/; Domain=…; Secure; SameSite=Lax; HttpOnly | ✅ |"])
+
+    def test_noms_de_cookie_jeton_rfc_6265(self):
+        for nom in ("a%20b", "$id", "x!y", "it's", "tab#1", "n&m", "a*b", "p+q", "c^d", "e`f", "g~h", "_ga", "A-b.c_9"):
+            ligne = es.lignes_cookies("Set-Cookie: {0}=v; Path=/; Secure; SameSite=Lax; HttpOnly\r\n".format(nom), True)[0]
+            self.assertTrue(ligne.startswith("| Cookie {0} |".format(nom)) and ligne.endswith("| ✅ |"), ligne)
+        self.assertEqual(es.lignes_cookies("Set-Cookie: a|b=v; Secure; SameSite=Lax; HttpOnly\r\n", True), ["| Cookie a/b | Secure; SameSite=Lax; HttpOnly | ✅ |"])
+        for nom in ("a:b", "x[0]", "a b", "a(b)", "a/b"):
+            ligne = es.lignes_cookies("Set-Cookie: {0}=v; Path=/; Secure; SameSite=Lax; HttpOnly\r\n".format(nom), True)[0]
+            self.assertTrue(ligne.startswith("| Cookie sans nom |") and "⚠️" in ligne, ligne)
 
     def test_prefixes_insensibles_a_la_casse_sans_doublon(self):
         self.assertIn("préfixe __Host-", es.lignes_cookies("Set-Cookie: __host-x=1; Path=/x; Secure; HttpOnly; SameSite=Lax\r\n", True)[0])

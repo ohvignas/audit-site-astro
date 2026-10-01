@@ -2,7 +2,7 @@
 """
 entetes_securite.py — Analyse de la CSP (en-tête et <meta>) et des attributs des cookies, au niveau de MDN HTTP Observatory.
 
-Usage : python3 entetes_securite.py FICHIER_ENTETES PAGE_HTML SCHEMA(http|https)
+Usage : python3 entetes_securite.py FICHIER_ENTETES PAGE_HTML SCHEMA(http|https) [HOTE]
         python3 entetes_securite.py --meta FICHIER_ENTETES PAGE_HTML      (affiche « oui » ou « non » : CSP <meta> présente ?)
 Écrit des lignes du tableau « Contrôle | Valeur | Verdict » de http-checks.md §3. Aucune requête réseau : les en-têtes et la page
 déjà téléchargés par http_checks.sh suffisent. Seuls les NOMS des cookies sont écrits, jamais leurs valeurs, et seuls les attributs d'une liste blanche sont affichés.
@@ -31,9 +31,9 @@ GRAVITES = {"script_unsafe_inline": "moyenne", "unsafe_eval": "basse", "script_s
 ELEMENTS_HEAD = {"html", "head", "title", "base", "link", "meta", "style", "script", "noscript", "template"}
 CONTENEURS_INERTES = ("template", "noscript")  # leur contenu n'est pas du <head> actif (ni script/style, déjà opaques pour le parseur)
 ATTRIBUTS_COOKIE = {"secure": "Secure", "httponly": "HttpOnly", "partitioned": "Partitioned", "max-age": "Max-Age", "expires": "Expires"}
-NOM_COOKIE = re.compile(r"[\w.\-]{1,60}$")
-CHEMIN_COOKIE = re.compile(r"/[\w.\-/]{0,39}$")
-DOMAINE_COOKIE = re.compile(r"\.?[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*$")
+# Nom de cookie : jeton RFC 6265 (« : », « [ », espace, « / »… exclus)
+NOM_COOKIE = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]{1,60}$")
+TAILLE_HEAD = 200000  # seul le <head> compte : le parseur ne lit que les 200 000 premiers caractères, coupés à </head>
 # Cookies : session = identifiant de connexion ; mesure = posé pour être lu par JavaScript (HttpOnly impossible par construction)
 COOKIE_SESSION = re.compile(r"session|sessid|(?:^|[^a-z])sid(?:$|[^a-z])|[a-z]sid$|auth(?!or)|token|jwt", re.I)
 COOKIE_CSRF = re.compile(r"csrf|xsrf", re.I)
@@ -88,9 +88,13 @@ def politiques(entetes_txt, html):
         elif nom == "x-frame-options" and valeur.strip():
             xfo = True
     parseur = _MetaCsp()
+    head = (html or "")[:TAILLE_HEAD]
+    fin = re.search(r"</head\b", head, re.I)
+    if fin:
+        head = head[:fin.start()]
     try:
-        parseur.feed(html or "")
-        parseur.close()
+        # pas de close() : il rejoue chaque balise ouverte sans « > » (temps quadratique) ; une balise inachevée n'est pas une meta valide
+        parseur.feed(head)
     except Exception:  # HTML illisible : on garde ce qui a été lu avant l'erreur
         pass
     for contenu in parseur.contenus:
@@ -188,7 +192,7 @@ def _est_session(nom):
     return not COOKIE_CSRF.search(n) and not COOKIE_MESURE.search(n) and bool(COOKIE_SESSION.search(n))
 
 
-def _attributs_affichables(attributs):
+def _attributs_affichables(attributs, hote=""):
     """Liste blanche : aucun attribut inconnu ni valeur libre n'est recopié (le rapport est partagé)."""
     out = []
     for a in attributs:
@@ -199,13 +203,14 @@ def _attributs_affichables(attributs):
         elif cle == "samesite" and val.lower() in ("strict", "lax", "none"):
             out.append("SameSite=" + val.capitalize())
         elif cle == "path":
-            out.append("Path=" + (val if CHEMIN_COOKIE.match(val) else "…"))
+            out.append("Path=" + ("/" if val == "/" else "…"))  # seul « / » compte pour l'audit (préfixe __Host-)
         elif cle == "domain":
-            out.append("Domain=" + (val if DOMAINE_COOKIE.match(val) and len(val) <= 100 else "…"))
+            d = val.lstrip(".").lower()
+            out.append("Domain=" + (d if hote and d == hote.lower() else "…"))  # le domaine n'est écrit que s'il est celui de l'audit
     return out
 
 
-def lignes_cookies(entetes_txt, https):
+def lignes_cookies(entetes_txt, https, hote=""):
     out = []
     for ligne in entetes_txt.splitlines():
         nom, sep, valeur = ligne.partition(":")
@@ -243,7 +248,7 @@ def lignes_cookies(entetes_txt, https):
                 verdicts.append("ℹ️ sans HttpOnly (normal : cookie de mesure lu par JavaScript)")
             else:
                 verdicts.append("ℹ️ sans HttpOnly (normal s'il est lu par JavaScript)")
-        out.append("| Cookie {0} | {1} | {2} |".format(cookie or "sans nom", "; ".join(_attributs_affichables(attributs)) or "—", " ; ".join(verdicts) or "✅"))
+        out.append("| Cookie {0} | {1} | {2} |".format(cookie.replace("|", "/") or "sans nom", "; ".join(_attributs_affichables(attributs, hote)) or "—", " ; ".join(verdicts) or "✅"))
     return list(dict.fromkeys(out))[:30]
 
 
@@ -264,7 +269,8 @@ def main():
     except (OSError, IndexError):
         html = ""
     pols, xfo = politiques(entetes, html)
-    for l in lignes_csp(pols, xfo) + lignes_cookies(entetes, https=(sys.argv[3] if len(sys.argv) > 3 else "https") == "https"):
+    hote = sys.argv[4] if len(sys.argv) > 4 else ""
+    for l in lignes_csp(pols, xfo) + lignes_cookies(entetes, https=(sys.argv[3] if len(sys.argv) > 3 else "https") == "https", hote=hote):
         print(l)
 
 

@@ -116,6 +116,9 @@ class TestEntetesV21(unittest.TestCase):
         self.assertIn("| content-security-policy | — | ❌ absent |", md)
         self.assertNotIn("en <meta> seulement", md)
         self.assertIn("| Cookie sans nom | Path=/ |", md)
+        md = lancer({"/": (200, dict(HTML, **{"Set-Cookie": "sid=1; Path=/SECRETPATH; Domain=SECRETDOM.fr; HttpOnly; SameSite=Lax"}), page)}, {})
+        self.assertIn("| Cookie sid | Path=…; Domain=…; HttpOnly; SameSite=Lax | ✅ |", md)
+        self.assertNotIn("SECRET", md)
         self.assertNotIn("SECRETSANSNOM", md)
 
     def test_en_tete_et_meta_reste_valide(self):

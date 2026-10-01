@@ -112,7 +112,7 @@ for h in strict-transport-security x-content-type-options referrer-policy permis
 done
 # CSP (en-tête ET <meta>, dont security.csp d'Astro ≥ 6) et attributs des cookies (noms seulement, jamais les valeurs) :
 # analyse des seuls en-têtes et corps déjà téléchargés ci-dessus, aucune requête de plus
-python3 "$DIR/entetes_securite.py" "$TMP/h_html" "$TMP/body.html" "$(printf '%s' "$PAGE" | cut -d: -f1)"
+python3 "$DIR/entetes_securite.py" "$TMP/h_html" "$TMP/body.html" "$(printf '%s' "$PAGE" | cut -d: -f1)" "$(printf '%s' "$PAGE" | awk -F/ '{print $3}' | cut -d: -f1)"
 echo
 
 echo "## 4. Cache et compression des ressources statiques"
