@@ -11,6 +11,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ICI))
 import html_observateurs as ho  # noqa: E402
 import a11y_svg  # noqa: E402
+import signaux  # noqa: E402
 from site_local import HTML, SiteLocal  # noqa: E402
 
 
@@ -58,10 +59,10 @@ class TestSvg(unittest.TestCase):
 
     def test_un_constat_pour_un_composant_sur_tout_le_site(self):
         page = '<html lang="fr"><head><title>Page {0} de test assez longue</title></head><body><main>{1}<a href="/b">b</a></main></body></html>'
-        issues, base = crawler({"/": (200, HTML, page.format("A", ICONE * 12)), "/b": (200, HTML, page.format("B", ICONE * 12))})
+        issues, base = crawler({"/": (200, HTML, page.format("A", ICONE * 7)), "/b": (200, HTML, page.format("B", ICONE * 7))})
         it = issues["svg_non_masque"]
-        self.assertEqual((it["count"], it["severity"], it["domaine"], len(it["examples"])), (24, "moyenne", "Accessibilité", 1))
-        self.assertEqual((it["examples"][0]["occurrences"], it["examples"][0]["pages"]), (24, 2))
+        self.assertEqual((it["count"], it["severity"], it["domaine"], len(it["examples"])), (14, "moyenne", "Accessibilité", 1))
+        self.assertEqual((it["examples"][0]["occurrences"], it["examples"][0]["pages"]), (14, 2))
         self.assertNotIn("svg_img_sans_nom", issues)
         self.assertNotIn("svg_redondant_controle", issues)
 
@@ -73,18 +74,18 @@ class TestSvg(unittest.TestCase):
         self.assertEqual((issues["svg_redondant_controle"]["severity"], issues["svg_redondant_controle"]["count"]), ("basse", 2))
         self.assertNotIn("svg_non_masque", issues)
 
-    def test_cas_wave_etoiles_et_pictogrammes_donnent_peu_de_constats(self):
-        # 74 flèches, 30 étoiles de notes (deux jaunes), 24 icônes colorées : une poignée de signatures, pas 128 constats
-        html = ('<span class="fleche"><svg viewBox="0 0 24 24" fill="none"><path d="M1 1"/></svg></span>' * 74
-                + '<div class="etoile"><svg viewBox="0 0 20 20" fill="#FBBC05"><path d="M1 1"/></svg></div>' * 20
-                + '<div class="etoile"><svg viewBox="0 0 20 20" fill="#FFC037"><path d="M1 1"/></svg></div>' * 10
-                + '<i class="ico"><svg viewBox="0 0 32 32" fill="#e91e63"></svg></i>' * 24)
+    def test_icones_repetees_donnent_peu_de_constats(self):
+        # 41 flèches, 26 étoiles de notes (deux couleurs), 13 icônes colorées : une poignée de signatures, pas un constat par icône
+        html = ('<span class="fleche"><svg viewBox="0 0 24 24" fill="none"><path d="M1 1"/></svg></span>' * 41
+                + '<div class="etoile"><svg viewBox="0 0 20 20" fill="#2A9D8F"><path d="M1 1"/></svg></div>' * 17
+                + '<div class="etoile"><svg viewBox="0 0 20 20" fill="#8338EC"><path d="M1 1"/></svg></div>' * 9
+                + '<i class="ico"><svg viewBox="0 0 32 32" fill="#9C27B0"></svg></i>' * 13)
         r = res(html)["non_masques"]
         self.assertEqual([(e["signature"], e["n"]) for e in r], [  # triés par n décroissant
-            ("viewBox=0 0 24 24 fill=none stroke=—", 74),
-            ("viewBox=0 0 32 32 fill=#e91e63 stroke=—", 24),
-            ("viewBox=0 0 20 20 fill=#FBBC05 stroke=—", 20),
-            ("viewBox=0 0 20 20 fill=#FFC037 stroke=—", 10)])
+            ("viewBox=0 0 24 24 fill=none stroke=—", 41),
+            ("viewBox=0 0 20 20 fill=#2A9D8F stroke=—", 17),
+            ("viewBox=0 0 32 32 fill=#9C27B0 stroke=—", 13),
+            ("viewBox=0 0 20 20 fill=#8338EC stroke=—", 9)])
 
 
 class TestFauxPositifs(unittest.TestCase):
@@ -186,11 +187,11 @@ class TestSignatureParComposant(unittest.TestCase):
         self.assertEqual(signatures(res(h))["non_masques"], [("viewBox=0 0 24 24 fill=none stroke=currentColor", 4)])
 
     def test_la_taille_et_le_trace_ne_changent_pas_la_signature(self):
-        h = ('<svg viewBox="0 0 24 24" width="15" height="15" fill="#FBBC05"><path d="M12 17.3L18.2"/></svg>'
-             '<svg viewBox="0 0 24 24" width="20" height="20" fill="#FBBC05"><path d="M12 17.3L18.2"/></svg>'
-             '<svg viewBox="0 0 24 24" width="18" height="18" fill="#FBBC05"><path d="M5 5h14"/></svg>')
+        h = ('<svg viewBox="0 0 24 24" width="15" height="15" fill="#2A9D8F"><path d="M12 17.3L18.2"/></svg>'
+             '<svg viewBox="0 0 24 24" width="20" height="20" fill="#2A9D8F"><path d="M12 17.3L18.2"/></svg>'
+             '<svg viewBox="0 0 24 24" width="18" height="18" fill="#2A9D8F"><path d="M5 5h14"/></svg>')
         r = res(h)["non_masques"]
-        self.assertEqual([(e["signature"], e["n"]) for e in r], [("viewBox=0 0 24 24 fill=#FBBC05 stroke=—", 3)])
+        self.assertEqual([(e["signature"], e["n"]) for e in r], [("viewBox=0 0 24 24 fill=#2A9D8F stroke=—", 3)])
         self.assertIn("+1 autre tracé", r[0]["exemple"])  # deux tracés différents dans le groupe
 
     def test_parent_seulement_si_le_svg_n_a_aucun_attribut_propre(self):
@@ -199,19 +200,27 @@ class TestSignatureParComposant(unittest.TestCase):
                                                                  ("viewBox=— fill=— stroke=— parent=div.a.b", 1)])
 
     def test_exemple_lisible_sans_parametres_de_requete(self):
-        h = ('<svg viewBox="0 0 24 24" width="15" height="15" fill="#FBBC05" class="shrink-0 a?b=1" data-x="y">'
+        h = ('<svg viewBox="0 0 24 24" width="15" height="15" fill="#2A9D8F" class="shrink-0 a?b=1" data-x="y">'
              '<path d="M12 17.3L18.2 21l-1.6-7L22 9.2l-7.2-.6L12 2 9.2 8.6 2 9.2z"/><path d="M0 0"/></svg>')
         e = res(h)["non_masques"][0]["exemple"]
-        self.assertTrue(e.startswith('<svg viewBox="0 0 24 24" width="15" height="15" fill="#FBBC05"'), e)
-        self.assertIn('<path d="M12 17.3L18.2 21l-1.6-7', e)
-        self.assertNotIn("?", e)
-        self.assertNotIn("data-x", e)
-        self.assertRegex(e, r"tracé [0-9a-f]{8}")
-        self.assertLess(len(e), 200)
+        # l'utile d'abord (début du tracé, autres tracés), puis la balise ouvrante sans ce que la signature dit déjà
+        self.assertTrue(e.startswith('<path d="M12 17.3L18.2 21l-1.6-'), e)
+        self.assertTrue(e.endswith('<svg class="shrink-0 a" width="15" height="15">'), e)
+        self.assertNotIn("autre", e)  # un seul tracé distinct dans le groupe : pas de note
+        for absent in ("?", "data-x", "viewBox", "#2A9D8F", "crc"):
+            self.assertNotIn(absent, e)
+        self.assertNotRegex(e, r"[0-9a-f]{8}")  # pas d'empreinte
         self.assertEqual(e, res(h)["non_masques"][0]["exemple"])  # déterministe
 
+    def test_balise_ouvrante_plafonnee(self):
+        h = '<svg viewBox="0 0 1 1" class="{0}" width="15" height="15" role="presentationnel" stroke-width="1.7"></svg>'.format("c" * 200)
+        e = res(h)["non_masques"][0]["exemple"]
+        self.assertLessEqual(len(e), 80, e)
+        self.assertTrue(e.startswith('<svg class="') and e.endswith('>'), e)
+
     def test_exemple_sans_trace(self):
-        self.assertEqual(res('<svg viewBox="0 0 8 8"></svg>')["non_masques"][0]["exemple"], '<svg viewBox="0 0 8 8">')
+        self.assertEqual(res('<svg viewBox="0 0 8 8" width="8"></svg>')["non_masques"][0]["exemple"], '<svg width="8">')
+        self.assertEqual(res('<svg viewBox="0 0 8 8"></svg>')["non_masques"][0]["exemple"], '<svg>')
 
     def test_tri_par_n_decroissant_puis_signature(self):
         h = '<svg viewBox="0 0 1 1"></svg>' + '<svg viewBox="0 0 9 9"></svg>' * 3 + '<svg viewBox="0 0 5 5"></svg>' * 3
@@ -225,7 +234,7 @@ class TestSignatureParComposant(unittest.TestCase):
         ex = issues["svg_non_masque"]["examples"]
         self.assertEqual([(e["signature"][:16], e["occurrences"]) for e in ex], [("viewBox=0 0 9 9 ", 8), ("viewBox=0 0 1 1 ", 2)])
         self.assertIn("exemple", ex[0])
-        self.assertEqual(list(ex[0]).index("exemple") < list(ex[0]).index("exemples_pages"), True)  # lisible avant les URL (ex_str coupe à 220)
+        self.assertLess(list(ex[0]).index("exemple"), list(ex[0]).index("exemples_pages"))  # lisible avant les URL (ex_str coupe à 220)
 
 
 def etoile(fill, taille, d="M12 17.3L18.2 21l-1.6-7L22 9.2"):
@@ -240,20 +249,20 @@ def accueil_synthetique():
     """HTML inventé, de même structure qu'un accueil réel : un composant d'icônes à trait dont le tracé change et le parent aussi,
     des étoiles de notes de trois couleurs, un guillemet, des icônes dans des liens et boutons nommés, des icônes masquées
     (ancêtre aria-hidden) et des panneaux repliés (hidden + display:none) pleins d'icônes."""
-    glyphes = ("M5 12h14", "M12 7v5l3 2", "M8 11l2 2 5-5", "M4 6h16v12H4z", "M12 3l9 5-9 5-9-5z")
+    glyphes = ("M5 12h14", "M12 7v5l3 2", "M8 11l2 2 5-5", "M4 6h16v12H4z")
     parents = ('<div class="flex gap-3">', '<span class="bg-white border">', '<span class="inline-flex text-rose">',
-               '<span class="bg-rose-50 h-12">', '<p class="mt-2">', '<li class="py-1">')
-    fermetures = ("</div>", "</span>", "</span>", "</span>", "</p>", "</li>")
-    avantages = "".join(p + pictos(1, g) + f for g in glyphes for p, f in zip(parents, fermetures))  # 30 icônes exposées
+               '<p class="mt-2">', '<li class="py-1">')
+    fermetures = ("</div>", "</span>", "</span>", "</p>", "</li>")
+    avantages = "".join(p + pictos(1, g) + f for g in glyphes for p, f in zip(parents, fermetures))  # 20 icônes exposées
     return "".join([
         avantages,
-        '<nav aria-hidden="true">' + pictos(8, "M1 1h2") + '</nav>',
-        '<span aria-hidden="true"><span>' + pictos(3, "M2 2h2") + '</span></span>',
-        '<div data-panel hidden style="display:none">' + pictos(40, "M3 3h3") + etoile("#FBBC05", 15) * 10 + '</div>',
-        '<span class="inline-flex gap-[3px]">' + etoile("#FBBC05", 15) * 15 + '</span>',
-        '<span class="flex gap-0.5">' + etoile("#FFC037", 13) * 5 + '</span>',
-        '<span class="flex gap-0.5">' + etoile("#D81B60", 16) * 5 + '</span>',
-        '<figcaption class="flex gap-3">' + '<svg viewBox="0 0 24 24" width="22" height="22" fill="#FDE2F3"><path d="M7 7h4v4H7z"/></svg>' * 4 + '</figcaption>',
+        '<nav aria-hidden="true">' + pictos(6, "M1 1h2") + '</nav>',
+        '<span aria-hidden="true"><span>' + pictos(2, "M2 2h2") + '</span></span>',
+        '<div data-panel hidden style="display:none">' + pictos(33, "M3 3h3") + etoile("#2A9D8F", 15) * 7 + '</div>',
+        '<span class="inline-flex gap-[3px]">' + etoile("#2A9D8F", 15) * 11 + '</span>',
+        '<span class="flex gap-1">' + etoile("#8338EC", 13) * 6 + '</span>',
+        '<span class="flex gap-1">' + etoile("#3A86FF", 16) * 3 + '</span>',
+        '<figcaption class="flex gap-3">' + '<svg viewBox="0 0 24 24" width="22" height="22" fill="#CFE8FF"><path d="M7 7h4v4H7z"/></svg>' * 2 + '</figcaption>',
         ''.join('<a href="/v{0}" class="inline-flex">Regarder<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></a>'.format(i)
                 for i in range(3)),
         ''.join('<button type="button">Suivant' + pictos(1, "M9 18l6-6-6-6") + '</button>' for _ in range(2)),
@@ -268,33 +277,47 @@ class TestAccueilSynthetique(unittest.TestCase):
 
     def test_comptes_par_signature_et_tri(self):
         self.assertEqual(signatures(self.r)["non_masques"], [
-            ("viewBox=0 0 24 24 fill=none stroke=currentColor", 30),
-            ("viewBox=0 0 24 24 fill=#FBBC05 stroke=—", 15),
-            ("viewBox=0 0 24 24 fill=#D81B60 stroke=—", 5),
-            ("viewBox=0 0 24 24 fill=#FFC037 stroke=—", 5),
-            ("viewBox=0 0 24 24 fill=#FDE2F3 stroke=—", 4)])
+            ("viewBox=0 0 24 24 fill=none stroke=currentColor", 20),
+            ("viewBox=0 0 24 24 fill=#2A9D8F stroke=—", 11),
+            ("viewBox=0 0 24 24 fill=#8338EC stroke=—", 6),
+            ("viewBox=0 0 24 24 fill=#3A86FF stroke=—", 3),
+            ("viewBox=0 0 24 24 fill=#CFE8FF stroke=—", 2)])
         self.assertEqual(signatures(self.r)["dans_controle_nomme"], [
             ("viewBox=0 0 24 24 fill=currentColor stroke=—", 3),
             ("viewBox=0 0 24 24 fill=none stroke=currentColor", 2)])
         self.assertEqual(self.r["img_sans_nom"], [])
 
-    def test_peu_de_signatures_pour_pres_de_soixante_icones(self):
+    def test_peu_de_signatures_pour_une_cinquantaine_d_icones(self):
         n = sum(e["n"] for e in self.r["non_masques"] + self.r["dans_controle_nomme"])
         sigs = len(self.r["non_masques"]) + len(self.r["dans_controle_nomme"])
-        self.assertEqual((n, sigs), (64, 7))
+        self.assertEqual((n, sigs), (47, 7))
 
     def test_le_composant_d_icones_a_trait_est_un_seul_constat_avec_son_exemple(self):
         g = self.r["non_masques"][0]
         self.assertIn('class="shrink-0"', g["exemple"])
-        self.assertIn("+4 autres tracés", g["exemple"])  # cinq glyphes, un seul composant
+        self.assertIn("+3 autres tracés", g["exemple"])  # quatre glyphes, un seul composant
 
     def test_les_icones_masquees_et_les_panneaux_replies_ne_comptent_pas(self):
         tout = self.r["non_masques"] + self.r["dans_controle_nomme"]
-        self.assertEqual(sum(e["n"] for e in tout), 64)  # 30 + 15 + 5 + 5 + 4 + 5 (liens et boutons nommés) ; 8 + 3 + 50 ignorés
+        self.assertEqual(sum(e["n"] for e in tout), 47)  # 20 + 11 + 6 + 3 + 2 + 5 (liens et boutons nommés) ; 6 + 2 + 40 ignorés
+
+    def test_l_exemple_survit_a_la_coupe_de_ex_str(self):
+        """L'agent ne voit que ex_str(exemple)[:220] : le début du tracé et la note « autres tracés » doivent y figurer en entier."""
+        groupes = ho.collecter_groupes({"https://ex.fr/": {"obs": {"a11y_svg": self.r}}}, "a11y_svg", "non_masques")
+        ajoutes = []
+        a11y_svg.issues({"https://ex.fr/": {"obs": {"a11y_svg": self.r}}}, lambda cle, lib, sev, ex, n=1, domaine=None: ajoutes.append(ex), {})
+        self.assertEqual(len(ajoutes), 7)
+        self.assertEqual(len(groupes), 5)
+        for ex in ajoutes:
+            vu = signaux.ex_str(ex)
+            self.assertIn(ex["exemple"], vu)  # rien n'est coupé
+        premier = signaux.ex_str(ajoutes[0])
+        self.assertIn('<path d="M5 12h14"> (+3 autres tracés) <svg', premier)
+        self.assertLess(max(len(ex["exemple"]) for ex in ajoutes), 125)
 
 
 class TestEtoilesDeNote(unittest.TestCase):
-    ETOILES = etoile("#FBBC05", 15) * 5
+    ETOILES = etoile("#2A9D8F", 15) * 5
 
     def test_enveloppe_role_img_avec_aria_label_couvre_les_etoiles(self):
         self.assertTrue(vide('<span role="img" aria-label="Note : 5 sur 5">' + self.ETOILES + '</span>'))

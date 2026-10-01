@@ -14,8 +14,8 @@ le signalent une seule fois.
 Signature : viewBox, fill et stroke du SVG lui-même. Ni le parent (ses classes changent d'un usage à l'autre : Tailwind) ni la
 taille ni le tracé n'en font partie : un composant d'icônes (un tracé par pictogramme, une taille par usage) reste un seul constat.
 Le parent (balise et deux premières classes) n'intervient que si le SVG n'a aucun de ces trois attributs. L'exemple donne la balise
-ouvrante (viewBox, taille, couleurs, classe), le début du premier tracé et son empreinte (8 hexadécimaux), de quoi chercher le
-composant dans src/ ; il ne contient jamais de paramètre de requête.
+ouvrante (classe, taille…), le début du premier tracé et « (+N autres tracés) », de quoi chercher le composant dans src/ ; le tracé
+vient en premier parce que ex_str coupe l'exemple à 220 caractères ; il ne contient jamais de paramètre de requête.
 
 Ignorés : SVG masqué (lui-même ou un ancêtre : aria-hidden, hidden, display:none, classe hidden, <template>, <noscript>),
 role="presentation" / "none", conteneur de définitions (width ou height à 0, en attribut, en style ou en classe w-0 / h-0 ; ou
@@ -25,7 +25,6 @@ Nommé : aria-label non vide, <title> non vide, aria-labelledby dont un identifi
 Limite : seule l'existence de l'identifiant référencé est vérifiée, pas le texte de l'élément ; une référence cassée est un
 SVG sans nom ici (et un constat de a11y_structure)."""
 import re
-import zlib
 
 import html_observateurs as ho
 
@@ -36,8 +35,10 @@ CLASSES_TAILLE_NULLE = {"w-0", "h-0"}
 CONTROLES_ARIA = {"button", "link", "tab", "menuitem", "menuitemcheckbox", "menuitemradio", "checkbox", "radio", "switch", "option"}
 DEFINITIONS = {"defs", "symbol", "style", "lineargradient", "radialgradient", "clippath", "mask", "filter", "pattern", "marker"}
 DESSINS = {"path", "circle", "rect", "line", "polyline", "polygon", "ellipse", "text", "image", "use", "foreignobject"}
-ATTRIBUTS_EXEMPLE = (("viewbox", "viewBox"), ("width", "width"), ("height", "height"), ("fill", "fill"), ("stroke", "stroke"),
-                     ("stroke-width", "stroke-width"), ("class", "class"), ("role", "role"))
+# Balise ouvrante de l'exemple : ce que la signature ne dit pas déjà (viewBox, fill, stroke), du plus au moins discriminant
+ATTRIBUTS_EXEMPLE = (("class", "class"), ("role", "role"), ("width", "width"), ("height", "height"), ("stroke-width", "stroke-width"))
+LONGUEUR_OUVRANTE = 64
+LONGUEUR_TRACE = 24
 
 
 def _ajouter(d, cle):
@@ -60,16 +61,17 @@ def _nombre(v):
 
 
 def _ouvrante(a):
-    parts = []
+    """<svg …> plafonnée à LONGUEUR_OUVRANTE caractères (un « … » signale ce qui a été laissé de côté)."""
+    texte, coupe = "<svg", False
     for cle, nom in ATTRIBUTS_EXEMPLE:
         if a.get(cle, "").strip():
-            v = _nombre(a[cle]) if cle in ("width", "height", "stroke-width") else _net(a[cle], 40)
-            parts.append('{0}="{1}"'.format(nom, v))
-    return "<svg" + "".join(" " + p for p in parts) + ">"
-
-
-def _empreinte(d):
-    return "%08x" % (zlib.crc32(re.sub(r"\s+", " ", d).strip().encode("utf-8")) & 0xFFFFFFFF)
+            v = _nombre(a[cle]) if cle in ("width", "height", "stroke-width") else _net(a[cle], 30)
+            attr = ' {0}="{1}"'.format(nom, v)
+            if len(texte) + len(attr) + 1 > LONGUEUR_OUVRANTE:
+                coupe = True
+                continue
+            texte += attr
+    return texte + (" …" if coupe else "") + ">"
 
 
 class Observateur(ho.Observateur):
@@ -177,20 +179,24 @@ class Observateur(ho.Observateur):
                 famille = "dans_controle_nomme"  # contrôle nommé : même défaut RGAA 1.2.4, impact faible
             g = familles[famille].setdefault(s["signature"], {"n": 0, "exemple": s, "traces": set()})
             g["n"] += 1
-            g["traces"].add(_empreinte(s["d"]) if s["d"] else None)
+            if s["d"]:
+                g["traces"].add(re.sub(r"\s+", " ", s["d"]).strip())
         return {k: [{"signature": sig, "n": g["n"], "exemple": _exemple(g)}
                     for sig, g in sorted(d.items(), key=lambda x: (-x[1]["n"], x[0]))] for k, d in familles.items()}
 
 
 def _exemple(g):
-    s, traces = g["exemple"], g["traces"] - {None}
-    texte = s["ouvrante"]
+    """Début du premier tracé et « (+N autres tracés) » d'abord, balise ouvrante ensuite : ex_str coupe l'exemple à 220 caractères
+    (signature, occurrences et pages passent avant), et c'est le tracé qui permet de retrouver le composant dans src/."""
+    s = g["exemple"]
+    texte = ""
     if s["d"]:
-        texte += ' <path d="{0}"> tracé {1}'.format(_net(s["d"], 32), _empreinte(s["d"]))
-        if len(traces) > 1:
-            k = len(traces) - 1
+        texte = '<path d="{0}">'.format(_net(s["d"], LONGUEUR_TRACE))
+        k = len(g["traces"]) - 1
+        if k > 0:
             texte += " (+{0} autre{1} tracé{1})".format(k, "s" if k > 1 else "")
-    return texte
+        texte += " "
+    return texte + s["ouvrante"]
 
 
 def _exemples(groupes):
