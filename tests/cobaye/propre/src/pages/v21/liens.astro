@@ -1,0 +1,10 @@
+---
+export const prerender = true;
+import Base from '../../layouts/Base.astro';
+import TexteLong from '../../components/TexteLong.astro';
+---
+<Base title="Ressources externes vérifiées régulièrement" description="Des liens sortants vers des ressources partenaires disponibles, contrôlés à chaque audit pour éviter les liens morts.">
+  <h1>Ressources externes</h1>
+  <p><a href="http://images.cobaye.test/cobaye.png">Visuel du partenaire images</a></p>
+  <TexteLong sujet="des ressources externes" complement="sur les liens sortants" />
+</Base>

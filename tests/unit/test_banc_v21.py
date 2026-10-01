@@ -66,7 +66,6 @@ class TestPagesPropresV21(unittest.TestCase):
 
 
 class TestVeriteTerrainV21(unittest.TestCase):
-    @unittest.expectedFailure  # E01 (external_broken) : produit par liens_externes.py, tâche 22 — retirer ce décorateur en T22
     def test_identifiants_uniques_et_cles_produites(self):
         verite = json.loads((RACINE / "tests/cobaye/verite-terrain.json").read_text(encoding="utf-8"))
         ids = [d["id"] for d in verite["defauts"]]

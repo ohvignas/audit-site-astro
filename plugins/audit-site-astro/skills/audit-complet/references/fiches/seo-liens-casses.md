@@ -6,6 +6,8 @@ severite_type: haute
 effort: S
 declencheurs:
   - "crawl:http_4xx"
+  - "crawl:external_broken"
+  - "crawl:external_a_verifier"
   - "lighthouse:http-status-code|code HTTP d.échec"
 sources:
   - https://developers.google.com/search/docs/crawling-indexing/http-network-errors
@@ -56,6 +58,10 @@ export default defineConfig({
 
 6. Prévoir une vraie page 404 utile (fiche `seo-page-404-manquante`) pour les visiteurs qui arrivent par un vieux lien externe.
 7. Vérifier les images et fichiers liés : un `<img>` ou un PDF en 404 apparaît dans `broken_images`.
+
+## Liens vers d'autres sites
+
+Les clés `external_broken` (404, 410, nom de domaine inexistant) et `external_a_verifier` (401, 403, 429, 999 de LinkedIn, 5xx, délai dépassé) du même fichier concernent les liens sortants. Le crawler les vérifie avec un HEAD puis un GET d'un octet, au plus une requête par seconde et par hôte, en commençant par les liens présents sur le plus de pages ; le nombre de liens laissés de côté (plafond ou budget de temps) est dans `pages.json` (`meta.modules.liens_externes_non_verifies`). Un lien « à vérifier » n'est pas cassé : beaucoup de sites refusent les robots, ouvrez-le dans un navigateur avant de le corriger. Pour un lien réellement cassé, le remplacer par une page équivalente ou le retirer (`liens_depuis` indique la page à modifier).
 
 ## Critères d'acceptation
 
