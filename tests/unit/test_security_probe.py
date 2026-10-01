@@ -96,5 +96,18 @@ class TestSecurityTxt(unittest.TestCase):
         self.assertNotIn("✅ présent", self.ligne(md))
 
 
+class TestSecretsV21(unittest.TestCase):
+    CLE = "sk-" + "proj-" + "COBAYEa1B2c3D4e5F6g7H8j9K0"   # factice, concaténée
+
+    def test_cle_connue_signalee_classes_tailwind_ignorees(self):
+        page = '<html><body><script src="/_astro/app.js"></script></body></html>'
+        casse = sonder({"/": (200, HTML, page), "/_astro/app.js": (200, JS, "const k='" + self.CLE + "';")}, {})
+        propre = sonder({"/": (200, HTML, page), "/_astro/app.js": (200, JS, 'e.className="mask-image-b-from-color mask-image-b-to-color"')}, {})
+        self.assertIn("OpenAI : sk-proj-", casse)       # X08
+        self.assertNotIn(self.CLE, casse, "la clé complète ne doit jamais être écrite")
+        self.assertNotIn("Motifs de secrets trouvés", propre)
+        self.assertIn("aucun motif de clé secrète", propre)
+
+
 if __name__ == "__main__":
     unittest.main()

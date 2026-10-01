@@ -5,6 +5,7 @@
 # Usage : bash security_probe.sh https://exemple.fr [DOSSIER_SORTIE]
 # À n'utiliser que sur un site dont on est propriétaire ou pour lequel on a une autorisation écrite.
 set -u
+DIR="$(cd "$(dirname "$0")" && pwd)"
 curl() { if [ "${AUDIT_INSECURE_TLS:-}" = "1" ]; then command curl -k "$@"; else command curl "$@"; fi; }
 URL="${1:?usage: security_probe.sh https://site.tld [dossier_sortie]}"
 OUT="${2:-.}"
@@ -139,7 +140,8 @@ for j in $js; do
   case "$full" in "$BASE"*) curl -s -A "$UA" --max-time 15 "$full" >> "$TMP/bundle.js";; esac
 done
 cat "$TMP/home.html" >> "$TMP/bundle.js"
-hits=$(grep -aoE '(sk_live_[A-Za-z0-9]{10,}|sk-[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|ghp_[A-Za-z0-9]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN (RSA |EC )?PRIVATE KEY|CONVEX_DEPLOY_KEY|prod:[a-z0-9-]+\|[A-Za-z0-9=]{20,}|re_[A-Za-z0-9]{20,})' "$TMP/bundle.js" | sort -u | sed -E 's/(.{12}).*/\1…/' | head -20)
+# Formats connus, borne gauche, entropie, classes CSS exclues (secrets_js.py) ; valeurs tronquées à 12 caractères
+hits=$(python3 "$DIR/secrets_js.py" "$TMP/bundle.js" 2>/dev/null)
 if [ -n "$hits" ]; then
   echo "❌ Motifs de secrets trouvés (tronqués) — vérifier et RÉVOQUER la clé si elle est réelle :"
   echo '```'; echo "$hits"; echo '```'
