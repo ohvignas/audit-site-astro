@@ -5,7 +5,7 @@ entetes_securite.py — Analyse de la CSP (en-tête et <meta>) et des attributs 
 Usage : python3 entetes_securite.py FICHIER_ENTETES PAGE_HTML SCHEMA(http|https)
         python3 entetes_securite.py --meta FICHIER_ENTETES PAGE_HTML      (affiche « oui » ou « non » : CSP <meta> présente ?)
 Écrit des lignes du tableau « Contrôle | Valeur | Verdict » de http-checks.md §3. Aucune requête réseau : les en-têtes et la page
-déjà téléchargés par http_checks.sh suffisent. Seuls les NOMS des cookies sont écrits, jamais leurs valeurs.
+déjà téléchargés par http_checks.sh suffisent. Seuls les NOMS des cookies sont écrits, jamais leurs valeurs, et seuls les attributs d'une liste blanche sont affichés.
 
 Marqueur de gravité : une ligne ⚠️ de gravité moyenne se termine par « [moyenne] » dans sa cellule Verdict (T27 : signaux.py le lit).
 Gravités (le pipeline lit ❌ = haute, ⚠️ = basse/moyenne, ℹ️ = info, sans signal) :
@@ -17,9 +17,9 @@ Gravités (le pipeline lit ❌ = haute, ⚠️ = basse/moyenne, ℹ️ = info, s
   cookie de session (sid, session, auth, token) sans HttpOnly/Secure/SameSite ... haute (❌)
   autre cookie sans Secure/SameSite ................................. basse (⚠️) ; sans HttpOnly : info (ℹ️)
 """
-import html as _html
 import re
 import sys
+from html.parser import HTMLParser
 
 PROTECTIONS = ("'nonce-", "'sha256-", "'sha384-", "'sha512-")
 LARGES = ("*", "http:", "https:", "data:")
@@ -27,13 +27,53 @@ LARGES = ("*", "http:", "https:", "data:")
 DIRECTIVES_META_IGNOREES = ("frame-ancestors", "report-uri", "report-to", "sandbox")
 GRAVITES = {"script_unsafe_inline": "moyenne", "unsafe_eval": "basse", "script_source_large": "basse",
             "style_unsafe_inline": "basse", "frame_ancestors_meta": "moyenne"}
-META_CSP = re.compile(r"<meta\b[^>]*http-equiv\s*=\s*[\"']?content-security-policy[\"']?[^>]*>", re.I)
-CONTENU = re.compile(r"""\bcontent\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.I)
+# Éléments d'un <head> ; un autre élément ouvert avant </head> (div, p, section…) referme le <head> pour le navigateur
+ELEMENTS_HEAD = {"html", "head", "title", "base", "link", "meta", "style", "script", "noscript", "template"}
+CONTENEURS_INERTES = ("template", "noscript")  # leur contenu n'est pas du <head> actif (ni script/style, déjà opaques pour le parseur)
+ATTRIBUTS_COOKIE = {"secure": "Secure", "httponly": "HttpOnly", "partitioned": "Partitioned", "max-age": "Max-Age", "expires": "Expires"}
+NOM_COOKIE = re.compile(r"[\w.\-]{1,60}$")
+CHEMIN_COOKIE = re.compile(r"/[\w.\-/]{0,39}$")
+DOMAINE_COOKIE = re.compile(r"\.?[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*$")
 # Cookies : session = identifiant de connexion ; mesure = posé pour être lu par JavaScript (HttpOnly impossible par construction)
 COOKIE_SESSION = re.compile(r"session|sessid|(?:^|[^a-z])sid(?:$|[^a-z])|[a-z]sid$|auth(?!or)|token|jwt", re.I)
 COOKIE_CSRF = re.compile(r"csrf|xsrf", re.I)
 COOKIE_MESURE = re.compile(r"^(?:_ga|_gid|_gat|_gcl_|_gac_|_fbp|_fbc|_hj|_pk_|__utm|_clck|_clsk|ajs_|amplitude|mp_|_uet|_scid|_ttp|_tt_|"
                            r"_pin_|_dc_gtm|__hs|hubspotutk|_vwo|_pendo|_cs_|_lr_)", re.I)
+
+
+class _MetaCsp(HTMLParser):
+    """Méta CSP active : <meta http-equiv="Content-Security-Policy"> (exact, sans casse) enfant du <head>. Jamais comptée : commentaire,
+    <script>, <style> (contenu opaque pour le parseur), <template>, <noscript>, <body> ou autre élément de corps, Report-Only."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.contenus, self.dans_head, self.inertes = [], True, 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in CONTENEURS_INERTES:
+            self.inertes += 1
+        elif tag not in ELEMENTS_HEAD:
+            self.dans_head = False
+        if tag == "meta" and self.dans_head and not self.inertes:
+            a = {k.lower(): (v or "") for k, v in attrs}
+            if a.get("http-equiv", "").strip().lower() == "content-security-policy" and "content" in a:
+                self.contenus.append(a["content"].strip())
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+        if tag in CONTENEURS_INERTES:
+            self.inertes -= 1
+
+    def handle_endtag(self, tag):
+        if tag in CONTENEURS_INERTES and self.inertes:
+            self.inertes -= 1
+        elif tag == "head":
+            self.dans_head = False
+
+
+def _liste(valeur):
+    """Une valeur de CSP peut contenir plusieurs politiques séparées par « , » (CSP 3) : le navigateur les applique toutes."""
+    return [p.strip() for p in valeur.split(",") if p.strip()]
 
 
 def politiques(entetes_txt, html):
@@ -44,13 +84,17 @@ def politiques(entetes_txt, html):
             continue
         nom = nom.strip().lower()
         if nom == "content-security-policy":
-            pols.append(("en-tête", valeur.strip()))
+            pols.extend(("en-tête", p) for p in _liste(valeur))
         elif nom == "x-frame-options" and valeur.strip():
             xfo = True
-    for m in META_CSP.finditer(html or ""):
-        c = CONTENU.search(m.group(0))
-        if c:
-            pols.append(("meta", _html.unescape(c.group(1) if c.group(1) is not None else c.group(2)).strip()))
+    parseur = _MetaCsp()
+    try:
+        parseur.feed(html or "")
+        parseur.close()
+    except Exception:  # HTML illisible : on garde ce qui a été lu avant l'erreur
+        pass
+    for contenu in parseur.contenus:
+        pols.extend(("meta", p) for p in _liste(contenu))
     return pols, xfo
 
 
@@ -144,6 +188,23 @@ def _est_session(nom):
     return not COOKIE_CSRF.search(n) and not COOKIE_MESURE.search(n) and bool(COOKIE_SESSION.search(n))
 
 
+def _attributs_affichables(attributs):
+    """Liste blanche : aucun attribut inconnu ni valeur libre n'est recopié (le rapport est partagé)."""
+    out = []
+    for a in attributs:
+        cle, _, val = a.partition("=")
+        cle, val = cle.strip().lower(), val.strip()
+        if cle in ATTRIBUTS_COOKIE:
+            out.append(ATTRIBUTS_COOKIE[cle])
+        elif cle == "samesite" and val.lower() in ("strict", "lax", "none"):
+            out.append("SameSite=" + val.capitalize())
+        elif cle == "path":
+            out.append("Path=" + (val if CHEMIN_COOKIE.match(val) else "…"))
+        elif cle == "domain":
+            out.append("Domain=" + (val if DOMAINE_COOKIE.match(val) and len(val) <= 100 else "…"))
+    return out
+
+
 def lignes_cookies(entetes_txt, https):
     out = []
     for ligne in entetes_txt.splitlines():
@@ -151,25 +212,29 @@ def lignes_cookies(entetes_txt, https):
         if not sep or nom.strip().lower() != "set-cookie":
             continue
         morceaux = [m.strip() for m in valeur.split(";")]
-        cookie = morceaux[0].split("=", 1)[0].strip()  # le NOM seulement : la valeur n'est jamais conservée
-        attributs = [m.replace("|", "/") for m in morceaux[1:] if m]
+        premier, egal, _ = morceaux[0].partition("=")  # la valeur (après « = ») n'est jamais conservée
+        cookie = premier.strip() if egal and NOM_COOKIE.match(premier.strip()) else ""  # sans « = » : c'est une valeur, pas un nom
+        attributs = [m for m in morceaux[1:] if m]
         cles = {a.split("=", 1)[0].strip().lower(): (a.split("=", 1)[1].strip() if "=" in a else "") for a in attributs}
         age = cles.get("max-age", "")
         if (age.lstrip("-").isdigit() and int(age) <= 0) or "1970" in cles.get("expires", ""):
             continue  # cookie supprimé par le serveur
-        session = _est_session(cookie)
+        session = bool(cookie) and _est_session(cookie)
         mesure = bool(COOKIE_MESURE.search(cookie))
         marque = "❌" if session else "⚠️"
         verdicts = []
+        if not cookie:
+            verdicts.append("⚠️ cookie sans nom (en-tête Set-Cookie mal formé)")
         if https and "secure" not in cles:
             verdicts.append(marque + " sans Secure")
-        if "samesite" not in cles:
+        if cles.get("samesite", "").lower() not in ("strict", "lax", "none"):
             verdicts.append(marque + " sans SameSite")
         elif cles["samesite"].lower() == "none" and "secure" not in cles and not https:
             verdicts.append(marque + " SameSite=None sans Secure (refusé par les navigateurs)")
-        if cookie.startswith("__Host-") and ("secure" not in cles or cles.get("path") != "/" or "domain" in cles):
+        bas = cookie.lower()
+        if bas.startswith("__host-") and ("secure" not in cles or cles.get("path") != "/" or "domain" in cles):
             verdicts.append("⚠️ préfixe __Host- non respecté (Path=/, Secure, sans Domain)")
-        elif cookie.startswith("__Secure-") and "secure" not in cles:
+        elif bas.startswith("__secure-") and "secure" not in cles and not https:
             verdicts.append("⚠️ préfixe __Secure- sans Secure")
         if "httponly" not in cles:
             if session:
@@ -178,7 +243,7 @@ def lignes_cookies(entetes_txt, https):
                 verdicts.append("ℹ️ sans HttpOnly (normal : cookie de mesure lu par JavaScript)")
             else:
                 verdicts.append("ℹ️ sans HttpOnly (normal s'il est lu par JavaScript)")
-        out.append("| Cookie {0} | {1} | {2} |".format(cookie.replace("|", "/")[:60], "; ".join(attributs)[:120] or "—", " ; ".join(verdicts) or "✅"))
+        out.append("| Cookie {0} | {1} | {2} |".format(cookie or "sans nom", "; ".join(_attributs_affichables(attributs)) or "—", " ; ".join(verdicts) or "✅"))
     return list(dict.fromkeys(out))[:30]
 
 

@@ -5,7 +5,7 @@ domaine: Sécurité
 severite_type: moyenne
 effort: S
 declencheurs:
-  - "http:\\| Cookie \\S+ \\|.*(⚠️|❌)"
+  - "http:\\| Cookie [^|]+ \\|.*(⚠️|❌)"
 sources:
   - https://developer.mozilla.org/en-US/docs/Web/HTTP/Cookies
   - https://developer.mozilla.org/en-US/observatory/docs/tests_and_scoring

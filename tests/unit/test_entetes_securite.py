@@ -68,6 +68,50 @@ class TestCsp(unittest.TestCase):
                                   '<head><meta http-equiv="Content-Security-Policy" content="script-src \'self\'"></head>')
         self.assertEqual((pols, xfo), ([("en-tête", "frame-ancestors 'none'"), ("meta", "script-src 'self'")], True))
 
+    def test_virgule_separe_les_politiques_d_un_meme_en_tete(self):
+        def pols(v):
+            return es.politiques("Content-Security-Policy: " + v + "\r\n", "")[0]
+        self.assertEqual(pols("script-src 'self', script-src 'unsafe-inline'"),
+                         [("en-tête", "script-src 'self'"), ("en-tête", "script-src 'unsafe-inline'")])
+        # P1 bloque l'inline : le 'unsafe-inline' de P2 est sans effet (les politiques se cumulent)
+        self.assertEqual(self.codes(pols("script-src 'self', script-src 'unsafe-inline'")), [])
+        self.assertEqual(self.codes(pols("default-src 'self' 'unsafe-inline', script-src 'self' 'nonce-x'")), [])
+        self.assertEqual(self.codes(pols("script-src 'unsafe-inline' 'self', script-src 'self' 'sha256-x'")), [])
+        self.assertEqual(self.codes(pols("script-src 'unsafe-inline' 'self', img-src 'self'")), ["script_unsafe_inline"])
+        # cumul avec la meta
+        self.assertEqual(self.codes(pols("script-src 'unsafe-inline', img-src 'self'")
+                                    + [("meta", "script-src 'self' 'sha256-x'")]), [])
+        self.assertEqual(es.politiques("", '<head><meta http-equiv="Content-Security-Policy" content="img-src a, script-src b"></head>')[0],
+                         [("meta", "img-src a"), ("meta", "script-src b")])
+
+    def test_meta_lue_dans_le_head_seulement(self):
+        def meta(page):
+            return es.politiques("", page)[0]
+        m = '<meta http-equiv="Content-Security-Policy" content="script-src \'unsafe-inline\'">'
+        voulu = [("meta", "script-src 'unsafe-inline'")]
+        self.assertEqual(meta("<html><head>" + m + "</head><body></body></html>"), voulu)
+        self.assertEqual(meta("<html><head><META HTTP-EQUIV='content-SECURITY-policy' CONTENT=\"script-src 'unsafe-inline'\"></head></html>"), voulu)
+        self.assertEqual(meta("<head><title>t</title>" + m), voulu)  # head non refermé
+        # jamais une politique : commentaire, script, template, noscript, body, après </head>, Report-Only, nom voisin
+        for nom, page in (
+                ("commentaire", "<head><!-- " + m + " --></head>"),
+                ("script", "<head><script>var s = '" + m.replace("'", "\\'") + "';</script></head>"),
+                ("script avec chevrons", "<head><script>document.write('" + m.replace("'", "\\'") + "')</script></head>"),
+                ("style", "<head><style>/* " + m + " */</style></head>"),
+                ("template", "<head><template>" + m + "</template></head>"),
+                ("noscript", "<head><noscript>" + m + "</noscript></head>"),
+                ("body", "<head></head><body>" + m + "</body>"),
+                ("après </head>", "<html><head></head>" + m + "<body></body></html>"),
+                ("body sans head", "<html><body><div>" + m + "</div></body></html>"),
+                ("report-only", '<head><meta http-equiv="Content-Security-Policy-Report-Only" content="script-src *"></head>'),
+                ("nom voisin", '<head><meta http-equiv="Content-Security-Policy-X" content="script-src *"></head>'),
+                ("autre http-equiv", '<head><meta http-equiv="refresh" content="Content-Security-Policy"></head>'),
+                ("name seulement", '<head><meta name="Content-Security-Policy" content="script-src *"></head>')):
+            self.assertEqual(meta(page), [], nom)
+
+    def test_meta_commentaire_ne_donne_pas_de_meta_seulement(self):
+        self.assertEqual(es.politiques("", "<head><!-- <meta http-equiv=\"Content-Security-Policy\" content=\"script-src *\"> --></head>")[0], [])
+
     def test_extraction_meta_variantes(self):
         pols, _ = es.politiques("", '<meta content="script-src &#39;self&#39; &apos;unsafe-inline&apos;" HTTP-EQUIV=\'Content-Security-Policy\'>'
                                     '<meta name="description" content="Content-Security-Policy">')
@@ -130,10 +174,40 @@ class TestCookies(unittest.TestCase):
             self.assertNotIn("⚠️", ligne)
             self.assertNotIn("❌", ligne)
 
+    def test_aucune_valeur_ecrite_nulle_part(self):
+        secret = "SECRETXYZ"
+        entetes = "".join("Set-Cookie: " + c + "\r\n" for c in (
+            "SECRETXYZ; Path=/",                                                  # pas de « = » : le jeton est une valeur sans nom
+            "=SECRETXYZ; Path=/",                                                 # nom vide
+            "a=SECRETXYZ; Path=/reset/SECRETXYZ?t=SECRETXYZ; Secure",             # chemin avec jeton
+            "b=1; Secure; SameSite=SECRETXYZ; Domain=SECRETXYZ/.fr; HttpOnly",   # SameSite et Domain invalides
+            "c=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT, autre=SECRETXYZ; Path=/",  # deux cookies fusionnés
+            "d=1; SECRETXYZ=SECRETXYZ; Priority=SECRETXYZ; X-Inconnu; Secure",    # attributs inconnus
+            "SECRETXYZ%20nom=1; Secure",                                          # nom qui ressemble à un jeton
+            "e=1; Max-Age=SECRETXYZ; Partitioned; Secure; SameSite=Lax; HttpOnly"))
+        for https in (True, False):
+            sortie = "\n".join(es.lignes_cookies(entetes, https))
+            self.assertNotIn(secret, sortie)
+            self.assertNotIn("SECRET", sortie)
+        lignes = es.lignes_cookies(entetes, True)
+        self.assertTrue(lignes[0].startswith("| Cookie sans nom | Path=/ |"), lignes[0])
+        self.assertTrue(any("| Cookie e | Max-Age; Partitioned; Secure; SameSite=Lax; HttpOnly | ✅ |" == l for l in lignes), lignes)
+        self.assertTrue(any(l.startswith("| Cookie c | Expires; Path=/ |") for l in lignes), lignes)
+
+    def test_attributs_en_liste_blanche(self):
+        self.assertEqual(es.lignes_cookies("Set-Cookie: k=v; path=/a/b; DOMAIN=ex.fr; samesite=strict; SECURE; httponly; Expires=Thu, 01 Jan 2099 00:00:00 GMT\r\n", True),
+                         ["| Cookie k | Path=/a/b; Domain=ex.fr; SameSite=Strict; Secure; HttpOnly; Expires | ✅ |"])
+        self.assertIn("⚠️ sans SameSite", es.lignes_cookies("Set-Cookie: k=v; SameSite=Foo; Secure\r\n", True)[0])
+
+    def test_prefixes_insensibles_a_la_casse_sans_doublon(self):
+        self.assertIn("préfixe __Host-", es.lignes_cookies("Set-Cookie: __host-x=1; Path=/x; Secure; HttpOnly; SameSite=Lax\r\n", True)[0])
+        ligne = es.lignes_cookies("Set-Cookie: __Secure-x=1; SameSite=None; HttpOnly\r\n", True)[0]
+        self.assertEqual(ligne.count("sans Secure"), 1, ligne)
+
     def test_cookie_supprime_ignore_et_pas_de_barre_verticale(self):
         self.assertEqual(es.lignes_cookies("Set-Cookie: sid=; Max-Age=0; Path=/\r\nSet-Cookie: x=1; Expires=Thu, 01 Jan 1970 00:00:00 GMT\r\n", True), [])
         self.assertEqual(es.lignes_cookies("Set-Cookie: c=1; Path=/a|b; Secure; SameSite=Lax; HttpOnly\r\n", True),
-                         ["| Cookie c | Path=/a/b; Secure; SameSite=Lax; HttpOnly | ✅ |"])
+                         ["| Cookie c | Path=…; Secure; SameSite=Lax; HttpOnly | ✅ |"])
 
     def test_chaque_ligne_signalee_a_une_fiche(self):
         f = fiches.charger_fiches(SCRIPTS.parent / "references/fiches")

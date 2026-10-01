@@ -109,6 +109,15 @@ class TestEntetesV21(unittest.TestCase):
         self.assertIn("| content-security-policy | — | ❌ absent |", md)
         self.assertNotIn("en <meta> seulement", md)
 
+    def test_meta_hors_head_ne_compte_pas_et_aucune_valeur_de_cookie(self):
+        page = ('<html><head><!-- <meta http-equiv="Content-Security-Policy" content="script-src \'self\'"> --><title>A</title></head>'
+                '<body><meta http-equiv="Content-Security-Policy" content="script-src \'self\'"></body></html>')
+        md = lancer({"/": (200, dict(HTML, **{"Set-Cookie": "SECRETSANSNOM; Path=/"}), page)}, {})
+        self.assertIn("| content-security-policy | — | ❌ absent |", md)
+        self.assertNotIn("en <meta> seulement", md)
+        self.assertIn("| Cookie sans nom | Path=/ |", md)
+        self.assertNotIn("SECRETSANSNOM", md)
+
     def test_en_tete_et_meta_reste_valide(self):
         page = ('<html><head><meta http-equiv="Content-Security-Policy" content="script-src \'self\' \'sha256-abc=\'">'
                 '<title>Accueil</title></head><body></body></html>')
