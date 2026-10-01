@@ -1,0 +1,15 @@
+---
+export const prerender = true;
+import Base from '../../layouts/Base.astro';
+import TexteLong from '../../components/TexteLong.astro';
+---
+<Base title="Barre d'outils accessible : liens et boutons nommés" description="Une barre d'outils en icônes dont chaque lien et chaque bouton porte un nom lisible par les lecteurs d'écran.">
+  <h1>Barre d'outils accessible</h1>
+  <a href="/catalogue" class="outil" aria-label="Voir le catalogue des formations"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><path d="M3 3h18" /></svg></a>
+  <button type="button" class="fermer" aria-label="Fermer la barre d'outils"><span aria-hidden="true">×</span></button>
+  <TexteLong sujet="de la barre d'outils" complement="sur les noms accessibles" />
+</Base>
+<style>
+  .outil { display: inline-block; padding: 10px; }
+  .fermer { min-width: 44px; min-height: 44px; }
+</style>

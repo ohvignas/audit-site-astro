@@ -5,6 +5,8 @@ domaine: Accessibilité
 severite_type: haute
 effort: S
 declencheurs:
+  - "crawl:lien_sans_nom"
+  - "crawl:bouton_sans_nom"
   - "lighthouse:button-name|link-name|input-button-name|aria-command-name|label-content-name-mismatch|identical-links-same-purpose"
   - "lighthouse:Les boutons n'ont pas de nom accessible|Les liens n'ont pas de nom visible|boutons d'entrée ne contiennent pas de texte visible|`button`, `link` et `menuitem` n'ont pas|libellés de texte visibles ne sont pas associés|liens identiques n'ont pas la même fonction"
 sources:
