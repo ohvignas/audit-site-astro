@@ -21,7 +21,7 @@ import html_observateurs as ho
 
 NOM = "a11y_noms"
 
-_VIDE = re.compile(r"[\s​-‍⁠﻿]*\Z")  # espaces, nbsp, caractères de largeur nulle
+_VIDE = re.compile(r"[\s\u200b-\u200d\u2060\ufeff]*\Z")  # espaces, nbsp, caractères de largeur nulle
 TYPES_BOUTON = ("button", "submit", "reset", "image")
 ETIQUETABLES = ("button", "input")  # éléments que <label> peut nommer parmi les contrôles examinés
 SANS_NOM_SVG = ("desc", "metadata")  # description, pas un nom
