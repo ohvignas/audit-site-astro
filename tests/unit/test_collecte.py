@@ -325,3 +325,22 @@ class TestScriptsStatiques(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEtapeSortieVide(unittest.TestCase):
+    """Rapport utilisateur v2.0.0 : disque plein → RAPPORT.html de 0 octet affiché ✅. Une sortie vide est un échec,
+    et la fin du journal de l'étape est affichée pour voir la vraie erreur."""
+
+    def test_sortie_vide_echoue_et_journal_affiche(self):
+        src = SCRIPT.read_text(encoding="utf-8")
+        debut = src.index("step() {")
+        fin = src.index("\n}\n", debut) + 3
+        with tempfile.TemporaryDirectory() as d:
+            prog = (f'set -u\nD="{d}"; AUDIT="{d}"; LOG="{d}/collecte.md"; FAILS=0\nvalid_aucun() {{ return 0; }}\n'
+                    + src[debut:fin]
+                    + f'\nstep essai "{d}/sortie.html" valid_aucun bash -c "echo No space left on device >&2; : > {d}/sortie.html"\n'
+                    'echo "FAILS=$FAILS"\n')
+            r = subprocess.run(["bash", "-c", prog], capture_output=True, text=True, timeout=60)
+            self.assertIn("❌ sortie vide, 0 octet", r.stdout)
+            self.assertIn("FAILS=1", r.stdout)
+            self.assertIn("No space left on device", r.stdout)

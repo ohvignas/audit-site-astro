@@ -3,14 +3,14 @@
   "owner": { "name": "ILLITH" },
   "metadata": {
     "description": "Audit A→Z de sites Astro : performance, SEO technique, contenu, GEO (IA), code Astro/Convex, sécurité, accessibilité.",
-    "version": "2.0.0"
+    "version": "2.0.1"
   },
   "plugins": [
     {
       "name": "audit-site-astro",
       "source": "./plugins/audit-site-astro",
       "description": "8 skills + scripts de collecte pour auditer un site Astro de A à Z et produire un plan d'action priorisé.",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "category": "productivity",
       "keywords": ["astro", "seo", "geo", "lighthouse", "core-web-vitals", "convex", "audit", "security", "accessibility"]
     }

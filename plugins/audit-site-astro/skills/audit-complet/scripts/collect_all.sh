@@ -108,16 +108,28 @@ step() {  # $1 nom, $2 sortie principale ("@fonction" : nom de fonction qui l'af
   [ $code -ne 0 ] && st="⚠️ code $code (voir data/.log-${name}.txt)"
   if [ -n "$out" ] && [ ! -e "$out" ]; then
     st="❌ sortie absente (voir data/.log-${name}.txt)"
+  elif [ -n "$out" ] && [ -f "$out" ] && [ ! -s "$out" ]; then
+    st="❌ sortie vide, 0 octet (disque plein ? voir data/.log-${name}.txt)"
   elif ! "$check"; then
     st="❌ résultat vide ou inexploitable (voir data/.log-${name}.txt)"
   fi
   case "$st" in ❌*) FAILS=$((FAILS + 1));; esac
   echo "| ${name} | $st | $(( $(date +%s) - t0 )) s | ${out#$AUDIT/} |" >> "$LOG"
   echo "  $st"
+  case "$st" in
+    ✅*) ;;
+    *) [ -s "$D/.log-${name}.txt" ] && tail -n 5 "$D/.log-${name}.txt" | sed 's/^/    │ /' ;;
+  esac
 }
 
 prevol || { echo; cat "$LOG"; exit 2; }
 [ "${AUDIT_INSECURE_TLS:-}" = "1" ] && echo "| mode test | ⚠️ TLS non vérifié (AUDIT_INSECURE_TLS=1) | | |" >> "$LOG"
+# Espace disque : un disque plein donne des rapports de 0 octet sans autre erreur visible.
+LIBRE_KO=$(df -Pk "$AUDIT" 2>/dev/null | awk 'NR==2 {print $4}')
+if [ -n "${LIBRE_KO:-}" ] && [ "$LIBRE_KO" -lt 512000 ] 2>/dev/null; then
+  echo "⚠️  Espace disque faible : $((LIBRE_KO / 1024)) Mo libres (500 Mo conseillés) — les rapports risquent d'être vides."
+  echo "| disque | ⚠️ $((LIBRE_KO / 1024)) Mo libres (500 Mo conseillés) | | |" >> "$LOG"
+fi
 
 step crawl "$D/crawl/pages.json" valid_crawl python3 "$DIR/crawl_site.py" "$URL" --out "$D/crawl" \
      --max-pages "${MAX_PAGES:-500}" --delay 0.3 --check-images 200
