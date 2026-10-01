@@ -19,7 +19,7 @@ class TestCobayeStatique(unittest.TestCase):
 
     def test_defauts_de_code_detectes_sur_casse_et_absents_sur_propre(self):
         verite = json.loads((RACINE / "tests/cobaye/verite-terrain.json").read_text(encoding="utf-8"))
-        code = [d for d in verite["defauts"] if d["matcher"]["type"] == "code" and d["phase"] == "base"]
+        code = [d for d in verite["defauts"] if d["matcher"]["type"] == "code" and score._phase(d["phase"]) <= 2]  # phase ≤ 2 : défauts de code vérifiés en local, sans build
         with tempfile.TemporaryDirectory() as t1, tempfile.TemporaryDirectory() as t2:
             casse, propre = self._scan("casse", t1), self._scan("propre", t2)
             rates = [d["id"] for d in code if not score.detecte(d["matcher"], casse)]
