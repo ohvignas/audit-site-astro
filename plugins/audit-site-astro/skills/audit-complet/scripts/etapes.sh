@@ -68,7 +68,13 @@ interrompre_collecte() {  # piège INT/TERM : les tâches de fond ignorent SIGIN
   trap '' INT TERM   # un second Ctrl-C ne doit pas interrompre le nettoyage
   echo
   echo "⛔ collecte interrompue : étape en cours arrêtée (processus enfants compris)"
-  [ -n "${ETAPE_GARDE:-}" ] && tuer_arbre "$ETAPE_GARDE" 0
+  if [ -n "${ETAPE_GARDE:-}" ]; then
+    if [ -n "${ETAPE_PID:-}" ] && [ -f "$D/.delai-$ETAPE_PID" ]; then
+      { wait "$ETAPE_GARDE"; } 2>/dev/null   # délai déjà dépassé : le gardien a la liste de l'arbre, on le laisse finir son KILL (≤ 5 s)
+    else
+      tuer_arbre "$ETAPE_GARDE" 0
+    fi
+  fi
   [ -n "${ETAPE_PID:-}" ] && tuer_arbre "$ETAPE_PID" 5   # TERM, 5 s de grâce, puis KILL aux survivants
   rm -f "$D"/.delai-* 2>/dev/null
   exit 130

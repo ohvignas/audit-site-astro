@@ -167,6 +167,13 @@ wait
 """
 
 
+# Variante : la tête de l'étape meurt au TERM, seuls les descendants résistent (ils deviennent orphelins, introuvables par ppid ensuite).
+TETE_MEURT = """( trap '' TERM INT; sleep 60 & echo $! > "$1/petit"; wait ) &
+echo $! > "$1/enfant"
+wait
+"""
+
+
 def attendre_pids(d, noms=("enfant", "petit")):
     for _ in range(100):
         if all(pathlib.Path(d, n).exists() and pathlib.Path(d, n).read_text().strip() for n in noms):
@@ -206,6 +213,44 @@ class TestArbreTue(unittest.TestCase):
             self.assertIn("collecte interrompue", sortie)
             for pid in pids:
                 self.assertFalse(vivant(pid), f"le processus {pid} (ignore TERM) doit être tué par KILL au Ctrl-C")
+
+    def test_ctrl_c_pendant_la_grace_d_un_delai_n_abandonne_aucun_processus(self):
+        """N1 : le délai vient de se dépasser (TERM envoyé, KILL dans ≤ 5 s) ; un Ctrl-C à ce moment ne doit pas tuer le gardien avant son KILL.
+        La tête de l'étape meurt au TERM : ses descendants récalcitrants sont orphelins, seule la liste prise par le gardien les retrouve."""
+        with tempfile.TemporaryDirectory() as d:
+            pathlib.Path(d, "recalcitrant.sh").write_text(TETE_MEURT, encoding="utf-8")
+            script = ('set -u; D="$1"; . "$2"; trap interrompre_collecte INT TERM; '
+                      'avec_delai 1 bash "$D/recalcitrant.sh" "$D"; echo "jamais"')
+            sortie_f = pathlib.Path(d, "sortie.txt")
+            pids = []
+            try:
+                with open(sortie_f, "w", encoding="utf-8") as out:
+                    p = subprocess.Popen(["bash", "-c", script, "bash", d, str(ETAPES)], stdout=out)
+                pids = attendre_pids(d)
+                for _ in range(100):   # témoin du délai dépassé : la grâce de 5 s commence
+                    if any(f.startswith(".delai-") for f in os.listdir(d)):
+                        break
+                    time.sleep(0.1)
+                else:
+                    self.fail("le délai n'a pas été dépassé")
+                time.sleep(1)
+                for pid in pids:
+                    self.assertTrue(vivant(pid), "pendant la grâce, le descendant résiste encore à TERM")
+                os.kill(p.pid, signal.SIGINT)
+                p.wait(timeout=30)
+                time.sleep(0.5)
+                self.assertEqual(p.returncode, 130)
+                sortie = sortie_f.read_text(encoding="utf-8")
+                self.assertNotIn("jamais", sortie)
+                self.assertIn("collecte interrompue", sortie)
+                for pid in pids:
+                    self.assertFalse(vivant(pid), f"le processus {pid} doit être tué malgré le Ctrl-C pendant la grâce")
+            finally:
+                for pid in pids:   # ne rien laisser tourner si le test échoue
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
     def test_arbre_complet_gele_puis_tue(self):
         """tuer_arbre liste tout l'arbre avant de tuer : un enfant qui se relance en boucle ne laisse pas de petit-enfant."""
