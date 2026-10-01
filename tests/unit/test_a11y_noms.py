@@ -130,6 +130,43 @@ class TestNoms(unittest.TestCase):
         # lien contenant un bouton nommé : le texte compte pour les deux ouverts
         self.assertEqual(liens('<a href="/z"><button>Go</button></a>'), [])
 
+    def test_etiquette_label(self):
+        # shadcn / Radix : bouton sans texte nommé par un <label for> voisin (avant ou après)
+        self.assertEqual(nb_boutons('<button type="button" role="switch" id="x"></button><label for="x">Mode avion</label>'), 0)
+        self.assertEqual(nb_boutons('<label for="x">Mode avion</label><button role="checkbox" id="x"></button>'), 0)
+        self.assertEqual(nb_boutons('<button role="radio" id="r"></button><label for="r"><span>Choix</span> A</label>'), 0)
+        self.assertEqual(nb_boutons('<button role="combobox" id="c"></button><label for="c">Pays</label>'), 0)
+        # <label> englobant
+        self.assertEqual(nb_boutons('<label><button role="switch"></button> Notifications</label>'), 0)
+        self.assertEqual(nb_boutons('<label for="y"><button role="switch" id="y"></button> Notifications</label>'), 0)
+        # input bouton nommé par un label
+        self.assertEqual(nb_boutons('<input type="button" id="b"><label for="b">Valider</label>'), 0)
+        # label d'un autre id, label vide ou masqué, label englobant dirigé ailleurs : toujours signalés
+        self.assertEqual(nb_boutons('<button role="switch" id="d"></button><label for="zz">Autre</label>'), 1)
+        self.assertEqual(nb_boutons('<button role="switch" id="d"></button><label for="d"> </label>'), 1)
+        self.assertEqual(nb_boutons('<button role="switch" id="d"></button><label for="d"><span aria-hidden="true">x</span></label>'), 1)
+        self.assertEqual(nb_boutons('<label for="autre"><button role="switch" id="d"></button> Texte</label>'), 1)
+        # un <div role=button> n'est pas étiquetable
+        self.assertEqual(nb_boutons('<div role="button" id="e"></div><label for="e">Texte</label>'), 1)
+
+    def test_ilot_signale(self):
+        ilot = '<astro-island uid="1" component-url="/a.js" client="load" ssr="">%s</astro-island>'
+        dedans = res(ilot % '<a href="/f/a"></a><button class="x"></button>')
+        hors = res('<a href="/f/a"></a>')
+        self.assertEqual(dedans["liens_sans_nom"], [{"signature": '<a href="/f/a"> contenu : vide [îlot client:load]', "n": 1}])
+        self.assertEqual(dedans["boutons_sans_nom"], [{"signature": '<button class="x"> contenu : vide [îlot client:load]', "n": 1}])
+        self.assertEqual(hors["liens_sans_nom"], [{"signature": '<a href="/f/a"> contenu : vide', "n": 1}])
+        self.assertEqual(liens(ilot % '<a href="/ok">Texte</a>'), [])
+
+    def test_cible_labelledby_sans_sous_arbre_masque(self):
+        self.assertEqual(liens('<a href="/a" aria-labelledby="t"></a><span id="t"><span aria-hidden="true">→</span></span>'), ["/a"])
+        self.assertEqual(liens('<a href="/b" aria-labelledby="t"></a><span id="t">Lire <span aria-hidden="true">→</span></span>'), [])
+        self.assertEqual(liens('<a href="/c" aria-labelledby="im"></a><img id="im" src="x.png" alt="Panier">'), [])
+
+    def test_desc_et_metadata_svg_ne_sont_pas_un_nom(self):
+        self.assertEqual(liens('<a href="/a"><svg><desc>Longue description</desc></svg></a>'), ["/a"])
+        self.assertEqual(liens('<a href="/b"><svg><desc>Longue</desc><title>Accueil</title></svg></a>'), [])
+
     def test_resultat_json_strict(self):
         json.dumps(res(HTML_TEST), allow_nan=False)
 
