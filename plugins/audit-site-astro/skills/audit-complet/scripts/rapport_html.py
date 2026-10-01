@@ -32,7 +32,7 @@ from corrections import cle_jointure  # noqa: E402  (même nettoyage de la clé 
 
 # --- Barème (references/notation.md) ---------------------------------------------------------------------------------
 POIDS = {"Performance": 20, "SEO technique": 20, "Contenu": 15, "GEO / IA": 15, "Sécurité": 12, "Code": 10, "Accessibilité": 8}
-RATTACHE = {"Serveur / HTTP": "Performance", "Bonnes pratiques": "Code"}  # affichés, comptés avec le domaine parent
+RATTACHE = {"Serveur / HTTP": "Performance", "Bonnes pratiques": "Code", "RGPD / traceurs": "Sécurité"}  # affichés, comptés avec le domaine parent
 MALUS = {"critique": 20, "haute": 10, "moyenne": 4, "basse": 1}
 LECTURE = {"A": "Excellent, finitions seulement", "B": "Bon, quelques gains nets", "C": "Correct, plusieurs chantiers utiles",
            "D": "Faible, perte de trafic ou de sécurité probable", "E": "Urgent"}
@@ -210,7 +210,10 @@ def notes_audit(audit, sigs=None):
     if sigs is None:
         sigs = signaux.collecter(audit)
     d = audit / "data"
-    audites = [dom for dom, chemin in (("SEO technique", "crawl"), ("GEO / IA", "geo"), ("Sécurité", "securite"), ("Code", "code")) if (d / chemin).is_dir()]
+    audites = [dom for dom, chemin in (("SEO technique", "crawl"), ("GEO / IA", "geo"), ("Sécurité", "securite"), ("Code", "code"),
+                                       ("Accessibilité", "rendu"), ("Sécurité", "domaine"), ("Performance", "terrain"))
+               if (d / chemin).is_dir()]
+    audites = sorted(set(audites), key=audites.index)
     if signaux.lighthouse(audit):
         audites += ["Performance", "Accessibilité"]
     return notes_par_domaine(sigs, audites)
