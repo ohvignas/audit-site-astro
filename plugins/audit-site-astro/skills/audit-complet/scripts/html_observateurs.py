@@ -20,14 +20,17 @@ Aucun secret dans les sorties (règle de sécurité) : une adresse qui entre dan
 summary.md passe par url_sans_secret() (schéma, hôte sans identifiants, chemin ; ni requête, ni fragment, ni paramètre de matrice
 « ;jsessionid=… », ni « %3F » / « %23 » encodés ; longueur bornée) ; un texte libre qui peut contenir une adresse (alt, aria-label,
 extrait de phrase) par texte_sans_secret(). Les URL des pages du site audité (url de la page) passent par url_page_publique() :
-même nettoyage, mais les paramètres sans risque (?page=2, ?tab=) restent ; ceux dont le nom ressemble à un secret (token, key, sig,
-session, sid, auth, code, password…) ou dont la valeur ressemble à une clé (AIza…, sk-…, JWT, hexadécimal long) sont retirés.
+même nettoyage, mais la requête est gardée avec tous ses noms de paramètres : la valeur de ceux dont le nom ressemble à un secret (token,
+key, sig, session, sid, auth, code, password, bypass…) ou dont la valeur est opaque (clé AIza…, sk-…, JWT, hexadécimal, base64, courriel)
+devient « session=…3f2a ». pages.json et pages.csv ne sont JAMAIS réécrits : ils gardent les vraies URL, que d'autres étapes interrogent.
 analyser() et issues() repassent par assainir_sortie() sur tout ce que rend un module : un module qui oublie le helper ne fait
 pas fuiter une adresse complète, mais le helper reste la règle (il évite aussi de perdre la signature utile).
 """
+import hashlib
 import importlib
 import json
 import re
+import unicodedata
 from html.parser import HTMLParser
 from urllib.parse import unquote_plus, urlsplit
 
@@ -48,30 +51,42 @@ SANS_TEXTE_VISIBLE = {"script", "style", "noscript", "template", "textarea", "ti
 # --------------------------------------------------------------------------- adresses sans secret
 
 LONGUEUR_URL = 100          # signatures et exemples
-LONGUEUR_URL_PAGE = 300     # URL de page du site audité
+LONGUEUR_URL_PAGE = 300     # URL de page du site audité (constats, summary.md)
 SCHEMAS_OPAQUES = {"data", "javascript", "blob", "about", "vbscript", "file"}  # le reste de l'adresse n'a aucune valeur de diagnostic
 # Le chemin s'arrête au premier « ; » (paramètres de matrice : ;jsessionid=…) ou au premier « ? » / « # » / « ; » encodé (%3F, %23, %3B,
-# éventuellement encodés deux fois : %253F) : ce qui suit est une requête ou un fragment déguisés en chemin
+# éventuellement encodés plusieurs fois : %253F) : ce qui suit est une requête ou un fragment déguisés en chemin
 COUPE_CHEMIN = re.compile(r";|%(?:25)*(?:3[fF]|23|3[bB])")
 # Nom de paramètre qui ressemble à un secret : mots longs en sous-chaîne, mots courts seulement comme mot entier (« key » dans
-# « api_key », « accessKey », pas dans « keyword »), ou fin de nom (« …key », « …sig »)
+# « api_key », « accessKey », pas dans « keyword »), ou fin de nom (« …key », « …sig »). Le nom est gardé dans les constats, la valeur masquée.
 NOMS_SECRETS_LONGS = ("token", "secret", "passw", "session", "signature", "credential", "bearer", "apikey", "jwt", "cookie",
-                      "jeton", "motdepasse")
+                      "jeton", "motdepasse", "bypass", "vercel")
 NOMS_SECRETS_COURTS = {"key", "cle", "clef", "sig", "sid", "auth", "code", "pwd", "mdp", "pass", "otp", "csrf", "xsrf", "nonce", "hmac",
-                       "ticket", "sas", "oauth", "sso"}
-FINS_SECRETES = ("key", "sig", "sid", "auth", "code", "pwd")
-# Formats de clés connus : Google (AIza), OpenAI/Stripe (sk-, sk_live_), GitHub, Slack, AWS, JWT ; hexadécimal ≥ 32 (condensat)
-FORMATS_CLES = (r"AIza[\w-]{20,}", r"sk-[\w-]{16,}", r"[sp]k_(?:live|test)_\w{8,}", r"gh[pousr]_\w{20,}", r"xox[abprs]-[\w-]{10,}",
-                r"AKIA[0-9A-Z]{16}", r"eyJ[\w-]{5,}\.[\w-]{5,}\.[\w-]*")
+                       "ticket", "sas", "oauth", "sso", "share", "invite", "magic", "reset"}
+FINS_SECRETES = ("key", "sig", "sid", "auth", "pwd")
+# Paramètres sans risque, lisibles tels quels (même quand la valeur est longue : un slug n'est pas un secret)
+PARAMETRES_INOFFENSIFS = re.compile(r"(?:utm_\w+|page|tab|lang|locale|q|sort|order|ref|limit|offset|per_page)\Z", re.I)
+# Formats de clés connus, avec borne gauche (risk-, task-, ask-, desk-, disk- ne sont pas des clés « sk- ») : Google (AIza), OpenAI
+# (sk-, qui mêle chiffres, majuscules et minuscules), Stripe, GitHub, Slack, AWS, JWT
+FORMATS_CLES = (r"(?<![A-Za-z0-9])AIza[\w-]{20,}",
+                r"(?<![A-Za-z0-9])sk-(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*[a-z])[A-Za-z0-9_-]{20,}",
+                r"(?<![A-Za-z0-9])[sp]k_(?:live|test)_\w{8,}", r"(?<![A-Za-z0-9])gh[pousr]_\w{20,}",
+                r"(?<![A-Za-z0-9])xox[abprs]-[\w-]{10,}", r"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}",
+                r"(?<![A-Za-z0-9])eyJ[\w-]{5,}\.[\w-]{5,}\.[\w-]*")
 CLE_CONNUE = re.compile("|".join(FORMATS_CLES))
-VALEUR_SECRETE = re.compile("|".join(FORMATS_CLES + (r"[0-9a-fA-F]{32,}", r"[A-Za-z0-9+/=_-]{40,}")))
-URL_DANS_TEXTE = re.compile(r"(?i)\b(?:https?|wss?|ftp)://[^\s\"'<>\\]+")
-PAIRE_DANS_TEXTE = re.compile(r"([\w.\-\[\]]+)=([^\s&;\"'<>]+)")
+COURRIEL = re.compile(r"[^@\s]{1,64}@[^@\s]+\.[A-Za-z]{2,}\Z")
+# Toute adresse « schéma://… » (http, postgres, mongodb+srv, redis, amqp…)
+URL_DANS_TEXTE = re.compile(r"(?i)\b[a-z][a-z0-9+.-]{1,15}://[^\s\"'<>\\]+")
+# nom=valeur : borne gauche pour rester linéaire sur une longue suite sans espace (un blob base64 de 80 000 caractères)
+PAIRE_DANS_TEXTE = re.compile(r"(?<![\w.\-\[\]])([\w.\-\[\]]{1,64})=([^\s&;\"'<>]+)")
+JSON_DANS_TEXTE = re.compile(r'"([\w.\-]{1,64})"\s*:\s*"([^"\\]{1,200})"')
+PORTEUR_DANS_TEXTE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}")
 PONCTUATION_FINALE = ".,;:!?)]}»”"
+PASSES_DECODAGE = 5
 
 
 def _nom_secret(nom):
     """Vrai si le nom d'un paramètre (ou d'un attribut) ressemble à un secret."""
+    nom = unicodedata.normalize("NFKC", nom)  # ｔｏｋｅｎ (pleine chasse) -> token
     n = nom.lower()
     if any(m in n for m in NOMS_SECRETS_LONGS):
         return True
@@ -79,24 +94,49 @@ def _nom_secret(nom):
     return any(m in NOMS_SECRETS_COURTS for m in morceaux) or n.endswith(FINS_SECRETES)
 
 
-def _valeur_secrete(valeur):
-    v = valeur
-    for _ in range(2):  # une valeur peut contenir une requête encodée (?next=%2Flogin%3Ftoken%3Dabc)
-        if VALEUR_SECRETE.search(v):
+def _opaque(x, mini=20, mini_hex=None):
+    """Valeur opaque (jeton, condensat, base64) : `mini` caractères ou plus, sans séparateur de mots, hexadécimale (chiffres et lettres)
+    ou mêlant chiffres, majuscules et minuscules. Un slug en minuscules à tirets (formation-no-code-2024) n'est jamais opaque."""
+    if not re.fullmatch(r"[A-Za-z0-9+/=_-]+", x) or not any(c.isdigit() for c in x):
+        return False
+    if re.fullmatch(r"[0-9a-fA-F]+", x):
+        return len(x) >= (mini_hex or mini) and any(c.isalpha() for c in x)
+    return len(x) >= mini and any(c.isupper() for c in x) and any(c.islower() for c in x)
+
+
+def _decodages(valeur):
+    """La valeur puis ses décodages successifs jusqu'au point fixe (5 passes au plus) : une requête imbriquée est parfois encodée
+    plusieurs fois (?r=%2Fcb%253Fapi_key%253D…)."""
+    vus = [valeur]
+    for _ in range(PASSES_DECODAGE):
+        n = unquote_plus(vus[-1])
+        if n == vus[-1]:
+            break
+        vus.append(n)
+    return vus
+
+
+def _valeur_secrete(valeur, opaque=True):
+    """Valeur de paramètre à masquer : clé de format connu, courriel, valeur opaque (sauf paramètre inoffensif, opaque=False), ou
+    requête imbriquée dont un nom ressemble à un secret, à n'importe quel niveau d'encodage."""
+    for v in _decodages(valeur):
+        if CLE_CONNUE.search(v) or COURRIEL.match(v.strip()) or (opaque and _opaque(v)):
             return True
         if any(_nom_secret(m.group(1)) for m in PAIRE_DANS_TEXTE.finditer(v)):
             return True
-        v = unquote_plus(v)
-    return bool(VALEUR_SECRETE.search(v))
+    return False
+
+
+def _masque(valeur):
+    """« … » et 4 caractères d'un condensat : deux valeurs différentes restent distinguables, sans rien révéler."""
+    return "…" + hashlib.sha256(valeur.encode("utf-8", "replace")).hexdigest()[:4]
 
 
 def _segment_secret(seg):
-    """Segment de chemin qui est un secret (webhook, clé dans l'URL) : format de clé connu ou 24 caractères alphanumériques mêlant
-    chiffres, majuscules et minuscules. Les noms de fichiers à condensat (index.4f3a9c.js) et les slugs à tirets restent intacts."""
-    if CLE_CONNUE.search(seg):
-        return True
-    return (len(seg) >= 24 and re.fullmatch(r"[A-Za-z0-9_]+", seg) is not None and any(c.isdigit() for c in seg)
-            and any(c.isupper() for c in seg) and any(c.islower() for c in seg))
+    """Segment de chemin qui est un secret (webhook, lien de partage ou de réinitialisation, clé dans l'URL) : format de clé connu,
+    valeur opaque de 24 caractères ou plus (base64 : = + - _ compris), hexadécimal de 32 caractères ou plus. Les noms de fichiers à
+    condensat (index.4f3a9c.js) et les slugs à tirets restent intacts."""
+    return bool(CLE_CONNUE.search(seg)) or _opaque(seg, 24, 32)
 
 
 def _chemin_net(chemin):
@@ -109,8 +149,12 @@ def _borner(texte, n):
 
 
 def _decouper(url):
-    """(urlsplit, texte nettoyé), ou (None, texte) si l'adresse est illisible (« http://[invalide »)."""
-    u = "".join(c for c in " ".join(str(url or "").split()) if c.isprintable())
+    """(urlsplit, texte nettoyé), ou (None, texte) si l'adresse est illisible (« http://[invalide »). Comme un navigateur : tabulations et
+    sauts de ligne retirés (« java\\nscript: »), « \\ » lu comme « / » dans une adresse http(s)."""
+    u = re.sub(r"[\t\r\n]", "", str(url or ""))
+    u = "".join(c for c in " ".join(u.split()) if c.isprintable())
+    if re.match(r"(?i)(?:[a-z][a-z0-9+.-]*:)?[/\\]{2}|(?:https?|wss?|ftp):[/\\]", u):
+        u = u.replace("\\", "/")
     try:
         return urlsplit(u), u
     except ValueError:
@@ -127,7 +171,7 @@ def _base(p, avec_schema):
     return (p.scheme.lower() + "://" if p.scheme else "//") + hote
 
 
-def _opaque(p):
+def _opaque_schema(p):
     """Adresse sans hôte à traiter à part : schéma opaque (data:, javascript:…), mailto: / tel: (adresse sans « ?objet=… »)."""
     schema = p.scheme.lower()
     if schema in SCHEMAS_OPAQUES:
@@ -137,20 +181,28 @@ def _opaque(p):
     return None
 
 
+def _ancre(u):
+    """Ancre seule (« #contenu ») : gardée si c'est un identifiant de page ; « # » si elle ressemble à une valeur (#access_token=…)."""
+    ident = u[1:]
+    if not ident or "=" in ident or "&" in ident or len(ident) > 40 or _valeur_secrete(ident):
+        return "#"
+    return u
+
+
 def url_sans_secret(url, longueur=LONGUEUR_URL, avec_schema=True):
-    """Adresse sans le moindre secret, pour les signatures, exemples et sorties : schéma, hôte (sans identifiants user:pass@) et
+    """Adresse sans le moindre secret, pour les signatures et exemples de modules : schéma, hôte (sans identifiants user:pass@) et
     chemin. Ni requête, ni fragment (ils portent les jetons, clés d'API et signatures), chemin coupé aux paramètres de matrice
     « ;jsessionid=… » et aux « %3F » / « %23 » encodés, segment qui ressemble à une clé masqué (« … »), longueur bornée (« … »).
-    Une adresse relative reste relative, une ancre seule devient « # », data: / javascript: / blob: deviennent « data: »…
-    avec_schema=False : « hôte/chemin » (signature d'une iframe)."""
+    Une adresse relative reste relative, une ancre seule garde son identifiant (« #contenu »), data: / javascript: / blob: deviennent
+    « data: »… avec_schema=False : « hôte/chemin » (signature d'une iframe)."""
     if not url or not str(url).strip():
         return ""
     p, u = _decouper(url)
     if p is None:
         return "adresse illisible"
     if u.startswith("#"):
-        return "#"
-    opaque = _opaque(p)
+        return _ancre(u)
+    opaque = _opaque_schema(p)
     if opaque is not None:
         return _borner(opaque, longueur)
     base = _base(p, avec_schema)
@@ -161,28 +213,36 @@ def url_sans_secret(url, longueur=LONGUEUR_URL, avec_schema=True):
 
 
 def url_page_publique(url, longueur=LONGUEUR_URL_PAGE):
-    """URL d'une page du site audité telle qu'on peut l'écrire dans pages.json, issues.json et summary.md : comme url_sans_secret
-    (identifiants, fragment, paramètres de matrice et segments secrets retirés) mais la requête est gardée, sans les paramètres dont
-    le nom ressemble à un secret (token, key, sig, signature, session, sid, auth, code, password…) ni ceux dont la valeur ressemble à
-    une clé (AIza…, sk-…, JWT, hexadécimal long). ?page=2 et ?tab=prix restent : ils distinguent des pages."""
+    """URL d'une page du site audité telle qu'on peut l'écrire dans un constat, summary.md ou la sortie d'erreur (jamais dans
+    pages.json / pages.csv : ces données gardent les vraies URL, d'autres étapes les interrogent). Identifiants, fragment, paramètres de
+    matrice et segments secrets retirés ; la requête est gardée avec TOUS ses paramètres, mais la valeur de ceux qui ressemblent à un
+    secret (nom : token, key, sig, signature, session, sid, auth, bypass… ; valeur : clé de format connu, courriel, valeur opaque de
+    20 caractères ou plus) devient « … » suivi de 4 caractères d'un condensat : session=…3f2a. ?page=2, ?tab=prix, ?utm_campaign=un-slug
+    restent lisibles."""
     if not url or not str(url).strip():
         return "" if not url else str(url)
     p, u = _decouper(url)
     if p is None:
         return "adresse illisible"
     if u.startswith("#"):
-        return "#"
-    opaque = _opaque(p)
+        return _ancre(u)
+    opaque = _opaque_schema(p)
     if opaque is not None:
         return _borner(opaque, longueur)
     gardes = []
     for morceau in p.query.split("&"):
         if not morceau:
             continue
-        nom, _, valeur = morceau.partition("=")
-        if _nom_secret(unquote_plus(nom)) or _valeur_secrete(valeur) or _valeur_secrete(nom):
-            continue
-        gardes.append(morceau)
+        nom, egal, valeur = morceau.partition("=")
+        n = unquote_plus(nom)
+        if CLE_CONNUE.search(n):  # la clé elle-même sert de nom de paramètre
+            gardes.append("…=" + _masque(valeur) if egal else _masque(morceau))
+        elif not egal:
+            gardes.append(_masque(morceau) if _valeur_secrete(morceau) else morceau)
+        elif _nom_secret(n) or _valeur_secrete(valeur, opaque=PARAMETRES_INOFFENSIFS.match(n) is None):
+            gardes.append(nom + "=" + _masque(valeur))
+        else:
+            gardes.append(morceau)
     base = _base(p, True)
     chemin = _chemin_net(p.path)
     if not base and p.scheme:
@@ -191,9 +251,9 @@ def url_page_publique(url, longueur=LONGUEUR_URL_PAGE):
 
 
 def texte_sans_secret(texte, adresse=url_sans_secret):
-    """Texte libre (alt, aria-label, extrait de phrase, message d'erreur) sans secret : chaque adresse http(s)://… devient `adresse(url)`
-    (url_sans_secret par défaut), « nom=valeur » dont le nom ressemble à un secret devient « nom=… », une clé de format connu
-    (AIza…, sk-…, ghp_…, JWT) devient « … »."""
+    """Texte libre (alt, aria-label, extrait de phrase, message d'erreur) sans secret : chaque adresse schéma://… devient `adresse(url)`
+    (url_sans_secret par défaut ; identifiants retirés aussi pour postgres://, redis://…), « nom=valeur », « "nom": "valeur" » et
+    « Bearer valeur » à nom ou jeton secret deviennent « nom=… », une clé de format connu (AIza…, sk-…, ghp_…, JWT) devient « … »."""
     def remplacer(m):
         brut = m.group(0)
         coupe = len(brut.rstrip(PONCTUATION_FINALE))
@@ -201,17 +261,28 @@ def texte_sans_secret(texte, adresse=url_sans_secret):
 
     def paire(m):
         # « Disallow: /*?session=* » (motif de robots.txt) ou une valeur déjà masquée : rien à cacher
-        if m.group(2) == "…" or not _nom_secret(m.group(1)) or re.fullmatch(r"[*$.+?^|()\[\]\\]+", m.group(2)):
+        if m.group(2).startswith("…") or not _nom_secret(m.group(1)) or re.fullmatch(r"[*$.+?^|()\[\]\\]+", m.group(2)):
             return m.group(0)
         return m.group(1) + "=…"
 
+    def json_(m):
+        return '"{0}": "…"'.format(m.group(1)) if _nom_secret(m.group(1)) and m.group(2) != "…" else m.group(0)
+
     t = URL_DANS_TEXTE.sub(remplacer, str(texte))
-    return CLE_CONNUE.sub("…", PAIRE_DANS_TEXTE.sub(paire, t))
+    t = JSON_DANS_TEXTE.sub(json_, PAIRE_DANS_TEXTE.sub(paire, t))
+    return CLE_CONNUE.sub("…", PORTEUR_DANS_TEXTE.sub("Bearer …", t))
 
 
 def _parcourir(o, fn, cle=None):
     if isinstance(o, dict):
-        return {(fn(k, None) if isinstance(k, str) and URL_DANS_TEXTE.match(k) else k): _parcourir(v, fn, k) for k, v in o.items()}
+        sortie = {}
+        for k, v in o.items():
+            nk = fn(k, None) if isinstance(k, str) and URL_DANS_TEXTE.match(k) else k
+            base, i = nk, 2
+            while nk in sortie:  # deux adresses qui n'en font plus qu'une : aucune entrée n'est perdue
+                nk, i = "{0} ({1})".format(base, i), i + 1
+            sortie[nk] = _parcourir(v, fn, k)
+        return sortie
     if isinstance(o, (list, tuple)):
         return [_parcourir(v, fn, cle) for v in o]
     if isinstance(o, str):
@@ -219,7 +290,7 @@ def _parcourir(o, fn, cle=None):
     return o
 
 
-# Champs de pages.json / issues.json qui portent une adresse pouvant être relative (les adresses absolues sont reconnues seules)
+# Champs qui portent une adresse pouvant être relative (les adresses absolues sont reconnues seules)
 CHAMPS_ADRESSE = {"img_srcs", "hreflang", "canonicals", "canonical", "src", "href", "mixed_content"}
 
 
@@ -232,9 +303,10 @@ def _chaine_publique(s, cle):
 
 
 def assainir_sortie(o):
-    """Copie de `o` (dict, listes, chaînes JSON) sans secret, pour pages.json, issues.json, pages.csv et summary.md : une chaîne qui est
-    une adresse (ou qui en contient) passe par url_page_publique ; les clés de dictionnaire qui sont des adresses aussi.
-    L'original n'est pas modifié (le crawl continue avec les vraies adresses)."""
+    """Copie de `o` (dict, listes, chaînes JSON) sans secret, pour les constats (issues.json), summary.md, la sortie d'erreur et les
+    résultats de modules : une chaîne qui est une adresse (ou qui en contient) passe par url_page_publique (noms de paramètres gardés,
+    valeurs secrètes masquées) ; les clés de dictionnaire qui sont des adresses aussi. À NE PAS appliquer à pages.json ni pages.csv :
+    ces données gardent les vraies URL, que Lighthouse, geo_check et http_checks interrogent. L'original n'est pas modifié."""
     return _parcourir(o, _chaine_publique)
 
 
@@ -474,8 +546,8 @@ def ajouter_groupes(add, cle, libelle, severite, groupes, domaine):
     """Un constat par signature (ordre trié = sortie déterministe), avec 3 pages d'exemple."""
     for sig in sorted(groupes):
         g = groupes[sig]
-        urls = sorted({url_page_publique(u) for u in g["pages"]})  # URL des pages du site audité : sans jeton dans la requête
-        exemple = {"signature": sig, "occurrences": g["n"], "pages": len(urls), "exemples_pages": urls[:3]}
+        urls = sorted(set(g["pages"]))  # le nombre de pages se compte sur les vraies URL ; l'affichage masque les valeurs secrètes
+        exemple = {"signature": sig, "occurrences": g["n"], "pages": len(urls), "exemples_pages": [url_page_publique(u) for u in urls[:3]]}
         if "exemple" in g:
             exemple["exemple"] = g["exemple"]
         add(cle, libelle, severite, exemple, n=g["n"], domaine=domaine)

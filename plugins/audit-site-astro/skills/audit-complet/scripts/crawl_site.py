@@ -798,12 +798,13 @@ def crawl(args):
 
     # --- pages.json et issues.json provisoires écrits tout de suite (atomiquement) : si le délai de l'étape coupe les
     #     contrôles réseau, les données et les constats du crawl restent ; les modules n'y ajoutent rien (ctx "provisoire")
-    # Tout ce qui sort (pages.json, issues.json, pages.csv, summary.md) passe par assainir_sortie : les vraies adresses restent
-    # en mémoire pour le crawl, mais ni identifiant, ni fragment, ni paramètre de matrice, ni paramètre qui ressemble à un secret
-    # (token, key, sig, session, sid, auth, code, password…) n'est écrit
+    # pages.json et pages.csv sont des données internes : ils gardent les VRAIES URL, telles que crawlées (Lighthouse, geo_check et
+    # http_checks les interrogent ; ?page=2 et ?session=a doivent rester distinctes). Seul ce qui est lu par un humain ou un agent
+    # (issues.json, summary.md, sortie d'erreur, signatures des modules) passe par assainir_sortie : noms de paramètres gardés,
+    # valeurs secrètes masquées (session=…3f2a), identifiants, fragments et paramètres de matrice retirés.
     publier = html_observateurs.assainir_sortie
-    ecrire_json(out / "pages.json", publier({"meta": {"start_url": start, "host": host, "pages_crawled": len(pages), "partiel": True},
-                                              "pages": list(pages.values())}))
+    ecrire_json(out / "pages.json", {"meta": {"start_url": start, "host": host, "pages_crawled": len(pages), "partiel": True},
+                                      "pages": [page_ecrite(p) for p in pages.values()]})
     ecrire_json(out / "issues.json", publier(constats({"meta": {}, "provisoire": True})))
     # --- URL du sitemap non visitées (limite de pages atteinte) : quelques HEAD de preuve, bornés (voir sonder_sitemap)
     sitemap_sondes = sonder_sitemap(sitemap_set, pages, host, scheme, robots, fetch, timeout=args.timeout,
@@ -828,7 +829,9 @@ def crawl(args):
         "astra_detected": any(p.get("astra") for p in pages.values()),
         "astro_detected": any(p.get("astro") for p in pages.values()),
     }
-    ecrire_json(out / "pages.json", publier({"meta": meta, "pages": list(pages.values())}))
+    meta["modules"] = publier(meta["modules"])  # messages d'erreur : texte libre, pas une URL de page
+    meta["sitemap_errors"] = publier(meta["sitemap_errors"])
+    ecrire_json(out / "pages.json", {"meta": meta, "pages": [page_ecrite(p) for p in pages.values()]})
     ecrire_json(out / "issues.json", publier(issues))
     write_csv(out / "pages.csv", pages.values())
     write_summary(out / "summary.md", meta, pages, issues)
@@ -1100,14 +1103,19 @@ def write_csv(path, pages):
         w = csv.writer(f)
         w.writerow(cols)
         for p in pages:
-            w.writerow(html_observateurs.assainir_sortie([p.get("url"), p.get("status"), p.get("final_status"), p.get("final_url"),
+            w.writerow([p.get("url"), p.get("status"), p.get("final_status"), p.get("final_url"),
                         p.get("redirect_hops"), p.get("ttfb"), p.get("time"), p.get("bytes_html"),
                         p.get("indexable"), p.get("noindex"), (p.get("canonicals") or [""])[0], p.get("title", ""),
                         len(p.get("title", "") or ""), len(p.get("meta_description", "") or ""),
                         len(p.get("h1", []) or []), " | ".join(p.get("h1", []) or []), p.get("content_words"),
                         p.get("words"), p.get("inlinks"), p.get("outlinks_internal"), p.get("depth"),
                         p.get("in_sitemap"), p.get("imgs"), p.get("imgs_no_alt"),
-                        ",".join(p.get("jsonld_types", []) or []), p.get("lang")]))
+                        ",".join(p.get("jsonld_types", []) or []), p.get("lang")])
+
+
+def page_ecrite(p):
+    """Page telle qu'écrite dans pages.json : vraies URL, seul le message d'erreur (texte libre) est nettoyé."""
+    return dict(p, error=html_observateurs.assainir_sortie(p["error"])) if p.get("error") else p
 
 
 def modules_en_erreur(meta):
