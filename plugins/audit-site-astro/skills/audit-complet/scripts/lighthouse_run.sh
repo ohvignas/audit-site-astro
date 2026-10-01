@@ -74,7 +74,7 @@ pkill_orphans() {  # tue les Chrome headless orphelins laissés par un Lighthous
 trap pkill_orphans EXIT INT TERM
 echo "RAM disponible au départ : $(free_mb) Mo (seuil $MIN_FREE_MB Mo)"
 # lighthouse installé globalement (image Docker) sinon npx
-if command -v lighthouse >/dev/null 2>&1; then LH="lighthouse"; else LH="npx -y lighthouse@12"; fi
+if command -v lighthouse >/dev/null 2>&1; then LH="lighthouse"; else LH="npx -y lighthouse@13.5.0"; fi
 for url in $URLS; do
   slug=$(printf '%s' "$url" | sed -E 's#https?://##; s#[^A-Za-z0-9]+#_#g; s#_+$##' | cut -c1-80)
   for mode in mobile desktop; do
