@@ -9,6 +9,9 @@ Performance · SEO technique · Contenu · GEO (visibilité dans les IA) · Code
 [![Licence MIT](https://img.shields.io/badge/licence-MIT-green.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-ghcr.io-blue?logo=docker)](https://github.com/ohvignas/audit-site-astro/pkgs/container/audit-site-astro)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-d97757)](#-option-2--plugin-claude-code-audit-complet-avec-plan-daction)
+[![Cursor plugin](https://img.shields.io/badge/Cursor-plugin-black)](#️-option-2-bis--cursor)
+[![Release](https://img.shields.io/github/v/release/ohvignas/audit-site-astro)](https://github.com/ohvignas/audit-site-astro/releases/latest)
+[![Rappel cobaye](https://img.shields.io/badge/rappel%20cobaye-100%25%20%C2%B7%200%20faux%20positif-brightgreen)](#banc-dessai-cobaye)
 
 </div>
 
@@ -252,11 +255,11 @@ C'est le test « réponse réelle » : votre pare-feu ou CDN (Cloudflare « Bloc
 
 ## Banc d'essai (cobaye)
 
-![rappel cobaye](https://img.shields.io/badge/rappel%20cobaye-89%25-yellow)
+![rappel cobaye](https://img.shields.io/badge/rappel%20cobaye-100%25-brightgreen) ![faux positifs](https://img.shields.io/badge/faux%20positifs-0-brightgreen)
 
 Deux sites Astro de test (`tests/cobaye/casse`, avec des défauts étiquetés, et `tests/cobaye/propre`, son jumeau corrigé) mesurent à chaque PR ce que l'audit détecte et ce qu'il signale à tort.
 
-Score actuel (2026-09-30) : **89 % des défauts connus détectés, 2 faux positifs**. Les seuils ne peuvent que monter.
+Score actuel (v2.0.0, 2026-10-01) : **104/104 défauts connus détectés (100 %), 0 faux positif, 0 alerte inattendue** sur le jumeau propre (89 % et 2 faux positifs en phase 0). Les seuils sont à cliquet : une PR qui fait baisser le score échoue.
 
 Détail et pistes : [docs/cobaye-baseline.md](docs/cobaye-baseline.md) · fonctionnement : [tests/cobaye/README.md](tests/cobaye/README.md).
 
