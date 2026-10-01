@@ -45,7 +45,8 @@ def detecte(matcher, audit):
     if t == "unitaire":
         return None
     if t == "crawl_issue":
-        it = (_json(data / "crawl/issues.json") or {}).get(matcher["cle"])
+        # « fichier » : autre source au format du crawl (rendu/issues.json, domaine/issues.json, terrain/issues.json)
+        it = (_json(data / matcher.get("fichier", "crawl/issues.json")) or {}).get(matcher["cle"])
         if not it:
             return False
         c = matcher.get("contient")
@@ -80,6 +81,7 @@ def detecte(matcher, audit):
 
 FILTRES_CASSE = ("contient", "ou_contient", "exemple_contient")
 FICHIERS_REQUIS = ("crawl/issues.json", "geo/geo.json", "code/code-scan.json", "perf/pagespeed.json")
+FICHIERS_ISSUES = ("crawl/issues.json", "rendu/issues.json", "domaine/issues.json", "terrain/issues.json")
 
 
 def matcher_propre(m):
@@ -94,8 +96,10 @@ def _matcher_fp(d):
     return d.get("matcher_propre") or matcher_propre(d["matcher"])
 
 
-def valider_audit(audit):
-    """Liste des problèmes qui rendent un dossier d'audit inutilisable pour la mesure (vide = valide)."""
+def valider_audit(audit, phase=0):
+    """Liste des problèmes qui rendent un dossier d'audit inutilisable pour la mesure (vide = valide).
+    À partir de la phase 2, la passe rendue (data/rendu/issues.json) est requise : un propre sans passe rendue
+    passerait pour un propre sans faux positif d'accessibilité ou de RGPD."""
     audit = Path(audit)
     data = audit / "data"
     problemes = []
@@ -108,7 +112,7 @@ def valider_audit(audit):
                 cellules = ligne.split("|")
                 if len(cellules) > 2 and "❌" in cellules[2]:
                     problemes.append("étape en échec dans COLLECTE.md : {0}".format(ligne.strip()))
-    for rel in FICHIERS_REQUIS:
+    for rel in FICHIERS_REQUIS + (("rendu/issues.json",) if phase >= 2 else ()):
         if not (data / rel).is_file():
             problemes.append("data/{0} manquant".format(rel))
     return problemes
@@ -123,9 +127,11 @@ def _inattendus(propre):
         return []
     data = Path(propre) / "data"
     out = []
-    for cle, it in (_json(data / "crawl/issues.json") or {}).items():
-        if it.get("severity") in SEVERES:
-            out.append({"source": "crawl", "cle": cle, "constat": it.get("label", cle), "nb": it.get("count")})
+    for rel in FICHIERS_ISSUES:
+        source = rel.split("/")[0]
+        for cle, it in (_json(data / rel) or {}).items():
+            if it.get("severity") in SEVERES:
+                out.append({"source": source, "cle": cle, "constat": it.get("label", cle), "nb": it.get("count")})
     for f in (_json(data / "code/code-scan.json") or {}).get("constats", []):
         if f.get("severite") in SEVERES:
             out.append({"source": "code", "cle": f.get("categorie"), "constat": f.get("constat"), "nb": len(f.get("ou", []))})
@@ -209,7 +215,7 @@ def main():
     invalides = []
     for nom, chemin in (("casse", a.casse), ("propre", a.propre)):
         if chemin:
-            invalides += ["[{0}] {1}".format(nom, p) for p in valider_audit(chemin)]
+            invalides += ["[{0}] {1}".format(nom, p) for p in valider_audit(chemin, a.phase)]
     if invalides:
         print("❌ Audit invalide : impossible de mesurer.\n" + "\n".join("  - " + p for p in invalides), file=sys.stderr)
         sys.exit(2)
