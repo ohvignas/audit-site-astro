@@ -5,7 +5,7 @@ domaine: Serveur / HTTP
 severite_type: moyenne
 effort: S
 declencheurs:
-  - "lighthouse:^redirects$|Évitez les redirections de page multiples"
+  - "lighthouse:^redirects$|Évitez les redirections de page multiples|document-latency-insight .*redirections"
 sources:
   - https://developers.google.com/search/docs/crawling-indexing/301-redirects
   - https://docs.astro.build/en/guides/routing/

@@ -101,13 +101,17 @@ def collecter(audit):
     for r in lighthouse(audit):
         for o in r.get("opportunites", [])[:6]:
             key = o["id"]
-            if key in seen or not (o.get("gain_ms") or o.get("gain_octets")):
+            sans_gain = not (o.get("gain_ms") or o.get("gain_octets"))
+            # LH 13 : un insight en échec (score 0) n'a pas toujours de gain chiffré (ex. cls-culprits-insight) : on le garde
+            insight_en_echec = str(o["id"]).endswith("-insight") and o.get("score") == 0
+            if key in seen or (sans_gain and not insight_en_echec):
                 continue
             seen.add(key)
             sev = severite_opportunite(o.get("gain_ms"), o.get("gain_octets"))
             gain = " + ".join(g for g in (f"{o['gain_ms']} ms" if o.get("gain_ms") else "",
                                           f"{int(o['gain_octets']) // 1024} Ko" if o.get("gain_octets") else "") if g)
-            signals.append(_signal(sev, "Performance", f"{o['titre']} (gain estimé {gain}, {r.get('strategie')})", o.get("exemples", [])[:3],
+            texte = f"{o['titre']} (gain estimé {gain}, {r.get('strategie')})" if gain else f"{o['titre']} ({r.get('strategie')})"
+            signals.append(_signal(sev, "Performance", texte, o.get("exemples", [])[:3],
                                    "lighthouse", f"{o['id']} {o['titre']}"))
         for cat, fails in (r.get("echecs_autres_categories") or {}).items():
             for f in fails:

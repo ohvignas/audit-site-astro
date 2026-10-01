@@ -74,7 +74,22 @@ pkill_orphans() {  # tue les Chrome headless orphelins laissés par un Lighthous
 trap pkill_orphans EXIT INT TERM
 echo "RAM disponible au départ : $(free_mb) Mo (seuil $MIN_FREE_MB Mo)"
 # lighthouse installé globalement (image Docker) sinon npx
-if command -v lighthouse >/dev/null 2>&1; then LH="lighthouse"; else LH="npx -y lighthouse@12"; fi
+# Lighthouse 13.5.0 exige Node >= 22.19 : sur un hôte plus ancien, repli sur Lighthouse 12 (les rapports LH 12 sont toujours lus)
+node_ok_lh13() {
+  local v maj rest min
+  v=$(node -v 2>/dev/null | sed 's/^v//')
+  maj=${v%%.*}; rest=${v#*.}; min=${rest%%.*}
+  case "$maj$min" in ''|*[!0-9]*) return 0 ;; esac  # version illisible ou node absent : on laisse npx échouer lui-même
+  [ "$maj" -gt 22 ] && return 0
+  [ "$maj" -eq 22 ] && [ "$min" -ge 19 ] && return 0
+  return 1
+}
+if command -v lighthouse >/dev/null 2>&1; then LH="lighthouse"
+elif node_ok_lh13; then LH="npx -y lighthouse@13.5.0"
+else
+  echo "  ⚠️ Node $(node -v 2>/dev/null) < 22.19 : Lighthouse 13.5.0 indisponible, repli sur lighthouse@12 (mettre Node à jour pour Lighthouse 13)."
+  LH="npx -y lighthouse@12"
+fi
 for url in $URLS; do
   slug=$(printf '%s' "$url" | sed -E 's#https?://##; s#[^A-Za-z0-9]+#_#g; s#_+$##' | cut -c1-80)
   for mode in mobile desktop; do

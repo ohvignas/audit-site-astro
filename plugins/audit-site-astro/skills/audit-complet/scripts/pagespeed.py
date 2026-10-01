@@ -39,15 +39,31 @@ FIELD = [
     ("FIRST_CONTENTFUL_PAINT_MS", "FCP", 1800, 3000, "ms"),
     ("EXPERIMENTAL_TIME_TO_FIRST_BYTE", "TTFB", 800, 1800, "ms"),
 ]
+# Lighthouse 13 : audits remplacés par des « insights » (developer.chrome.com/blog/lighthouse-13-0). Ancien id → insight.
+INSIGHTS_LH13 = {
+    "layout-shifts": "cls-culprits-insight", "layout-shift-elements": "cls-culprits-insight",
+    "largest-contentful-paint-element": "lcp-breakdown-insight", "third-party-summary": "third-parties-insight",
+    "dom-size": "dom-size-insight", "server-response-time": "document-latency-insight",
+    "uses-text-compression": "document-latency-insight", "redirects": "document-latency-insight",
+    "render-blocking-resources": "render-blocking-insight", "uses-long-cache-ttl": "cache-insight",
+    "font-display": "font-display-insight", "uses-http2": "modern-http-insight",
+    "prioritize-lcp-image": "lcp-discovery-insight", "lcp-lazy-loaded": "lcp-discovery-insight",
+}
+
+
+def audit_lh(audits, ancien):
+    """Audit Lighthouse ≤ 12, sinon l'insight Lighthouse 13 qui l'a remplacé, sinon {}."""
+    return audits.get(ancien) or audits.get(INSIGHTS_LH13.get(ancien, ""), {})
 
 
 def find_snippets(obj, acc, limit=3):
     if len(acc) >= limit:
         return acc
     if isinstance(obj, dict):
-        node = obj.get("node")
-        if isinstance(node, dict) and node.get("snippet"):
-            acc.append({"snippet": node["snippet"][:300], "selector": node.get("selector", "")})
+        # nœud « nu » (LH 13 : éléments de la liste) ou clé « node » d'une ligne (LH ≤ 12 : on le trouve en descendant)
+        if obj.get("snippet") and (obj.get("type") == "node" or "selector" in obj):
+            acc.append({"snippet": obj["snippet"][:300], "selector": obj.get("selector", "")})
+            return acc
         for v in obj.values():
             find_snippets(v, acc, limit)
     elif isinstance(obj, list):
@@ -92,6 +108,11 @@ def summarize_lhr(lhr):
         if a and a.get("numericValue") is not None:
             metrics[label] = {"valeur": round(a["numericValue"], 3), "affiche": a.get("displayValue", ""),
                               "score": a.get("score")}
+    if "TTFB labo" not in metrics:  # LH 13 : server-response-time retiré, la valeur reste dans le diagnostic de l'insight
+        srt = ((audits.get("document-latency-insight") or {}).get("details") or {}).get("debugData", {})
+        srt = srt.get("serverResponseTime") if isinstance(srt, dict) else None
+        if isinstance(srt, (int, float)):
+            metrics["TTFB labo"] = {"valeur": round(srt, 3), "affiche": "{0} ms".format(round(srt)), "score": None}
     lcp_el = []
     for aid in ("largest-contentful-paint-element", "lcp-discovery-insight", "lcp-phases-insight",
                 "lcp-breakdown-insight"):
@@ -99,7 +120,8 @@ def summarize_lhr(lhr):
             lcp_el = find_snippets(audits[aid].get("details", {}), [], 1)
             if lcp_el:
                 break
-    cls_el = find_snippets(audits.get("layout-shifts", audits.get("layout-shift-elements", {})).get("details", {}), [], 3)
+    cls_el = find_snippets((audits.get("layout-shifts") or audits.get("layout-shift-elements")
+                            or audits.get("cls-culprits-insight") or {}).get("details", {}), [], 3)
 
     opps = []
     perf_refs = [r["id"] for r in lhr.get("categories", {}).get("performance", {}).get("auditRefs", [])]
@@ -111,13 +133,25 @@ def summarize_lhr(lhr):
             continue
         det = a.get("details") or {}
         ms = det.get("overallSavingsMs") or 0
-        by = det.get("overallSavingsBytes") or 0
+        # LH 13 : l'économie en octets d'un insight est dans debugData.wastedBytes (ex. compression du document)
+        by = det.get("overallSavingsBytes") or (det.get("debugData") or {}).get("wastedBytes") or 0
         ms_metric = a.get("metricSavings") or {}
-        weight = sum(v for v in ms_metric.values() if isinstance(v, (int, float)))
+        # le CLS est sans unité : jamais compté comme des ms (LH 12 layout-shifts et LH 13 cls-culprits-insight)
+        ms_metriques = [v for k, v in ms_metric.items() if k != "CLS" and isinstance(v, (int, float))]
+        weight = sum(ms_metriques)
+        # LH 13 : les insights n'ont plus overallSavingsMs, seulement metricSavings (FCP/LCP se recouvrent : max, pas somme)
+        gain_metrique = max(ms_metriques or [0])
         failing = (score is not None and score < 0.9) or (mode == "informative" and (ms or by or weight))
+        # LH 13 : la compression du document est une case de document-latency-insight (plus d'audit dédié)
+        cases = det.get("items") if det.get("type") == "checklist" and isinstance(det.get("items"), dict) else {}
+        echecs_cases = [k for k, v in cases.items() if isinstance(v, dict) and v.get("value") is False]
+        if echecs_cases:
+            failing = True
+        suffixes = [txt for cle, txt in (("noRedirects", "redirections"), ("serverResponseIsFast", "réponse serveur lente"),
+                                         ("usesCompression", "compression du document absente")) if cle in echecs_cases]
         if not failing:
             continue
-        items = flat_items(det)
+        items = [] if cases else flat_items(det)
         top = []
         for it in items[:5]:
             if isinstance(it, dict):
@@ -128,24 +162,28 @@ def summarize_lhr(lhr):
                     url = ent.get("text", "") if isinstance(ent, dict) else str(ent)
                 if url:
                     top.append(str(url)[:160])
-        opps.append({"id": aid, "titre": a.get("title", aid), "affiche": a.get("displayValue", ""),
-                     "gain_ms": round(ms), "gain_octets": by, "gains_metriques": ms_metric, "score": score,
+        opps.append({"id": aid, "titre": a.get("title", aid) + (" (" + ", ".join(suffixes) + ")" if suffixes else ""),
+                     "affiche": a.get("displayValue", ""),
+                     "gain_ms": round(ms or gain_metrique), "gain_octets": by, "gains_metriques": ms_metric, "score": score,
                      "exemples": top, "_poids": ms + weight + by / 10000})
     opps.sort(key=lambda o: -o["_poids"])
     for o in opps:
         o.pop("_poids", None)
 
     third = []
-    tp = flat_items(audits.get("third-party-summary", {}).get("details", {}))
+    tp = flat_items(audit_lh(audits, "third-party-summary").get("details", {}))
     for it in tp[:8]:
         ent = it.get("entity")
         name = ent.get("text") if isinstance(ent, dict) else ent
+        # blockingTime : LH ≤ 12 seulement ; mainThreadTime : LH 12 et 13 (third-parties-insight)
+        bloc = it.get("blockingTime")
         third.append({"tiers": name, "ko": round((it.get("transferSize") or 0) / 1024),
-                      "blocage_ms": round(it.get("blockingTime") or 0)})
+                      "blocage_ms": round(bloc) if isinstance(bloc, (int, float)) else None,
+                      "thread_ms": round(it.get("mainThreadTime") or 0)})
     misc = {}
     for aid, key in (("total-byte-weight", "poids_total_ko"), ("dom-size", "noeuds_dom"),
                      ("bootup-time", "js_execution_ms"), ("mainthread-work-breakdown", "thread_principal_ms")):
-        a = audits.get(aid)
+        a = audit_lh(audits, aid)
         if a and a.get("numericValue") is not None:
             v = a["numericValue"]
             misc[key] = round(v / 1024) if key.endswith("_ko") else round(v)
@@ -283,7 +321,7 @@ def write(out, results):
         if r["divers"]:
             md.append("- " + ", ".join(f"{k} = {v}" for k, v in r["divers"].items()))
         if r["tiers"]:
-            md.append("- Tiers : " + ", ".join(f"{t['tiers']} ({t['ko']} Ko, {t['blocage_ms']} ms)" for t in r["tiers"]))
+            md.append("- Tiers : " + ", ".join(f"{t['tiers']} ({t['ko']} Ko, " + (f"{t['blocage_ms']} ms)" if t.get("blocage_ms") is not None else f"{t.get('thread_ms', 0)} ms de thread principal)") for t in r["tiers"]))
         if r["opportunites"]:
             md.append("- Opportunités (par gain estimé) :")
             for o in r["opportunites"][:10]:
