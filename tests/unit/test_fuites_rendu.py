@@ -34,9 +34,7 @@ class TestFuites(unittest.TestCase):
                 "<p>En JavaScript, <code>undefined</code> signifie qu'une variable n'a pas reçu de valeur.</p>"
                 "<p>La valeur null indique l'absence de donnée dans la base, ce qui est différent d'une chaîne vide.</p>"
                 "<script>var a = undefined;</script><p hidden>undefined</p>")
-        # la page contient <code> : page technique, le jeton nu (<span>NaN</span>) n'est plus signalé (voir TestPageTechnique)
-        self.assertEqual(jetons(html), ["[object Object]", "null", "undefined", "undefined", "undefined", "{{ prenom }}"])
-        self.assertEqual(jetons(html.replace("<code>undefined</code>", "undefined")), ["NaN", "[object Object]", "null", "undefined", "undefined", "undefined", "{{ prenom }}"])
+        self.assertEqual(jetons(html), ["NaN", "[object Object]", "null", "undefined", "undefined", "undefined", "{{ prenom }}"])
 
     def test_crawl(self):
         page = ('<html lang="fr"><head><title>Fiche de formation de test</title></head><body><main>'
@@ -189,7 +187,7 @@ class TestComptage(unittest.TestCase):
 
     def test_resultat_json_strict_et_page_sans_fuite(self):
         r = ho.analyser("<p>Bonjour tout le monde</p>", {}, "https://ex.fr/", modules=[("fuites_rendu", fuites_rendu)])
-        self.assertEqual(r, {"fuites_rendu": {"fuites": []}})
+        self.assertEqual(r, {"fuites_rendu": {"fuites": []}})  # aucune clé « isolee » : une seule liste, les jetons isolés y sont marqués
         json.dumps(r, allow_nan=False)
 
 
@@ -197,39 +195,69 @@ def fuites(html, url="https://ex.fr/"):
     return ho.analyser(html, {}, url, modules=[("fuites_rendu", fuites_rendu)])["fuites_rendu"]["fuites"]
 
 
-class TestPageTechnique(unittest.TestCase):
-    """I1 : une page qui contient <code> ou <pre> est technique : seuls restent les jetons collés à une valeur ou à une étiquette."""
+def gravites(html, url="https://ex.fr/"):
+    """({jeton: n} des fuites hautes, {jeton: n} des fuites isolées de gravité basse)."""
+    haute, basse = {}, {}
+    for e in fuites(html, url):
+        d = basse if e.get("isolee") else haute
+        d[e["jeton"]] = d.get(e["jeton"], 0) + e["n"]
+    return haute, basse
+
+
+class TestJetonsIsoles(unittest.TestCase):
+    """Un jeton seul dans une cellule, un item ou un titre est rétrogradé (clé fuite_rendu_isolee, basse), jamais supprimé."""
 
     TABLEAU = ("<table><tr><th>Valeur</th><th>Signification</th></tr><tr><td>undefined</td><td>Variable non initialisée</td></tr>"
                "<tr><td>null</td><td>Absence volontaire</td></tr></table>")
 
-    def test_tableau_et_liste_de_jetons_sans_code_hors_page_technique_signales(self):
-        self.assertEqual(jetons("<ul><li>undefined</li></ul>"), ["undefined"])
+    def test_jeton_nu_est_isole(self):
+        for html in (self.TABLEAU, "<ul><li>undefined</li><li>null</li></ul>", "<h3>undefined</h3>", "<dl><dt>undefined</dt><dd>x</dd></dl>",
+                     "<p>Quelle valeur ? <button>undefined</button></p>", "<td>NaN</td>"):
+            with self.subTest(html=html):
+                haute, basse = gravites(html)
+                self.assertEqual(haute, {})
+                self.assertTrue(basse)
 
-    def test_tableau_liste_titre_dans_une_page_technique(self):
-        for corps in (self.TABLEAU, "<ul><li>undefined</li><li>null</li></ul>", "<h3>undefined</h3>", "<dl><dt>undefined</dt><dd>x</dd></dl>",
-                      "<p>Quelle valeur ? <button>undefined</button></p>", "<p>undefined undefined</p>", "<p>NaN/NaN</p>"):
-            with self.subTest(corps=corps):
-                self.assertEqual(jetons("<p>Exemple : <code>let a;</code></p>" + corps), [])
-                self.assertEqual(jetons("<pre>let a;</pre>" + corps), [])
+    def test_jamais_supprime_sur_page_technique(self):
+        for code in ("<p>Exemple : <code>let a;</code></p>", "<pre>let a;</pre>"):
+            haute, basse = gravites(code + "<h3>undefined</h3>")
+            self.assertEqual((haute, basse), ({}, {"undefined": 1}))
 
-    def test_valeur_collee_reste_signalee_dans_une_page_technique(self):
+    def test_carte_convex_a_trois_champs_vides(self):
+        carte = "<div class='card'><span>undefined</span><span>NaN</span><span>null</span></div>"
+        for page in (carte, "<pre>x</pre>" + carte, "<ul><li>undefined</li><li>null</li><li>NaN</li></ul>",
+                     "<dl><dt>Prix</dt><dd>undefined</dd><dt>Note</dt><dd>NaN</dd><dt>Stock</dt><dd>null</dd></dl>",
+                     "<table><tr><th>Prix</th><th>Note</th><th>Stock</th></tr><tr><td>undefined</td><td>NaN</td><td>null</td></tr></table>"):
+            with self.subTest(page=page):
+                self.assertEqual(sorted(jetons(page)), ["NaN", "null", "undefined"])
+
+    def test_valeur_collee_reste_haute_sur_page_technique(self):
         page = "<pre>let a;</pre>"
-        self.assertEqual(jetons(page + "<p>Prix : undefined €</p>"), ["undefined"])
-        self.assertEqual(jetons(page + "<p><span>NaN</span>%</p>"), ["NaN"])
-        self.assertEqual(jetons(page + "<p>Durée : NaN heures</p>"), ["NaN"])
-        self.assertEqual(jetons(page + "<p>Places restantes : null</p>"), ["null"])
-        self.assertEqual(jetons(page + '<img src="/a.png" alt="undefined">'), ["undefined"])
-        self.assertEqual(jetons(page + '<a href="/f/undefined">x</a>'), ["undefined"])
-        self.assertEqual(jetons(page + "<p>[object Object]</p>"), ["[object Object]"])
-        self.assertEqual(jetons(page + "<p>Mis à jour le Invalid Date</p>"), ["Invalid Date"])
+        for corps, jeton in (("<p>Prix : undefined €</p>", "undefined"), ("<p><span>NaN</span>%</p>", "NaN"), ("<p>Durée : NaN heures</p>", "NaN"),
+                             ("<p>Places restantes : null</p>", "null"), ('<img src="/a.png" alt="undefined">', "undefined"),
+                             ('<a href="/f/undefined">x</a>', "undefined"), ("<p>[object Object]</p>", "[object Object]"),
+                             ("<p>Mis à jour le Invalid Date</p>", "Invalid Date"), ("<p>Bonjour undefined</p>", "undefined")):
+            with self.subTest(corps=corps):
+                self.assertEqual(gravites(page + corps), ({jeton: 1}, {}))
 
-    def test_code_apres_la_fuite(self):
-        self.assertEqual(jetons("<ul><li>undefined</li></ul><p>Voir <code>x</code></p>"), [])
+    def test_fin_d_alt_est_isolee(self):
+        self.assertEqual(gravites('<img src="/a.png" alt="Photo de undefined">'), ({}, {"undefined": 1}))
+        self.assertEqual(gravites("<button>S'inscrire à undefined</button>"), ({}, {"undefined": 1}))
 
-    def test_trois_jetons_nus_distincts_sont_de_la_documentation(self):
-        self.assertEqual(jetons("<ul><li>undefined</li><li>null</li><li>NaN</li></ul>"), [])
-        self.assertEqual(jetons("<ul><li>undefined</li><li>NaN</li></ul>"), ["NaN", "undefined"])
+    def test_deux_cles_dans_le_crawl(self):
+        page = ('<html lang="fr"><head><title>Fiche de formation de test</title></head><body><main>'
+                '<h3>undefined</h3><p>Durée : NaN heures</p></main></body></html>')
+        issues, _ = crawler({"/": (200, HTML, page)})
+        self.assertEqual((issues["fuite_rendu"]["severity"], issues["fuite_rendu"]["domaine"]), ("haute", "Contenu"))
+        self.assertEqual([e["signature"] for e in issues["fuite_rendu"]["examples"]], ["NaN — « Durée : NaN heures »"])
+        self.assertEqual((issues["fuite_rendu_isolee"]["severity"], issues["fuite_rendu_isolee"]["domaine"]), ("basse", "Contenu"))
+        self.assertEqual([e["signature"] for e in issues["fuite_rendu_isolee"]["examples"]], ["undefined — « undefined »"])
+
+    def test_crawl_sans_jeton_isole_n_a_pas_la_cle_basse(self):
+        page = ('<html lang="fr"><head><title>Fiche de formation de test</title></head><body><main>'
+                '<p>Durée : NaN heures</p></main></body></html>')
+        issues, _ = crawler({"/": (200, HTML, page)})
+        self.assertNotIn("fuite_rendu_isolee", issues)
 
 
 class TestUrlsExternes(unittest.TestCase):
@@ -313,9 +341,24 @@ class TestTitreEtMetadonnees(unittest.TestCase):
             with self.subTest(titre=titre):
                 self.assertEqual(jetons(self.page(titre, description="Article sur la valeur null et undefined en JavaScript.")), [])
 
-    def test_titre_de_svg_et_page_technique(self):
-        self.assertEqual(jetons("<svg><title>undefined</title></svg>"), [])
-        self.assertEqual(jetons(self.page("undefined | Doc").replace("<p>Bonjour</p>", "<pre>x</pre>")), [])
+    def test_titre_toujours_lu_meme_sur_page_technique(self):
+        self.assertEqual(gravites("<svg><title>undefined</title></svg>"), ({}, {}))
+        base = self.page("undefined | Doc")
+        self.assertEqual(gravites(base.replace("<p>Bonjour</p>", "<pre>x</pre>")), ({"undefined": 1}, {}))
+        self.assertEqual(gravites(base.replace("<p>Bonjour</p>", "<code>x</code>")), ({"undefined": 1}, {}))
+        carte = "<span>undefined</span><span>NaN</span><span>null</span>"
+        haute, basse = gravites(base.replace("<p>Bonjour</p>", carte))
+        self.assertEqual((haute, sorted(basse)), ({"undefined": 1}, ["NaN", "null", "undefined"]))
+        self.assertEqual(gravites(self.page(description="undefined").replace("<p>Bonjour</p>", "<pre>x</pre>")), ({"undefined": 1}, {}))
+        self.assertEqual(gravites(self.page(og="null | Doc").replace("<p>Bonjour</p>", "<pre>x</pre>")), ({"null": 1}, {}))
+
+    def test_titre_qui_finit_par_un_jeton(self):
+        for titre in ("Formation undefined", "Formation NaN | Site", "Site | Formation null", "Formation undefined."):
+            with self.subTest(titre=titre):
+                self.assertEqual(gravites(self.page(titre))[0].keys(), {"undefined", "NaN", "null"} & set(titre.replace(".", "").split()))
+        for titre in ("Tout savoir sur undefined | Blog", "Qu'est-ce que NaN ? - Tutoriel", "Le rôle de null", "Pourquoi undefined"):
+            with self.subTest(titre=titre):
+                self.assertEqual(jetons(self.page(titre, description="Un article.")), [])
 
 
 class TestCasCourts(unittest.TestCase):
@@ -334,6 +377,16 @@ class TestCasCourts(unittest.TestCase):
             with self.subTest(html=html):
                 self.assertEqual(jetons(html), [])
 
+    def test_contextes_de_date(self):
+        for html in ("<p>Ajouté le undefined</p>", "<p>Du undefined au undefined</p>", "<p>Mis à jour le undefined</p>",
+                     "<p>Publié le : undefined</p>", "<p>Entre le undefined et le undefined</p>"):
+            with self.subTest(html=html):
+                self.assertEqual(gravites(html)[1], {})
+                self.assertTrue(gravites(html)[0], html)
+        for html in ("<p>null et undefined sont deux valeurs.</p>", "<p>Il l'a ajouté le jour même.</p>", "<p>De null à zéro, le pas est court.</p>"):
+            with self.subTest(html=html):
+                self.assertEqual(jetons(html), [])
+
     def test_etiquette_trop_longue_ou_pedagogique_n_est_pas_une_valeur(self):
         for html in ("<p>La propriété renvoie la valeur : null</p>", "<p>Q : que renvoie 0/0 ? R : NaN</p>", "<p>'a' * 2 : NaN</p>",
                      "<ul><li>Number : NaN</li><li>String : undefined</li></ul>", "<p>Par défaut : undefined</p>", "<p>Default: null</p>"):
@@ -348,7 +401,7 @@ class TestCasCourts(unittest.TestCase):
         self.assertEqual(jetons('<img src="/a.png" alt="Photo de undefined">'), ["undefined"])
         self.assertEqual(jetons('<img src="/a.png" alt="Formation NaN.">'), ["NaN"])
         self.assertEqual(jetons('<img src="/a.png" alt="La valeur undefined en JavaScript">'), [])
-        self.assertEqual(jetons('<img src="/a.png" alt="Schéma"><pre>x</pre><img src="/b.png" alt="Photo de undefined">'), [])
+        self.assertEqual(jetons('<img src="/a.png" alt="Schéma"><pre>x</pre><img src="/b.png" alt="Photo de undefined">'), ["undefined"])
         self.assertEqual(jetons('<input placeholder="undefined">'), ["undefined"])
 
 
