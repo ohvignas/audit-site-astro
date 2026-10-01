@@ -8,9 +8,10 @@
 #             MIN_FREE_MB (1200), SKIP_LIGHTHOUSE=1, SKIP_PDF=1 (pas de RAPPORT.pdf ; implicite avec SKIP_LIGHTHOUSE=1),
 #             CHROME_PATH (Chrome pour le PDF), AUDIT_INSECURE_TLS=1 (tests uniquement : certificat auto-signé),
 #             FORCE_PDF=1 (tests uniquement : imprime le PDF même avec SKIP_LIGHTHOUSE=1),
-#             DELAI_ETAPE (secondes par étape, défaut 1800 ; crawl : 1800 + 3 × MAX_PAGES ; code : 900),
-#             DELAI_<ÉTAPE> (ex. DELAI_CODE=900, DELAI_RAPPORT_HTML=600 : prioritaire sur DELAI_ETAPE)
-# Une étape qui dépasse son délai est arrêtée (elle et ses processus enfants) et notée ❌ « délai dépassé ».
+#             DELAI_ETAPE (secondes par étape, défaut 1800 ; crawl : 1800 + 3 × MAX_PAGES ; code : 900 ;
+#             lighthouse : 600 + 240 × LH_PAGES × RUNS, soit 1800 par défaut), DELAI_<ÉTAPE> (ex. DELAI_CODE=900,
+#             DELAI_RAPPORT_HTML=600 : prioritaire sur DELAI_ETAPE). 0 = pas de délai maximal pour l'étape (ou, avec DELAI_ETAPE=0, pour toutes).
+# Une étape qui dépasse son délai est arrêtée (elle et tous ses descendants : TERM, 5 s de grâce, puis KILL) et notée ❌ « délai dépassé ».
 # Ctrl-C arrête l'étape en cours et ses processus enfants (Chrome, node, curl), puis la collecte (code 130).
 # Fin de COLLECTE.md : « Dernières lignes des étapes en échec ou en avertissement » (15 lignes par étape, clés/jetons masqués).
 # Un PDF impossible (Chrome absent, RAM insuffisante) est un avertissement ⚠️ et ne fait pas échouer la collecte.
@@ -33,7 +34,7 @@ LOG="$D/COLLECTE.md"
 FAILS=0
 curl() { if [ "${AUDIT_INSECURE_TLS:-}" = "1" ]; then command curl -k "$@"; else command curl "$@"; fi; }
 . "$DIR/etapes.sh"
-rm -f "$D/.erreurs-etapes.md"
+rm -f "$D/.erreurs-etapes.md" "$D"/.delai-*
 trap interrompre_collecte INT TERM   # Ctrl-C : arrête l'étape en cours et ses descendants (Chrome, node, curl)
 
 echo "# Collecte — $URL — $(date '+%Y-%m-%d %H:%M')" > "$LOG"
@@ -246,12 +247,14 @@ case "$(basename "$AUDIT")" in
     step historique "$(dirname "$AUDIT")/index.html" valid_aucun python3 "$DIR/historique.py" "$(dirname "$AUDIT")";;
   *) echo "| historique | ⏭️ ignoré (dossier d'audit non daté AAAA-MM-JJ) | | |" >> "$LOG";;
 esac
+echo >> "$LOG"
+echo "Dossier d'audit : \`$AUDIT\`" >> "$LOG"
+# Section finale de COLLECTE.md (dernière : le fichier se termine par elle). À l'écran les extraits ont déjà été affichés sous chaque
+# étape : le récapitulatif final ne la répète pas.
 if [ -s "$D/.erreurs-etapes.md" ]; then
   { echo; echo "## Dernières lignes des étapes en échec ou en avertissement"; echo; cat "$D/.erreurs-etapes.md"; } >> "$LOG"
 fi
-echo >> "$LOG"
-echo "Dossier d'audit : \`$AUDIT\`" >> "$LOG"
 echo
-cat "$LOG"
+sed '/^## Dernières lignes des étapes en échec ou en avertissement$/,$d' "$LOG"
 [ "$FAILS" -gt 0 ] && exit 1
 exit 0

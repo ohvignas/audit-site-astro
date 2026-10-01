@@ -111,6 +111,10 @@ class TestValidationDesEtapes(unittest.TestCase):
                 # le crawl est ❌ : ses dernières lignes de journal sont recopiées en fin de COLLECTE.md, une seule fois à l'écran
                 self.assertIn("## Dernières lignes des étapes en échec ou en avertissement", collecte)
                 self.assertIn("### crawl", collecte)
+                self.assertGreater(collecte.index("## Dernières lignes des étapes"), collecte.index("Dossier d'audit"))  # la section est la dernière
+                dernier = [l for l in pathlib.Path(d, "data", ".log-crawl.txt").read_text(encoding="utf-8").splitlines() if l.strip()][-1].strip()
+                self.assertEqual(r.stdout.count(dernier), 1, r.stdout[-3000:])   # extrait affiché en direct, pas répété dans le récapitulatif final
+                self.assertNotIn("### crawl", r.stdout)
                 self.assertIn("⏭️", next(l for l in collecte.splitlines() if l.startswith("| lighthouse")))
                 self.assertIn("✅", next(l for l in collecte.splitlines() if l.startswith("| rapport-html")))
                 # dossier CORRECTIONS/ produit même sans donnée exploitable (plan vide), étape entre « rapport brut » et « rapport-html »
