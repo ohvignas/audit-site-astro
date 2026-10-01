@@ -14,6 +14,14 @@ mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 cd "$PROJ" || { echo "Projet introuvable : $PROJ"; exit 1; }
 REPORT="$OUT/project-checks.md"
+
+# borner [N] : texte d'un outil externe → UTF-8 valide (octets invalides remplacés), lignes coupées à N caractères (300 par défaut),
+# jamais au milieu d'un caractère multioctet (un `cut -c` en locale C trancherait les accents : project-checks.md deviendrait
+# illisible pour les rapports). LC_ALL=C est réservé aux sed/sort qui traitent des noms de fichiers (octets transmis tels quels).
+borner() { python3 -c 'import sys
+n = int(sys.argv[1])
+for l in sys.stdin.buffer:
+    print(l.decode("utf-8", "replace").rstrip("\n")[:n])' "${1:-300}"; }
 exec > >(tee "$REPORT") 2>&1
 
 if   [ -f pnpm-lock.yaml ]; then PM=pnpm
@@ -23,7 +31,11 @@ else PM=npm; fi
 
 echo "# Santé du projet — $(basename "$PWD")"
 echo
-echo "- Node : $(node -v 2>/dev/null || echo absent) — gestionnaire : $PM $($PM -v 2>/dev/null)"
+# nettoyer FICHIER : journal d'un outil externe → UTF-8 valide (les grep/tail/sed qui suivent ne rencontrent plus d'octet invalide)
+nettoyer() { borner 4000 < "$1" > "$1.tmp" && mv "$1.tmp" "$1"; }
+
+PM_V=$([ -d node_modules ] && $PM -v 2>/dev/null)
+echo "- Node : $(node -v 2>/dev/null || echo absent) — gestionnaire : $PM${PM_V:+ $PM_V}"
 echo "- Astro installé : $(node -p "require('./node_modules/astro/package.json').version" 2>/dev/null || echo 'node_modules absent')"
 echo "- Convex installé : $(node -p "require('./node_modules/convex/package.json').version" 2>/dev/null || echo '—')"
 echo "- Git : $(git rev-parse --abbrev-ref HEAD 2>/dev/null) @ $(git rev-parse --short HEAD 2>/dev/null) — $(git status --porcelain 2>/dev/null | wc -l | tr -d ' ') fichier(s) modifié(s) non commité(s)"
@@ -33,6 +45,9 @@ echo
 
 echo "## Dépendances obsolètes"
 echo
+if [ ! -d node_modules ]; then
+  echo "- node_modules absent : non vérifié (lancer \`$PM install\` puis relancer)"
+else
 if [ "$PM" = "npm" ]; then
   npm outdated --json > "$OUT/outdated.json" 2>/dev/null
   python3 - "$OUT/outdated.json" <<'PY'
@@ -56,12 +71,16 @@ if rows:
         print(f"| {n} | {c} | {w} | {l} | {'⚠️ oui' if not minor else 'non'} |")
 PY
 else
-  $PM outdated 2>&1 | head -60
+  $PM outdated 2>&1 | head -60 | borner
+fi
 fi
 echo
 
 echo "## Vulnérabilités connues (dépendances de production)"
 echo
+if [ ! -d node_modules ]; then
+  echo "- node_modules absent : non vérifié (lancer \`$PM install\` puis relancer)"
+else
 if [ "$PM" = "npm" ]; then
   npm audit --omit=dev --json > "$OUT/audit.json" 2>/dev/null
   python3 - "$OUT/audit.json" <<'PY'
@@ -80,7 +99,8 @@ for name, v in list(d.get("vulnerabilities", {}).items())[:30]:
         print(f"- **{v['severity']}** {name} {('— ' + via[0]) if via else ''} ({fixs})")
 PY
 else
-  $PM audit --prod 2>&1 | tail -30
+  $PM audit --prod 2>&1 | tail -30 | borner
+fi
 fi
 echo
 
@@ -88,6 +108,7 @@ echo "## astro check (types et diagnostics)"
 echo
 if [ -d node_modules/astro ]; then
   npx --no-install astro check > "$OUT/astro-check.txt" 2>&1
+  nettoyer "$OUT/astro-check.txt"
   tail -5 "$OUT/astro-check.txt" | sed 's/^/    /'
   errs=$(grep -cE '\berror\b' "$OUT/astro-check.txt" 2>/dev/null); warns=$(grep -cE '\bwarning\b' "$OUT/astro-check.txt" 2>/dev/null)
   echo
@@ -107,16 +128,17 @@ if [ "$BUILD" = "--build" ]; then
     start=$(date +%s)
     npx --no-install astro build --outDir "$OUT/build" > "$OUT/build.log" 2>&1
     code=$?
+    nettoyer "$OUT/build.log"
     echo "- Code de sortie : $code — durée : $(( $(date +%s) - start )) s"
     w=$(grep -ciE 'warn' "$OUT/build.log"); echo "- Avertissements dans le log : $w"
-    grep -iE 'warn|error' "$OUT/build.log" | sort | uniq -c | sort -rn | head -15 | sed 's/^/    /'
+    grep -iE 'warn|error' "$OUT/build.log" | borner 300 | sort | uniq -c | sort -rn | head -15 | sed 's/^/    /'
     if [ -d "$OUT/build" ]; then
       echo
       echo "- Pages prérendues (HTML) : $(find "$OUT/build" -name '*.html' | wc -l | tr -d ' ')"
       echo "- Poids des assets client : $(du -sh "$OUT/build/client" 2>/dev/null | cut -f1 || du -sh "$OUT/build" | cut -f1)"
       echo "- Images les plus lourdes du build :"
       find "$OUT/build" -type f \( -name '*.jpg' -o -name '*.jpeg' -o -name '*.png' -o -name '*.webp' -o -name '*.avif' -o -name '*.gif' \) -size +150k -exec ls -lh {} \; 2>/dev/null \
-        | awk '{print "    - " $5 " " $9}' | sed "s#$OUT/build/##" | sort -k2 -rh | head -10
+        | awk '{print "    - " $5 " " $9}' | LC_ALL=C sed "s#$OUT/build/##" | LC_ALL=C sort -k2 -rh | head -10
     fi
   else
     echo "- node_modules absent : build impossible"
@@ -126,7 +148,7 @@ fi
 
 echo "## Images sources lourdes (public/ et src/)"
 echo
-find public src -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.webp' \) -size +200k -exec ls -lh {} \; 2>/dev/null \
-  | awk '{print "- " $5 " " $9}' | head -20
+find public src -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.webp' \) -size +200k 2>/dev/null \
+  | LC_ALL=C sort | head -20 | while IFS= read -r f; do printf -- '- %s %s\n' "$(du -h "$f" | cut -f1)" "$f"; done
 echo
 echo "> Les images de public/ ne passent PAS par l'optimisation d'Astro : les déplacer dans src/assets et utiliser <Image>."

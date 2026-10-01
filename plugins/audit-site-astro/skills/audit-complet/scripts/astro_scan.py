@@ -23,8 +23,10 @@ Sorties : code-scan.json, code-scan.md
 import argparse
 import gzip
 import json
+import os
 import re
 import sys
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -33,10 +35,35 @@ EXCLUDE_DIRS = {"node_modules", ".git", "dist", ".astro", ".vercel", ".netlify",
 SRC_EXT = {".astro", ".tsx", ".jsx", ".ts", ".js", ".mjs", ".svelte", ".vue", ".mdx", ".md"}
 CLIENT_EXT = {".tsx", ".jsx", ".svelte", ".vue"}
 
+
+def _lire_env(nom, defaut, conv):
+    """Variable d'environnement numérique ; une valeur invalide retombe sur la valeur par défaut (jamais d'échec à l'import)."""
+    try:
+        return conv(os.environ.get(nom, defaut))
+    except (TypeError, ValueError):
+        return conv(defaut)
+
+
+MAX_OCTETS = _lire_env("ASTRO_SCAN_MAX_OCTETS", "1500000", int)
+BUDGET_S = _lire_env("ASTRO_SCAN_BUDGET_S", "300", float)
+# État d'un scan : remis à zéro par reinitialiser() au début de main() (jamais hérité d'un scan précédent ni de l'import)
+IGNORES = []          # fichiers non analysés et pourquoi (jamais un plantage de l'étape), sans doublon
+_IGNORES_VUS = set()  # (fichier, raison) déjà notés : dédoublonnage en O(1)
+NON_LUS = set()       # fichiers non lus parce que le budget de temps est épuisé
+INTERROMPU = False    # vrai dès que le budget a interrompu une étape : plus aucune conclusion d'absence
+_DEBUT = None         # départ du chronomètre (fixé par reinitialiser(), sinon au premier test du budget)
+RACINE = None         # racine du projet : chemins relatifs des fichiers notés par read() quand elle n'est pas passée
+
 findings = []
 
 
 def add(sev, cat, msg, where=None, fix=None):
+    findings.append({"severite": sev, "categorie": cat, "constat": msg, "ou": where or [], "piste": fix or ""})
+
+
+def add_entree(sev, cat, msg, where=None, fix=None):
+    """Constat sur l'entrée du scan (fichiers ignorés, budget épuisé, étape en erreur), pas sur un défaut du site : pas de fiche
+    (comme « package.json introuvable »). Nom distinct de add() pour rester hors de la couverture des fiches."""
     findings.append({"severite": sev, "categorie": cat, "constat": msg, "ou": where or [], "piste": fix or ""})
 
 
@@ -47,17 +74,141 @@ def rel(p, root):
         return str(p)
 
 
-def iter_files(root, exts):
-    for p in root.rglob("*"):
-        if p.is_file() and p.suffix in exts and not (set(p.relative_to(root).parts) & EXCLUDE_DIRS):
-            yield p
+def reinitialiser(root=None):
+    """Remet à zéro l'état d'un scan (constats, fichiers ignorés, budget). Appelée au début de main()."""
+    global RACINE, INTERROMPU, _DEBUT
+    findings.clear()
+    IGNORES.clear()
+    _IGNORES_VUS.clear()
+    NON_LUS.clear()
+    RACINE, INTERROMPU, _DEBUT = root, False, time.monotonic()
 
 
-def read(p):
+def ignorer(p, raison, root=None):
+    """Note un fichier non analysé. Chemin relatif à `root` (sinon à RACINE, sinon le seul nom du fichier : jamais un
+    chemin absolu, qui changerait d'une machine à l'autre)."""
+    p, root = Path(p), root or RACINE
+    cle = (rel(p, root) if root else p.name, raison)
+    if cle not in _IGNORES_VUS:  # un fichier est lu par plusieurs étapes (scan_src, scan_astro_features)
+        _IGNORES_VUS.add(cle)
+        IGNORES.append({"fichier": cle[0], "raison": raison})
+
+
+def budget_epuise():
+    """Vrai au-delà de ASTRO_SCAN_BUDGET_S secondes : le scan s'arrête proprement (sorties écrites) et plus aucun
+    constat d'absence n'est émis (voir INTERROMPU)."""
+    global INTERROMPU, _DEBUT
+    if _DEBUT is None:
+        _DEBUT = time.monotonic()
+    if time.monotonic() - _DEBUT <= BUDGET_S:
+        return False
+    INTERROMPU = True
+    return True
+
+
+def non_lus(fichiers, root):
+    NON_LUS.update(rel(f, root) for f in fichiers)
+
+
+def _dans(chemin, base):
+    """`chemin` est `base` ou lui est sous-jacent (chemins réels)."""
+    return chemin == base or chemin.startswith(base.rstrip(os.sep) + os.sep)
+
+
+def iter_files(dossier, exts, racine=None):
+    """Fichiers de `dossier` en ordre trié (ceux d'un dossier, puis ses sous-dossiers), sans descendre dans EXCLUDE_DIRS.
+    Les liens symboliques qui restent dans le projet (`racine`) sont suivis, avec une garde de cycle sur le chemin réel :
+    une cible déjà couverte par le parcours (dossier parent ou sous-dossier du dossier parcouru, cible déjà vue) n'est pas relue.
+    Un lien dont la cible sort du projet n'est jamais suivi : il est noté (« lien hors du projet ») ; un lien cassé aussi."""
+    racine_p = Path(racine or dossier)
+    racine_r, debut_r = os.path.realpath(racine_p), os.path.realpath(dossier)
+    vus = set()
+
+    def exclu(reel):
+        try:
+            return bool(set(Path(reel).relative_to(racine_r).parts) & EXCLUDE_DIRS)
+        except ValueError:
+            return False
+
+    def parcourir(d):
+        reel = os.path.realpath(d)
+        if reel in vus:
+            return
+        vus.add(reel)
+        try:
+            noms = sorted(os.listdir(d))
+        except OSError as e:
+            ignorer(d, f"fichier ignoré (illisible : {e.strerror or e})", racine_p)
+            return
+        fichiers, dossiers = [], []
+        for nom in noms:
+            p = Path(d, nom)
+            if p.is_symlink():
+                if nom in EXCLUDE_DIRS:
+                    continue
+                cible = os.path.realpath(p)
+                if not os.path.exists(cible):
+                    if p.suffix in exts:
+                        ignorer(p, "fichier ignoré (lien symbolique cassé)", racine_p)
+                    continue
+                est_dossier = os.path.isdir(cible)
+                if not est_dossier and p.suffix not in exts:
+                    continue
+                if not _dans(cible, racine_r):
+                    ignorer(p, "fichier ignoré (lien hors du projet)", racine_p)
+                    continue
+                if exclu(cible) or _dans(cible, debut_r) or (est_dossier and _dans(debut_r, cible)):
+                    continue  # déjà couvert par le parcours (ou exclu), ou cycle : rien n'est perdu
+                (dossiers if est_dossier else fichiers).append(p)
+            elif p.is_dir():
+                if nom not in EXCLUDE_DIRS:
+                    dossiers.append(p)
+            elif p.suffix in exts:
+                fichiers.append(p)
+        yield from fichiers
+        for sous in dossiers:
+            yield from parcourir(sous)
+
+    yield from parcourir(Path(dossier))
+
+
+def _trop_gros(taille):
+    return f"fichier ignoré (trop gros : {taille / 1e6:.1f} Mo > {MAX_OCTETS / 1e6:.1f} Mo)"
+
+
+def read(p, root=None):
+    """Fichiers de configuration : texte, ou "" s'il est absent, illisible ou démesuré (les deux derniers cas notés)."""
     try:
+        taille = p.stat().st_size
+        if taille > MAX_OCTETS:
+            ignorer(p, _trop_gros(taille), root)
+            return ""
         return p.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return ""
+    except OSError as e:
+        ignorer(p, f"fichier ignoré (illisible : {e.strerror or e})", root)
+        return ""
     except Exception:
         return ""
+
+
+def lire_source(p, root):
+    """Texte d'un fichier source, ou None (raison notée dans IGNORES) : trop gros, binaire ou illisible.
+    Les fichiers minifiés sont analysés (v2.0.1 : lignes longues sûres)."""
+    try:
+        taille = p.stat().st_size
+        if taille > MAX_OCTETS:
+            ignorer(p, _trop_gros(taille), root)
+            return None
+        brut = p.read_bytes()
+    except OSError as e:
+        ignorer(p, f"fichier ignoré (illisible : {e.strerror or e})", root)
+        return None
+    if b"\x00" in brut[:8192]:
+        ignorer(p, "fichier ignoré (binaire)", root)
+        return None
+    return brut.decode("utf-8", errors="replace")
 
 
 def sans_commentaires(t):
@@ -165,7 +316,11 @@ def scan_package(root, report):
     if not pj.exists():
         add("haute", "projet", "package.json introuvable — est-ce bien la racine du projet Astro ?")
         return {}
-    data = json.loads(read(pj) or "{}")
+    try:
+        data = json.loads(read(pj, root) or "{}")
+    except ValueError as e:
+        ignorer(pj, f"fichier ignoré (JSON invalide : {getattr(e, 'msg', e)}, ligne {getattr(e, 'lineno', '?')})", root)
+        data = {}
     deps = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
     report["package"] = {
         "astro": deps.get("astro"), "convex": deps.get("convex"),
@@ -195,7 +350,7 @@ def scan_astro_config(root, report):
     if not cfg:
         add("haute", "config", "astro.config.* introuvable")
         return {}
-    t = sans_commentaires(read(cfg))
+    t = sans_commentaires(read(cfg, root))
     name = rel(cfg, root)
 
     def val(key):
@@ -268,6 +423,42 @@ def img_issues(text):
     return no_alt, no_dims
 
 
+def _scanner_source(f, t, r, hyd, hyd_where, raw_imgs, img_no_alt, img_no_dims, compteurs, set_html, env_client, third,
+                    gfonts, inline_scripts, storage_imgs):
+    for i, line in lignes_completes(t, RX["client"], 200):
+        for d in RX["client"].findall(line):
+            hyd[d] += 1
+            comp = re.search(r"<([A-Z][\w.]*)", line)
+            hyd_where[d].append(f"{r}:{i} {comp.group(1) if comp else ''}".strip())
+    if f.suffix in (".astro", ".tsx", ".jsx", ".svelte", ".vue", ".mdx"):
+        imgs = lines_matching(t, RX["img_tag"])
+        raw_imgs += [f"{r}:{i}" for i, _ in imgs]
+        na, nd = img_issues(t)
+        img_no_alt += [f"{r}:{i}" for i in na]
+        img_no_dims += [f"{r}:{i}" for i in nd]
+        compteurs["image_comp"] += len(RX["image_comp"].findall(t))
+        if RX["storage_url"].search(t) and imgs:
+            storage_imgs.append(r)
+    # JSON-LD (<script type="application/ld+json" set:html={…}>) : pas du HTML interprété, pas un XSS.
+    # La balise peut s'étaler sur plusieurs lignes (Prettier) : on exclut les lignes de toute la balise ouvrante.
+    lignes_jsonld = set()
+    for m in re.finditer(r"<script\b[^>]*>", t, re.I):
+        if RX["jsonld_script"].search(m.group(0)):
+            debut = t.count("\n", 0, m.start()) + 1
+            lignes_jsonld.update(range(debut, debut + m.group(0).count("\n") + 1))
+    set_html += [f"{r}:{i} {l}" for i, l in lines_matching(t, RX["set_html"]) if i not in lignes_jsonld]
+    if f.suffix in CLIENT_EXT or ("<script" in t and f.suffix == ".astro"):
+        # dans un .astro, seul le contenu des <script> part au navigateur
+        scope = t if f.suffix in CLIENT_EXT else "\n".join(re.findall(r"<script\b[^>]*>(.*?)</script>", t, re.S))
+        for m in RX["env_private"].finditer(scope):
+            env_client.append(f"{r} : import.meta.env.{m.group(1)}")
+        for m in RX["process_env"].finditer(scope):
+            env_client.append(f"{r} : process.env.{m.group(1)}")
+    third += [f"{r}:{i} {RX['third'].search(l).group(0)}" for i, l in lignes_completes(t, RX["third"])]
+    gfonts += [f"{r}:{i}" for i, _ in lines_matching(t, RX["gfonts"])]
+    inline_scripts += [f"{r}:{i}" for i, _ in lines_matching(t, RX["is_inline"])]
+
+
 def scan_src(root, report):
     src = root / "src"
     if not src.exists():
@@ -275,43 +466,22 @@ def scan_src(root, report):
         return
     hyd = Counter()
     hyd_where = defaultdict(list)
-    raw_imgs, img_no_alt, img_no_dims, image_comp = [], [], [], 0
+    raw_imgs, img_no_alt, img_no_dims, compteurs = [], [], [], {"image_comp": 0}
     set_html, env_client, third, gfonts, inline_scripts, storage_imgs = [], [], [], [], [], []
-    for f in iter_files(src, SRC_EXT):
-        t = read(f)
-        r = rel(f, root)
-        for i, line in lignes_completes(t, RX["client"], 200):
-            for d in RX["client"].findall(line):
-                hyd[d] += 1
-                comp = re.search(r"<([A-Z][\w.]*)", line)
-                hyd_where[d].append(f"{r}:{i} {comp.group(1) if comp else ''}".strip())
-        if f.suffix in (".astro", ".tsx", ".jsx", ".svelte", ".vue", ".mdx"):
-            imgs = lines_matching(t, RX["img_tag"])
-            raw_imgs += [f"{r}:{i}" for i, _ in imgs]
-            na, nd = img_issues(t)
-            img_no_alt += [f"{r}:{i}" for i in na]
-            img_no_dims += [f"{r}:{i}" for i in nd]
-            image_comp += len(RX["image_comp"].findall(t))
-            if RX["storage_url"].search(t) and imgs:
-                storage_imgs.append(r)
-        # JSON-LD (<script type="application/ld+json" set:html={…}>) : pas du HTML interprété, pas un XSS.
-        # La balise peut s'étaler sur plusieurs lignes (Prettier) : on exclut les lignes de toute la balise ouvrante.
-        lignes_jsonld = set()
-        for m in re.finditer(r"<script\b[^>]*>", t, re.I):
-            if RX["jsonld_script"].search(m.group(0)):
-                debut = t.count("\n", 0, m.start()) + 1
-                lignes_jsonld.update(range(debut, debut + m.group(0).count("\n") + 1))
-        set_html += [f"{r}:{i} {l}" for i, l in lines_matching(t, RX["set_html"]) if i not in lignes_jsonld]
-        if f.suffix in CLIENT_EXT or ("<script" in t and f.suffix == ".astro"):
-            # dans un .astro, seul le contenu des <script> part au navigateur
-            scope = t if f.suffix in CLIENT_EXT else "\n".join(re.findall(r"<script\b[^>]*>(.*?)</script>", t, re.S))
-            for m in RX["env_private"].finditer(scope):
-                env_client.append(f"{r} : import.meta.env.{m.group(1)}")
-            for m in RX["process_env"].finditer(scope):
-                env_client.append(f"{r} : process.env.{m.group(1)}")
-        third += [f"{r}:{i} {RX['third'].search(l).group(0)}" for i, l in lignes_completes(t, RX["third"])]
-        gfonts += [f"{r}:{i}" for i, _ in lines_matching(t, RX["gfonts"])]
-        inline_scripts += [f"{r}:{i}" for i, _ in lines_matching(t, RX["is_inline"])]
+    fichiers_src = list(iter_files(src, SRC_EXT, root))
+    for n, f in enumerate(fichiers_src):
+        if budget_epuise():
+            non_lus(fichiers_src[n:], root)
+            break
+        t = lire_source(f, root)
+        if t is None:
+            continue
+        try:
+            _scanner_source(f, t, rel(f, root), hyd, hyd_where, raw_imgs, img_no_alt, img_no_dims, compteurs, set_html,
+                            env_client, third, gfonts, inline_scripts, storage_imgs)
+        except Exception as e:  # une règle qui plante ignore ce fichier, pas toute l'étape
+            ignorer(f, f"fichier ignoré (erreur {type(e).__name__} pendant l'analyse)", root)
+    image_comp = compteurs["image_comp"]
 
     report["hydratation"] = {"compte": dict(hyd), "ou": {k: v[:40] for k, v in hyd_where.items()}}
     report["images"] = {"img_brut": len(raw_imgs), "Image_Picture": image_comp, "sans_alt": img_no_alt[:60],
@@ -355,11 +525,15 @@ def scan_src(root, report):
         add("info", "performance", f"{len(third)} script(s)/embed(s) tiers repérés", third[:20],
             "charger après consentement et/ou à l'interaction (façade YouTube/Vimeo), Partytown pour les tags analytics")
 
+    if INTERROMPU:  # fichiers non lus : ni layouts, ni routes, ni sitemap/robots (conclusions d'absence) — voir main()
+        report["layouts"], report["routes"] = {}, {}
+        return
+
     # --- SEO dans les layouts / head
-    heads = [f for f in iter_files(src, {".astro"}) if re.search(r"<head\b", read(f))]
+    heads = [f for f in iter_files(src, {".astro"}, root) if re.search(r"<head\b", read(f, root))]
     head_report = {}
     for f in heads:
-        t = read(f)
+        t = read(f, root)
         head_report[rel(f, root)] = {
             "title": bool(re.search(r"<title\b", t)),
             "description": bool(re.search(r"name=[\"']description", t)),
@@ -390,10 +564,10 @@ def scan_src(root, report):
         if not any((pages / n).exists() for n in ("404.astro", "404.md", "404.mdx")):
             add("moyenne", "seo", "Pas de src/pages/404.astro : page d'erreur par défaut, peu utile", fix="créer une 404 "
                 "avec recherche/liens clés, renvoyant bien le statut 404")
-        dyn = [f for f in iter_files(pages, {".astro", ".ts", ".js"}) if "[" in f.name]
+        dyn = [f for f in iter_files(pages, {".astro", ".ts", ".js"}, root) if "[" in f.name]
         risky = []
         for f in dyn:
-            t = read(f)
+            t = read(f, root)
             if "getStaticPaths" in t and "prerender = false" not in t:
                 continue  # page statique : Astro renvoie 404 pour les chemins inconnus
             handles_404 = re.search(r"status\s*[:=]\s*404|Astro\.redirect\(\s*['\"]/404|rewrite\(\s*['\"]/404|"
@@ -405,15 +579,15 @@ def scan_src(root, report):
             add("haute", "seo", "Routes SSR dynamiques sans gestion explicite du 404 : une URL inexistante peut "
                                 "renvoyer 200 (soft 404, pages vides indexées)", risky,
                 "si l'élément n'existe pas : return Astro.rewrite('/404') (ou Astro.response.status = 404)")
-        srv = [rel(f, root) for f in iter_files(pages, {".astro"}) if "prerender = false" in read(f)]
-        pre = [rel(f, root) for f in iter_files(pages, {".astro"}) if "prerender = true" in read(f)]
+        srv = [rel(f, root) for f in iter_files(pages, {".astro"}, root) if "prerender = false" in read(f, root)]
+        pre = [rel(f, root) for f in iter_files(pages, {".astro"}, root) if "prerender = true" in read(f, root)]
         report["routes"]["prerender_false"] = srv
         report["routes"]["prerender_true"] = pre
         eps = {}
-        for f in iter_files(pages, {".ts", ".js"}):
+        for f in iter_files(pages, {".ts", ".js"}, root):
             n = f.name.lower()
             if any(k in n for k in ("sitemap", "robots", "llms", "rss", "feed")):
-                eps[rel(f, root)] = read(f)
+                eps[rel(f, root)] = read(f, root)
         report["routes"]["endpoints_seo"] = list(eps)
         for name, t in eps.items():
             if "sitemap" in name:
@@ -436,7 +610,7 @@ def scan_src(root, report):
     rob = pub / "robots.txt"
     has_robots_ep = any("robots" in n for n in report["routes"].get("endpoints_seo", []))
     if rob.exists():
-        rt = read(rob)
+        rt = read(rob, root)
         for i, l in enumerate(rt.splitlines(), 1):
             if l.lower().startswith("sitemap:") and not re.search(r"sitemap:\s*https?://", l, re.I):
                 add("moyenne", "seo", f"public/robots.txt:{i} Sitemap relatif « {l.strip()} » (URL absolue exigée)",
@@ -466,7 +640,10 @@ def astro_version(root):
     for src in (root / "node_modules/astro/package.json", root / "package.json"):
         if not src.exists():
             continue
-        data = json.loads(read(src) or "{}")
+        try:
+            data = json.loads(read(src, root) or "{}")
+        except ValueError:
+            continue
         v = data.get("version") if src.parent.name == "astro" else \
             {**data.get("dependencies", {}), **data.get("devDependencies", {})}.get("astro")
         m = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", v or "")
@@ -476,6 +653,8 @@ def astro_version(root):
 
 
 def latest_astro():
+    if os.environ.get("ASTRO_SCAN_HORS_LIGNE") == "1":
+        return None
     try:
         import urllib.request
         with urllib.request.urlopen("https://registry.npmjs.org/astro/latest", timeout=6) as r:
@@ -488,7 +667,7 @@ def latest_astro():
 def scan_astro_features(root, report):
     cfg = next((root / f for f in ("astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts")
                 if (root / f).exists()), None)
-    t = sans_commentaires(read(cfg)) if cfg else ""
+    t = sans_commentaires(read(cfg, root)) if cfg else ""
     cname = rel(cfg, root) if cfg else "astro.config"
     v = astro_version(root) or (0, 0, 0)
     latest = latest_astro()
@@ -500,8 +679,17 @@ def scan_astro_features(root, report):
             f"planifier la montée de version en suivant {DOC}/guides/upgrade-to/v{latest[0]}/ (une majeure à la fois)")
 
     src = root / "src"
-    files = list(iter_files(src, {".astro", ".mdx", ".md", ".ts", ".tsx", ".jsx"})) if src.exists() else []
-    texts = {f: read(f) for f in files}
+    files = list(iter_files(src, {".astro", ".mdx", ".md", ".ts", ".tsx", ".jsx"}, root)) if src.exists() else []
+    texts = {}
+    for n, f in enumerate(files):
+        if budget_epuise():
+            non_lus(files[n:], root)
+            break
+        contenu = lire_source(f, root)  # (pas `t` : c'est le texte de astro.config, utilisé plus bas)
+        if contenu is not None:
+            texts[f] = contenu
+    if INTERROMPU:  # `texts` est partiel : « aucune CSP », « aucune <Image priority> »… seraient faux — voir main()
+        return
     astro_like = {f: tx for f, tx in texts.items() if f.suffix in (".astro", ".mdx")}
     image_tags = []  # (fichier, ligne, balise)
     for f, tx in astro_like.items():
@@ -565,7 +753,7 @@ def scan_astro_features(root, report):
     # --- collections de contenu : image() plutôt que z.string()
     for cc in (root / "src/content.config.ts", root / "src/content/config.ts", root / "src/content.config.mjs"):
         if cc.exists():
-            ct = read(cc)
+            ct = read(cc, root)
             bad = [f"{rel(cc, root)}:{i}" for i, l in lines_matching(ct, re.compile(
                 r"\b(image|images|cover|thumbnail|hero|heroImage|avatar|photo|visuel|banner)\s*:\s*z\.string\(\)"))]
             if bad:
@@ -673,35 +861,43 @@ def scan_convex(root, report):
     rep = {"fonctions": Counter(), "tables": 0, "index": 0}
     schema = cdir / "schema.ts"
     if schema.exists():
-        st = read(schema)
+        st = read(schema, root)
         rep["tables"] = len(re.findall(r"defineTable\(", st))
         rep["index"] = len(re.findall(r"\.index\(", st)) + len(re.findall(r"\.searchIndex\(", st))
     no_auth, no_args, filters, collects, anys = [], [], [], [], []
-    for f in iter_files(cdir, {".ts", ".js"}):
-        if "_generated" in f.parts:
+    fichiers_convex = [f for f in iter_files(cdir, {".ts", ".js"}, root) if "_generated" not in f.parts]
+    for n, f in enumerate(fichiers_convex):
+        if budget_epuise():
+            non_lus(fichiers_convex[n:], root)
+            break
+        t = lire_source(f, root)
+        if t is None:
             continue
-        t = read(f)
-        r = rel(f, root)
-        matches = list(FN_RX.finditer(t))
-        for k, m in enumerate(matches):
-            name, kind = m.group(1), m.group(2)
-            rep["fonctions"][kind] += 1
-            body = t[m.start(): matches[k + 1].start() if k + 1 < len(matches) else len(t)]
-            line = t.count("\n", 0, m.start()) + 1
-            if kind in ("query", "mutation", "action"):
-                if not re.search(r"\bargs\s*:", body[:1500]):
-                    no_args.append(f"{r}:{line} {kind} {name}")
-                if kind in ("mutation", "action") and not AUTH_RX.search(body):
-                    no_auth.append(f"{r}:{line} {kind} {name}")
-        for i, l in lines_matching(t, re.compile(r"\.filter\("), 200):
-            ctx = "\n".join(t.splitlines()[max(0, i - 4): i])
-            if "ctx.db.query" in ctx and "withIndex" not in ctx and "withSearchIndex" not in ctx:
-                filters.append(f"{r}:{i}")
-        for i, l in lines_matching(t, re.compile(r"\.collect\(\)"), 200):
-            ctx = "\n".join(t.splitlines()[max(0, i - 4): i])
-            if "withIndex" not in ctx and ".take(" not in ctx:
-                collects.append(f"{r}:{i}")
-        anys += [f"{r}:{i}" for i, _ in lines_matching(t, re.compile(r"v\.any\(\)"))]
+        try:
+            r = rel(f, root)
+            lignes = t.splitlines()
+            matches = list(FN_RX.finditer(t))
+            for k, m in enumerate(matches):
+                name, kind = m.group(1), m.group(2)
+                rep["fonctions"][kind] += 1
+                body = t[m.start(): matches[k + 1].start() if k + 1 < len(matches) else len(t)]
+                line = t.count("\n", 0, m.start()) + 1
+                if kind in ("query", "mutation", "action"):
+                    if not re.search(r"\bargs\s*:", body[:1500]):
+                        no_args.append(f"{r}:{line} {kind} {name}")
+                    if kind in ("mutation", "action") and not AUTH_RX.search(body):
+                        no_auth.append(f"{r}:{line} {kind} {name}")
+            for i, l in lines_matching(t, re.compile(r"\.filter\("), 200):
+                ctx = "\n".join(lignes[max(0, i - 4): i])
+                if "ctx.db.query" in ctx and "withIndex" not in ctx and "withSearchIndex" not in ctx:
+                    filters.append(f"{r}:{i}")
+            for i, l in lines_matching(t, re.compile(r"\.collect\(\)"), 200):
+                ctx = "\n".join(lignes[max(0, i - 4): i])
+                if "withIndex" not in ctx and ".take(" not in ctx:
+                    collects.append(f"{r}:{i}")
+            anys += [f"{r}:{i}" for i, _ in lines_matching(t, re.compile(r"v\.any\(\)"))]
+        except Exception as e:  # une règle qui plante ignore ce fichier, pas toute l'étape
+            ignorer(f, f"fichier ignoré (erreur {type(e).__name__} pendant l'analyse)", root)
     rep["fonctions"] = dict(rep["fonctions"])
     report["convex"] = rep
     if no_auth:
@@ -735,10 +931,20 @@ def scan_dist(root, dist, report):
         else:
             report["bundle"] = None
             return
-    files = [f for f in d.rglob("*") if f.is_file() and f.suffix in (".js", ".css")]
+    files = list(iter_files(d, {".js", ".css"}, root))
     rows = []
-    for f in files:
-        raw = f.read_bytes()
+    for n, f in enumerate(files):
+        if budget_epuise():
+            non_lus(files[n:], root)
+            break
+        try:
+            if f.stat().st_size > 20_000_000:
+                ignorer(f, "fichier ignoré (trop gros pour la mesure gzip : > 20 Mo)", root)
+                continue
+            raw = f.read_bytes()
+        except OSError as e:
+            ignorer(f, f"fichier ignoré (illisible : {e.strerror or e})", root)
+            continue
         rows.append((len(raw), len(gzip.compress(raw, 6)), rel(f, root)))
     rows.sort(reverse=True)
     tot_js = sum(r[1] for r in rows if r[2].endswith(".js"))
@@ -755,7 +961,7 @@ def scan_dist(root, dist, report):
 # --------------------------------------------------------------------------- git / secrets
 
 def scan_repo(root, report):
-    gi = read(root / ".gitignore") if (root / ".gitignore").exists() else ""
+    gi = read(root / ".gitignore", root) if (root / ".gitignore").exists() else ""
     if ".env" not in gi:
         add("haute", "securite", ".env absent du .gitignore", [".gitignore"])
     tracked = []
@@ -773,6 +979,31 @@ def scan_repo(root, report):
 
 # --------------------------------------------------------------------------- main
 
+MAX_LISTE = 50  # entrées de `fichiers_ignores` conservées (le reste : « … et N autres »)
+
+
+def _exemples(lignes, n=10):
+    return lignes[:n] + ([f"… et {len(lignes) - n} autres"] if len(lignes) > n else [])
+
+
+def constats_de_synthese(report):
+    """Rend visibles dans `constats` (seule liste lue par le rapport final) les entrées, fichiers ou étapes perdus."""
+    if INTERROMPU:
+        report["scan_interrompu"] = {"budget_s": int(BUDGET_S), "fichiers_non_lus": len(NON_LUS)}
+        add_entree("moyenne", "code", f"Scan du code interrompu (budget de {BUDGET_S:.0f} s) : {len(NON_LUS)} fichiers non lus — "
+                               f"constats d'absence non évalués", _exemples(sorted(NON_LUS)),
+            "relancer avec un budget plus large (ASTRO_SCAN_BUDGET_S, en secondes) ou sur un sous-dossier")
+    if IGNORES:
+        n = len({i["fichier"] for i in IGNORES})
+        add_entree("basse", "code", f"{n} fichier(s) ignoré(s) par le scan (trop gros / binaire / illisible / lien hors projet)",
+            _exemples([f"{i['fichier']} : {i['raison']}" for i in IGNORES]),
+            "les constats de ces fichiers manquent : les alléger ou les exclure, relever ASTRO_SCAN_MAX_OCTETS, "
+            "ou lancer le scan depuis la racine du monorepo si un lien pointe hors du projet")
+    if report.get("etapes_en_erreur"):
+        add_entree("moyenne", "code", f"{len(report['etapes_en_erreur'])} étape(s) du scan de code en erreur : constats incomplets",
+            report["etapes_en_erreur"][:10])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
@@ -780,16 +1011,24 @@ def main():
     ap.add_argument("--dist", help="dossier des assets buildés (défaut : dist/client/_astro ou dist/_astro)")
     a = ap.parse_args()
     root = Path(a.project).resolve()
+    reinitialiser(root)  # état d'un scan précédent (même processus) ou de l'import : jamais hérité
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     report = {"projet": str(root)}
-    scan_package(root, report)
-    scan_astro_config(root, report)
-    scan_src(root, report)
-    scan_astro_features(root, report)
-    scan_convex(root, report)
-    scan_dist(root, a.dist, report)
-    scan_repo(root, report)
+    etapes = [("scan_package", lambda: scan_package(root, report)), ("scan_astro_config", lambda: scan_astro_config(root, report)),
+              ("scan_src", lambda: scan_src(root, report)), ("scan_astro_features", lambda: scan_astro_features(root, report)),
+              ("scan_convex", lambda: scan_convex(root, report)), ("scan_dist", lambda: scan_dist(root, a.dist, report)),
+              ("scan_repo", lambda: scan_repo(root, report))]
+    for nom, etape in etapes:
+        try:
+            etape()
+        except Exception as e:  # une étape en erreur n'empêche ni les autres ni l'écriture des sorties
+            report.setdefault("etapes_en_erreur", []).append(f"{nom} : {type(e).__name__}: {e}"[:300])
+    constats_de_synthese(report)
+    n_ignores = len(IGNORES)
+    report["fichiers_ignores"] = IGNORES[:MAX_LISTE] + ([{"fichier": "…", "raison": f"… et {n_ignores - MAX_LISTE} autres"}]
+                                                         if n_ignores > MAX_LISTE else [])
+    report["nb_fichiers_ignores"] = n_ignores
     order = {"critique": 0, "haute": 1, "moyenne": 2, "basse": 3, "info": 4}
     findings.sort(key=lambda f: order.get(f["severite"], 9))
     report["constats"] = findings
@@ -823,6 +1062,15 @@ def main():
         if f["piste"]:
             md.append(f"- **Piste** : {f['piste']}")
         md.append("")
+    if IGNORES or report.get("etapes_en_erreur") or INTERROMPU:
+        md += ["## Fichiers ignorés et étapes en erreur", ""]
+        md += [f"- {i['raison']}" if i["fichier"] == "…" else f"- `{i['fichier']}` : {i['raison']}" for i in report["fichiers_ignores"]]
+        md += [f"- étape {e}" for e in report.get("etapes_en_erreur", [])]
+        if INTERROMPU:
+            md.append(f"- scan interrompu : budget de {BUDGET_S:.0f} s épuisé, {len(NON_LUS)} fichiers non lus")
+        md.append("")
+    if IGNORES:
+        print(f"[attention] {n_ignores} fichier(s) ignoré(s) — voir code-scan.md", file=sys.stderr)
     (out / "code-scan.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     print(f"[ok] {len(findings)} constats — {out}", file=sys.stderr)
 
