@@ -1,0 +1,9 @@
+---
+export const prerender = true;
+import Base from '../../layouts/Base.astro';
+import TexteLong from '../../components/TexteLong.astro';
+---
+<Base title="Métadonnées valides dans la tête HTML" description="Une tête HTML qui ne contient que des métadonnées valides : canonical, description et robots sont lus par Google.">
+  <h1>Tête HTML valide</h1>
+  <TexteLong sujet="des métadonnées" complement="sur la balise head" />
+</Base>
