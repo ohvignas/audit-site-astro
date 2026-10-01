@@ -134,10 +134,25 @@ NAMESPACES_XML = re.compile(r"http://(www\.sitemaps\.org|www\.w3\.org|www\.googl
 
 
 def lines_matching(text, rx, limit=50):
+    """(n° de ligne, extrait ≤ 160 car.) des lignes où rx trouve un motif. L'extrait est centré sur le motif :
+    sur une ligne longue (minifiée, SVG inline…), couper au début perdrait le motif lui-même."""
+    out = []
+    for i, line in enumerate(text.splitlines(), 1):
+        m = rx.search(line)
+        if m:
+            debut = max(0, m.start() - 40) if m.end() > 160 else 0
+            out.append((i, line[debut:debut + 160].strip()))
+            if len(out) >= limit:
+                break
+    return out
+
+
+def lignes_completes(text, rx, limit=50):
+    """(n° de ligne, ligne entière) des lignes où rx trouve un motif : pour compter ou extraire sans troncature."""
     out = []
     for i, line in enumerate(text.splitlines(), 1):
         if rx.search(line):
-            out.append((i, line.strip()[:160]))
+            out.append((i, line))
             if len(out) >= limit:
                 break
     return out
@@ -265,7 +280,7 @@ def scan_src(root, report):
     for f in iter_files(src, SRC_EXT):
         t = read(f)
         r = rel(f, root)
-        for i, line in lines_matching(t, RX["client"], 200):
+        for i, line in lignes_completes(t, RX["client"], 200):
             for d in RX["client"].findall(line):
                 hyd[d] += 1
                 comp = re.search(r"<([A-Z][\w.]*)", line)
@@ -294,7 +309,7 @@ def scan_src(root, report):
                 env_client.append(f"{r} : import.meta.env.{m.group(1)}")
             for m in RX["process_env"].finditer(scope):
                 env_client.append(f"{r} : process.env.{m.group(1)}")
-        third += [f"{r}:{i} {RX['third'].search(l).group(0)}" for i, l in lines_matching(t, RX["third"])]
+        third += [f"{r}:{i} {RX['third'].search(l).group(0)}" for i, l in lignes_completes(t, RX["third"])]
         gfonts += [f"{r}:{i}" for i, _ in lines_matching(t, RX["gfonts"])]
         inline_scripts += [f"{r}:{i}" for i, _ in lines_matching(t, RX["is_inline"])]
 

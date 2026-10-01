@@ -112,3 +112,29 @@ class TestSetHtml(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLignesLongues(unittest.TestCase):
+    """Rapport utilisateur v2.0.0 : un script tiers après le 160e caractère d'une ligne faisait planter le scan
+    (« 'NoneType' object has no attribute 'group' »), l'extrait tronqué ne contenant plus le motif."""
+
+    def test_script_tiers_apres_160_caracteres(self):
+        ligne = "<div>" + "x" * 300 + '<script async src="https://www.googletagmanager.com/gtag/js?id=G-X"></script></div>'
+        constats = scanner({"src/pages/index.astro": "---\n---\n" + ligne + "\n"})
+        tiers = [c for c in constats if any("googletagmanager" in o for o in c["ou"])]
+        self.assertTrue(tiers, textes(constats))
+
+    def test_hydratation_comptee_sur_toute_la_ligne(self):
+        ligne = "<A client:load/>" + " " * 200 + "<B client:load/>" + " " * 200 + "<C client:load/>"
+        sys.path.insert(0, str(SCAN.parent))
+        import astro_scan
+        lignes = astro_scan.lignes_completes(ligne, astro_scan.RX["client"])
+        self.assertEqual(len(astro_scan.RX["client"].findall(lignes[0][1])), 3)
+
+    def test_extrait_contient_le_motif(self):
+        sys.path.insert(0, str(SCAN.parent))
+        import astro_scan, re
+        texte = "a" * 500 + "set:html={x}" + "b" * 500
+        (_, extrait), = astro_scan.lines_matching(texte, re.compile(r"set:html"))
+        self.assertIn("set:html", extrait)
+        self.assertLessEqual(len(extrait), 160)
