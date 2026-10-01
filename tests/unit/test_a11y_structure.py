@@ -128,5 +128,90 @@ class TestFauxPositifs(unittest.TestCase):
         self.assertEqual(res("<h1>T<h3>Sous</h3>")["titres_sautes"], [{"signature": "h1 → h3", "n": 1, "exemple": "« Sous »"}])
 
 
+class TestRevue(unittest.TestCase):
+    def test_iframe_sans_requete_ni_fragment(self):
+        html = ('<iframe src="https://www.google.com/maps/embed/v1/place?key=AIzaSyA1234567890abcdefghijklmnop&q=Paris"></iframe>'
+                '<iframe src="https://video.test/embed/123?token=0123456789abcdef0123#t=5"></iframe>'
+                '<iframe src="//cdn.test/e?token=SECRET2"></iframe><iframe src="/carte?cle=SECRET3#x"></iframe>'
+                '<iframe src="https://user:motdepasse@h.test/p?a=1"></iframe><iframe src="data:text/html,SECRET4"></iframe>')
+        sortie = res(html)
+        brut = json.dumps(sortie, ensure_ascii=False)
+        for secret in ("AIza", "key=", "token", "0123456789abcdef", "SECRET", "motdepasse", "user:", "?", "#"):
+            self.assertNotIn(secret, brut)
+        self.assertEqual(sorted(e["signature"] for e in sortie["iframe_sans_titre"]),
+                         ["/carte", "cdn.test/e", "data:", "h.test/p", "video.test/embed/123",
+                          "www.google.com/maps/embed/v1/place"])
+
+    def test_iframes_identiques_a_jeton_different_regroupees(self):
+        html = '<iframe src="https://v.test/e/1?token=aaa"></iframe><iframe src="https://v.test/e/1?token=bbb"></iframe>'
+        self.assertEqual(res(html)["iframe_sans_titre"], [{"signature": "v.test/e/1", "n": 2}])
+
+    def test_aria_label_sur_role_sans_nom_explicite(self):
+        html = ''.join('<div role="{0}" aria-label="x"></div>'.format(r) for r in ("generic", "none", "presentation", "GENERIC paragraph"))
+        self.assertEqual(res(html)["aria_label_interdit"], [{"signature": '<div aria-label="x">', "n": 4}])
+        self.assertEqual(res('<div role="region" aria-label="x"></div><div role="button" aria-label="y"></div>')["aria_label_interdit"], [])
+
+    def test_aria_label_balises_completees(self):
+        tags = ("pre", "abbr", "cite", "q", "kbd", "samp", "var", "bdi", "bdo", "data", "caption")
+        html = "".join('<{0} aria-label="x"></{0}>'.format(t) for t in tags)
+        self.assertEqual(sorted(e["signature"] for e in res(html)["aria_label_interdit"]),
+                         sorted('<{0} aria-label="x">'.format(t) for t in tags))
+        for t in ("header", "footer", "time", "mark", "label", "blockquote", "address"):
+            self.assertEqual(res('<{0} aria-label="x"></{0}>'.format(t))["aria_label_interdit"], [], t)
+
+    def test_contenteditable_non_signale(self):
+        self.assertEqual(res('<div contenteditable aria-label="Message"></div><div contenteditable="true" aria-label="M"></div>')
+                         ["aria_label_interdit"], [])
+
+    def test_iframe_technique_ignoree(self):
+        html = ('<iframe src="/a" tabindex="-1"></iframe><iframe src="/b" role="presentation"></iframe>'
+                '<iframe src="/c" role="NONE"></iframe><iframe src="/d" tabindex="0"></iframe>')
+        self.assertEqual(res(html)["iframe_sans_titre"], [{"signature": "/d", "n": 1}])
+
+    def test_footer_ou_header_de_section_pas_un_repere(self):
+        html = '<main><article><h1>T</h1><h2>A</h2><footer><h4>Auteur</h4></footer></article></main>'
+        self.assertEqual(res(html)["titres_sautes"], [{"signature": "h2 → h4", "n": 1, "exemple": "« Auteur »"}])
+        html = '<section><h2>A</h2><header><h4>B</h4></header></section>'
+        self.assertEqual(res(html)["titres_sautes"], [{"signature": "h2 → h4", "n": 1, "exemple": "« B »"}])
+        # pied de page de la page (hors article/section/main) : toujours un repère
+        self.assertEqual(res('<main><h2>A</h2></main><footer><h4>Pied</h4></footer>')["titres_sautes"], [])
+        # rôle explicite : repère même dans un article
+        self.assertEqual(res('<article><h2>A</h2><div role="contentinfo"><h4>Pied</h4></div></article>')["titres_sautes"], [])
+
+    def test_viewport_separateur_espace_et_template(self):
+        r = res('<meta name="viewport" content="width=device-width initial-scale=1 maximum-scale=1 user-scalable=no">')
+        self.assertEqual(r["zoom_bloque"], [{"signature": "maximum-scale=1, user-scalable=no", "n": 1}])
+        r = res('<meta name="viewport" content="width=device-width, maximum-scale = 1">')
+        self.assertEqual(r["zoom_bloque"], [{"signature": "maximum-scale=1", "n": 1}])
+        self.assertEqual(res('<template><meta name="viewport" content="user-scalable=no"></template>')["zoom_bloque"], [])
+        self.assertEqual(res('<noscript><meta name="viewport" content="user-scalable=no"></noscript>')["zoom_bloque"], [])
+
+    def test_titre_sans_texte(self):
+        self.assertEqual(res("<h1>T</h1><h2>A</h2><h4></h4>")["titres_sautes"],
+                         [{"signature": "h2 → h4", "n": 1, "exemple": "« titre vide »"}])
+        self.assertEqual(res('<h1>T</h1><h3><img src="l.png" alt="Logo Illith"></h3>')["titres_sautes"],
+                         [{"signature": "h1 → h3", "n": 1, "exemple": "« Logo Illith »"}])
+
+    def test_saut_dans_main_malgre_un_footer(self):
+        html = '<header><h1>S</h1></header><main><h2>A</h2><h4>B</h4></main><footer><h4>Pied</h4></footer>'
+        self.assertEqual(res(html)["titres_sautes"], [{"signature": "h2 → h4", "n": 1, "exemple": "« B »"}])
+
+    def test_reperes_par_role_et_header_non_exempte(self):
+        for role in ("complementary", "navigation", "contentinfo", "banner"):
+            html = '<h1>T</h1><h2>A</h2><div role="{0}"><h5>X</h5></div>'.format(role)
+            self.assertEqual(res(html)["titres_sautes"], [], role)
+        # <header> n'est pas un repère : son h1 compte dans la suite du contenu
+        self.assertEqual(res("<header><h1>S</h1></header><main><h3>B</h3></main>")["titres_sautes"],
+                         [{"signature": "h1 → h3", "n": 1, "exemple": "« B »"}])
+
+    def test_section_et_article_n_isolent_pas(self):
+        self.assertEqual(res("<main><section><h2>A</h2><article><h4>B</h4></article></section></main>")["titres_sautes"],
+                         [{"signature": "h2 → h4", "n": 1, "exemple": "« B »"}])
+
+    def test_aria_labelledby_sur_generique(self):
+        r = res('<span id="l">L</span><div aria-labelledby="l"></div>')["aria_label_interdit"]
+        self.assertEqual(r, [{"signature": '<div aria-labelledby="l">', "n": 1}])
+
+
 if __name__ == "__main__":
     unittest.main()
