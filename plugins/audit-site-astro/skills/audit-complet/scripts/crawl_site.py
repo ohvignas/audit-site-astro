@@ -19,7 +19,9 @@ import argparse
 import csv
 import gzip
 import json
+import os
 import re
+import ssl
 import sys
 import time
 import zlib
@@ -44,6 +46,28 @@ SKIP_PATH = re.compile(
 SKIP_QUERY = re.compile(r"(^|&)(replytocom|share|add-to-cart|add_to_wishlist|preview|s|ver|nocache)=", re.I)
 COUNT_TAGS = {"ul", "ol", "table", "time", "main", "article", "iframe", "video", "form", "nav", "script", "link"}
 SKIP_TEXT_TAGS = {"script", "style", "noscript", "svg", "template"}
+# Chemins de CSS/JS nécessaires au rendu : WordPress, Astro (/_astro/), Next.js (/_next/)
+# Éléments sans balise fermante (ne s'empilent pas) ; styles qui masquent un élément
+VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+STYLE_MASQUE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
+# Classes utilitaires qui masquent (Tailwind, Bootstrap, Bulma) : jetons entiers ; sr-only n'en fait PAS partie
+# (masqué visuellement mais lu par les lecteurs d'écran : un libellé reste requis)
+CLASSES_MASQUE = {"hidden", "d-none", "is-hidden", "invisible"}
+# « hidden md:block » : masqué sur mobile seulement, visible ensuite → pas masqué
+CLASSE_REAFFICHE = re.compile(r"^(sm|md|lg|xl|2xl):(block|inline|inline-block|flex|inline-flex|grid|inline-grid|table|contents|visible)$")
+
+
+def masque(tag, a):
+    """Élément absent de l'arbre d'accessibilité (ignoré par axe/Lighthouse) : hidden, aria-hidden, style, classe
+    utilitaire de masquage, <template>, <noscript>, <dialog> fermé."""
+    classes = a.get("class", "").split()
+    par_classe = bool(CLASSES_MASQUE.intersection(classes)) and not any(CLASSE_REAFFICHE.match(c) for c in classes)
+    return (tag in ("template", "noscript") or (tag == "dialog" and "open" not in a) or "hidden" in a
+            or a.get("aria-hidden", "").lower() == "true" or bool(STYLE_MASQUE.search(a.get("style", "")))
+            or par_classe)
+
+
+ASSETS_RX = re.compile(r"\.(css|m?js)\b|wp-content/(themes|plugins)|wp-includes|/_astro\b|/_next/", re.I)
 
 
 # --------------------------------------------------------------------------- HTTP
@@ -53,7 +77,21 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_OPENER = urllib.request.build_opener(_NoRedirect)
+_OPENERS = {}
+
+
+def _opener():
+    """Opener sans suivi automatique des redirections ; TLS non vérifié si AUDIT_INSECURE_TLS=1 (tests)."""
+    insecure = os.environ.get("AUDIT_INSECURE_TLS") == "1"
+    if insecure not in _OPENERS:
+        handlers = [_NoRedirect()]
+        if insecure:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            handlers.append(urllib.request.HTTPSHandler(context=ctx))
+        _OPENERS[insecure] = urllib.request.build_opener(*handlers)
+    return _OPENERS[insecure]
 
 
 def _decompress(body, enc):
@@ -91,7 +129,7 @@ def fetch(url, timeout=20, method="GET", max_bytes=8_000_000, ua=UA, extra_heade
                     "headers": {}, "body": b"", "raw_bytes": 0, "ttfb": None, "time": 0}
         t_hop = time.time()
         try:
-            resp = _OPENER.open(req, timeout=timeout)
+            resp = _opener().open(req, timeout=timeout)
             status, hdrs = resp.status, resp.headers
             ttfb = time.time() - t_hop
             body = resp.read(max_bytes) if method == "GET" else b""
@@ -243,9 +281,24 @@ class PageParser(HTMLParser):
         self.tags = Counter()
         self.tags_main = Counter()
         self.has_author_link = False
+        self.fields = []        # champs de formulaire saisissables
+        self.label_for = set()  # id visés par <label for>
+        self._label_depth = 0
+        self._ouverts = []      # pile [balise, masquée] des éléments ouverts (ancêtres masqués des champs)
+        self._masques = 0
+
+    def champs_sans_libelle(self):
+        """Champs sans nom accessible fiable : ni <label for>, ni <label> englobant, ni aria-label(ledby), ni title.
+        Un placeholder seul ne compte pas (il disparaît à la saisie — WCAG 3.3.2), même si Lighthouse l'accepte."""
+        return [c for c in self.fields
+                if not (c["nomme"] or c["dans_label"] or (c["id"] and c["id"] in self.label_for))]
 
     def handle_starttag(self, tag, attrs):
         a = {k.lower(): (v or "") for k, v in attrs}
+        cache = masque(tag, a)
+        if tag not in VOID_TAGS:
+            self._ouverts.append((tag, cache))
+            self._masques += cache
         if tag in COUNT_TAGS:
             self.tags[tag] += 1
             if self._main_depth:
@@ -296,6 +349,19 @@ class PageParser(HTMLParser):
                 self._skip += 1
             if a.get("src"):
                 self.resources.append(a["src"])
+        elif tag == "label":
+            self._label_depth += 1
+            if a.get("for"):
+                self.label_for.add(a["for"])
+        elif tag in ("input", "select", "textarea"):
+            kind = (a.get("type") or "text").lower() if tag == "input" else tag
+            # champs masqués ou désactivés : hors de l'arbre d'accessibilité. Piège à robots (honeypot) : tabindex=-1
+            # ET autocomplete=off (un champ visible avec tabindex=-1 seul reste un champ à libeller)
+            pot_de_miel = a.get("tabindex", "").strip() == "-1" and a.get("autocomplete", "").lower() == "off"
+            invisible = self._masques or cache or "disabled" in a or pot_de_miel
+            if kind not in ("hidden", "submit", "button", "reset", "image") and not invisible:
+                self.fields.append({"id": a.get("id", ""), "dans_label": self._label_depth > 0,
+                                    "nomme": any(a.get(k, "").strip() for k in ("aria-label", "aria-labelledby", "title"))})
         elif tag in ("iframe", "source", "video", "audio", "embed"):
             if a.get("src"):
                 self.resources.append(a["src"])
@@ -308,6 +374,11 @@ class PageParser(HTMLParser):
             self._main_by_article = True
 
     def handle_endtag(self, tag):
+        for i in range(len(self._ouverts) - 1, -1, -1):
+            if self._ouverts[i][0] == tag:  # ferme aussi les éléments laissés ouverts (<li>, <p>…)
+                self._masques -= sum(m for _, m in self._ouverts[i:])
+                del self._ouverts[i:]
+                break
         if tag == "title" and self._in_title:
             self._in_title = False
             self.title = " ".join("".join(self._title_buf).split())
@@ -319,6 +390,8 @@ class PageParser(HTMLParser):
                 self._skip -= 1
         elif tag in SKIP_TEXT_TAGS and self._skip:
             self._skip -= 1
+        elif tag == "label" and self._label_depth:
+            self._label_depth -= 1
         elif tag == "a" and self._a is not None:
             self._a["text"] = " ".join(" ".join(self._a["text"]).split())[:120]
             self.links.append(self._a)
@@ -486,6 +559,7 @@ def analyze_page(url, res):
         "jsonld_errors": jl_err,
         "microdata_items": parser.microdata,
         "tag_counts": dict(parser.tags),
+        "form_fields_no_label": len(parser.champs_sans_libelle()),
         "has_author_link": parser.has_author_link,
         "body_class": parser.body_class[:300],
         "astra": "ast-" in parser.body_class or "/themes/astra" in html,
@@ -630,6 +704,16 @@ def crawl(args):
         p["inlinks"] = len(inlinks.get(u, ()))
         p["inlink_anchors"] = anchors[u].most_common(10)
 
+    # --- cibles de canonical jamais crawlées (page non liée) : vérifier quand même leur statut (50 au plus).
+    # Seules les pages analysées (HTML 200 sans redirection) portent des canonicals ; robots.txt est respecté.
+    canon_targets = {}
+    for p in list(pages.values()):
+        c = (p.get("canonicals") or [None])[0]
+        if (c and c != p["url"] and c not in pages and c not in canon_targets and (internal(c) or variant(c))
+                and (args.ignore_robots or robots.allowed("Googlebot", c)) and len(canon_targets) < 50):
+            canon_targets[c], _ = analyze_page(c, fetch(c, timeout=args.timeout))
+            time.sleep(args.delay)
+
     # --- images cassées (optionnel)
     broken_imgs = {}
     if args.check_images:
@@ -648,7 +732,7 @@ def crawl(args):
             time.sleep(args.delay / 2)
 
     issues = build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_links,
-                          nofollow_internal, broken_imgs, host, scheme)
+                          nofollow_internal, broken_imgs, host, scheme, canon_targets)
     if relative_sitemaps:
         issues["robots_sitemap_relative"] = {"label": "Directive Sitemap relative dans robots.txt (Google exige une URL absolue)",
                                              "severity": "moyenne", "count": len(relative_sitemaps),
@@ -667,6 +751,7 @@ def crawl(args):
         "robots_other_directives": robots.other_lines[:50],
         "sitemap_files": sm_files, "sitemap_errors": sm_errors, "sitemap_url_count": len(sitemap_set),
         "blocked_by_robots": blocked[:500], "broken_images": broken_imgs,
+        "canonical_targets_checked": {u: c["final_status"] for u, c in canon_targets.items()},
         "astra_detected": any(p.get("astra") for p in pages.values()),
         "astro_detected": any(p.get("astro") for p in pages.values()),
     }
@@ -682,8 +767,9 @@ def crawl(args):
 # --------------------------------------------------------------------------- problèmes
 
 def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_links, nofollow_internal,
-                 broken_imgs, host, scheme):
+                 broken_imgs, host, scheme, canon_targets=None):
     issues = {}
+    canon_targets = canon_targets or {}
 
     def add(key, label, sev, example=None, n=1):
         it = issues.setdefault(key, {"label": label, "severity": sev, "count": 0, "examples": []})
@@ -773,8 +859,11 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
         elif canon[0] != p["url"]:
             add("canonical_other", "Canonical vers une autre URL (vérifier que c'est voulu)", "basse",
                 {"url": p["url"], "canonical": canon[0]})
-            tgt = pages.get(canon[0])
-            if tgt and (tgt["final_status"] != 200 or tgt["redirect_hops"] or tgt.get("noindex")):
+            tgt = pages.get(canon[0]) or canon_targets.get(canon[0])
+            if tgt and tgt["final_status"] <= 0:  # timeout, DNS, TLS : pas une preuve d'erreur de la cible
+                add("canonical_target_unreachable", "Cible de canonical injoignable pendant l'audit (à revérifier)",
+                    "basse", {"url": p["url"], "canonical": canon[0], "erreur": tgt.get("error")})
+            elif tgt and (tgt["final_status"] != 200 or tgt["redirect_hops"] or tgt.get("noindex")):
                 add("canonical_bad_target", "Canonical vers une URL en erreur, redirigée ou noindex", "haute",
                     {"url": p["url"], "canonical": canon[0], "statut_cible": tgt["final_status"]})
         if p.get("noindex"):
@@ -782,6 +871,9 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
         if p.get("imgs_no_alt"):
             add("img_no_alt", "Images sans attribut alt", "moyenne", {"url": p["url"], "n": p["imgs_no_alt"]},
                 n=p["imgs_no_alt"])
+        if p.get("form_fields_no_label"):
+            add("form_no_label", "Champs de formulaire sans libellé (placeholder seul ou rien) — WCAG 1.3.1 / 3.3.2",
+                "moyenne", {"url": p["url"], "n": p["form_fields_no_label"]}, n=p["form_fields_no_label"])
         if p.get("imgs_no_dims"):
             add("img_no_dims", "Images sans width/height (risque de CLS)", "basse",
                 {"url": p["url"], "n": p["imgs_no_dims"]}, n=p["imgs_no_dims"])
@@ -836,16 +928,19 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
         p = pages.get(u)
         if not p:
             continue
+        cible = p
         if p["redirect_hops"]:
             add("sitemap_redirect", "URL du sitemap qui redirigent (souvent http:// ou slash final incohérent)", "moyenne",
-            {"url": u, "vers": p["final_url"]})
-        elif p["final_status"] != 200:
-            add("sitemap_non200", "URL du sitemap en erreur", "haute", {"url": u, "status": p["final_status"]})
-        elif p.get("noindex"):
+                {"url": u, "vers": p["final_url"]})
+            cible = pages.get(p["final_url"]) or p
+        # une redirection ne masque plus l'état de la cible : 404 et noindex restent signalés
+        if cible["final_status"] != 200:
+            add("sitemap_non200", "URL du sitemap en erreur", "haute", {"url": u, "status": cible["final_status"]})
+        elif cible.get("noindex"):
             add("sitemap_noindex", "URL du sitemap en noindex (signal contradictoire)", "haute", u)
-        elif p.get("canonicals") and p["canonicals"][0] != u:
+        elif cible.get("canonicals") and cible["canonicals"][0] != cible["url"]:
             add("sitemap_canonicalized", "URL du sitemap canonisées ailleurs", "moyenne",
-                {"url": u, "canonical": p["canonicals"][0]})
+                {"url": u, "canonical": cible["canonicals"][0]})
     home_url = next(iter(pages), None)
     for u in sitemap_eff:
         p = pages.get(u)
@@ -861,7 +956,7 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
     elif not robots.allowed("Googlebot", f"{scheme}://{host}/"):
         add("robots_blocks_all", "robots.txt bloque tout le site pour Googlebot", "critique")
     for rule_allow, pat in robots.rules_for("Googlebot")[0]:
-        if not rule_allow and re.search(r"\.(css|js)|wp-content/(themes|plugins)|wp-includes", pat, re.I):
+        if not rule_allow and ASSETS_RX.search(pat):
             add("robots_blocks_assets", "robots.txt bloque CSS/JS (empêche le rendu par Google)", "haute", pat)
     for tgt, srcs in variant_links.items():
         add("variant_links", "Liens internes vers une autre variante d'hôte (http / www)", "moyenne",

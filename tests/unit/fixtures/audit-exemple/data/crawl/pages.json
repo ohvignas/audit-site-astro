@@ -1,0 +1,9 @@
+{
+ "meta": {
+  "start_url": "https://exemple.test/",
+  "host": "exemple.test",
+  "pages_crawled": 3,
+  "max_pages": 500
+ },
+ "pages": []
+}

@@ -1,0 +1,14 @@
+---
+export const prerender = true;
+import Base from '../../layouts/Base.astro';
+import { paragraphes } from '../../data/texte';
+export function getStaticPaths() {
+  return [1, 2, 3, 4, 5].map((n) => ({ params: { n: String(n) } }));
+}
+const n = Number(Astro.params.n);
+---
+<Base title={`Étape ${n} du parcours d'apprentissage no-code`} description={`Étape ${n} du parcours guidé pour débuter le no-code.`}>
+  <h1>Étape {n}</h1>
+  {paragraphes(`parcours étape ${n}`).map((p) => <p>{p}</p>)}
+  {n < 5 && <a href={`/profond/${n + 1}`}>Étape suivante</a>}
+</Base>

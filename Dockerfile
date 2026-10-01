@@ -14,6 +14,8 @@ ENV CHROME_PATH=/usr/bin/chromium \
 
 WORKDIR /app
 COPY plugins/audit-site-astro/skills/audit-complet/scripts/ /app/scripts/
+# Fiches de correction : corrections.py les cherche dans ../references/fiches (donc /app/references/fiches)
+COPY plugins/audit-site-astro/skills/audit-complet/references/fiches/ /app/references/fiches/
 COPY docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/scripts/*.sh /app/scripts/*.py /app/entrypoint.sh
 

@@ -1,0 +1,6 @@
+{
+  "rappel_min_global": 1.0,
+  "rappel_min_par_domaine": {"a11y": 1.0, "code": 1.0, "geo": 1.0, "http": 1.0, "perf": 1.0, "securite": 1.0, "seo": 1.0},
+  "faux_positifs_max": 0,
+  "inattendus_max": 0
+}

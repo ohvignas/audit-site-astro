@@ -1,0 +1,100 @@
+[
+ {
+  "url": "https://exemple.test/",
+  "strategie": "mobile",
+  "scores": {
+   "performance": 62,
+   "accessibility": 88,
+   "seo": 100,
+   "best-practices": 92
+  },
+  "metriques": {
+   "LCP": {
+    "affiche": "4,1 s"
+   },
+   "CLS": {
+    "affiche": "0,02"
+   },
+   "TBT": {
+    "affiche": "310 ms"
+   }
+  },
+  "opportunites": [
+   {
+    "id": "render-blocking-resources",
+    "titre": "Éliminer les ressources qui bloquent le rendu",
+    "affiche": "Économies potentielles de 1 350 ms",
+    "gain_ms": 1350,
+    "gain_octets": 0,
+    "exemples": [
+     "https://exemple.test/_astro/styles.abc123.css"
+    ]
+   },
+   {
+    "id": "uses-responsive-images",
+    "titre": "Dimensionner correctement les images",
+    "affiche": "Économies potentielles de 84 Ko",
+    "gain_ms": 0,
+    "gain_octets": 86016,
+    "exemples": [
+     "https://exemple.test/img/hero.jpg"
+    ]
+   },
+   {
+    "id": "unused-javascript",
+    "titre": "Réduire le JavaScript inutilisé",
+    "affiche": "Économies potentielles de 400 ms",
+    "gain_ms": 420,
+    "gain_octets": 0,
+    "exemples": []
+   }
+  ],
+  "echecs_autres_categories": {
+   "accessibility": [
+    "Les liens n'ont pas de nom discernable",
+    "Le contraste des couleurs est insuffisant"
+   ]
+  }
+ },
+ {
+  "url": "https://exemple.test/",
+  "strategie": "desktop",
+  "scores": {
+   "performance": 91,
+   "accessibility": 88,
+   "seo": 100,
+   "best-practices": 92
+  },
+  "metriques": {
+   "LCP": {
+    "affiche": "1,2 s"
+   },
+   "CLS": {
+    "affiche": "0,01"
+   },
+   "TBT": {
+    "affiche": "20 ms"
+   }
+  },
+  "opportunites": [
+   {
+    "id": "render-blocking-resources",
+    "titre": "Éliminer les ressources qui bloquent le rendu",
+    "affiche": "Économies potentielles de 200 ms",
+    "gain_ms": 200,
+    "gain_octets": 0,
+    "exemples": []
+   }
+  ],
+  "echecs_autres_categories": {
+   "accessibility": [
+    "Le contraste des couleurs est insuffisant"
+   ]
+  }
+ },
+ {
+  "url": "https://exemple.test/blog/",
+  "strategie": "mobile",
+  "erreur": "Lighthouse: délai dépassé"
+ }
+]

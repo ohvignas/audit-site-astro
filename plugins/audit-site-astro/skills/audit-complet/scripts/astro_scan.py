@@ -60,6 +60,79 @@ def read(p):
         return ""
 
 
+def sans_commentaires(t):
+    """Retire les commentaires JS/TS (/* … */ et // …) en laissant intacts les littéraux '…', "…" et `…`
+    (échappements compris) : un glob '/images/**' ou une URL 'https://…' ne sont pas des commentaires.
+    Les retours à la ligne des commentaires sont conservés (numéros de ligne inchangés)."""
+    out, i, n = [], 0, len(t)
+    while i < n:
+        c = t[i]
+        if c in "'\"`":
+            j = i + 1
+            while j < n and t[j] != c:
+                if t[j] == "\\":
+                    j += 1
+                elif c != "`" and t[j] == "\n":  # chaîne non fermée : on s'arrête à la ligne
+                    break
+                j += 1
+            out.append(t[i:j + 1])
+            i = j + 1
+        elif t.startswith("//", i) and not (i and t[i - 1] == ":"):
+            j = t.find("\n", i)
+            i = n if j < 0 else j
+        elif t.startswith("/*", i):
+            j = t.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append("\n" * t.count("\n", i, j))
+            i = j
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def sans_texte_litteral(t):
+    """Vide le contenu des chaînes '…' et "…" et le texte des gabarits `…` en gardant leurs expressions ${…} :
+    pour chercher un identifiant (site) dans le code seulement, pas dans du texte (« plan-du-site »)."""
+    out, i, n = [], 0, len(t)
+    while i < n:
+        c = t[i]
+        if c in "'\"":
+            j = i + 1
+            while j < n and t[j] != c and t[j] != "\n":
+                j += 2 if t[j] == "\\" else 1
+            out.append(c + " " * (min(j, n) - i - 1) + (c if j < n and t[j] == c else ""))
+            i = j + 1 if j < n and t[j] == c else j
+        elif c == "`":
+            out.append(c)
+            i += 1
+            while i < n and t[i] != "`":
+                if t[i] == "\\":
+                    out.append("  ")
+                    i += 2
+                elif t.startswith("${", i):
+                    prof, j = 1, i + 2
+                    while j < n and prof:
+                        prof += {"{": 1, "}": -1}.get(t[j], 0)
+                        j += 1
+                    out.append(t[i:j])
+                    i = j
+                else:
+                    out.append("\n" if t[i] == "\n" else " ")
+                    i += 1
+            if i < n:
+                out.append("`")
+                i += 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+# Espaces de noms XML : des identifiants, pas des URL chargées (xmlns du sitemap…)
+NAMESPACES_XML = re.compile(r"http://(www\.sitemaps\.org|www\.w3\.org|www\.google\.com/schemas|purl\.org)/")
+
+
 def lines_matching(text, rx, limit=50):
     out = []
     for i, line in enumerate(text.splitlines(), 1):
@@ -107,7 +180,7 @@ def scan_astro_config(root, report):
     if not cfg:
         add("haute", "config", "astro.config.* introuvable")
         return {}
-    t = read(cfg)
+    t = sans_commentaires(read(cfg))
     name = rel(cfg, root)
 
     def val(key):
@@ -163,6 +236,7 @@ RX = {
     "is_inline": re.compile(r"<script[^>]*is:inline"),
     "storage_url": re.compile(r"storage\.getUrl|/api/storage/|convex\.cloud/api/storage|getUrl\("),
     "astro_url_href": re.compile(r"Astro\.url\.href|Astro\.request\.url|url\.origin|request\.url"),
+    "jsonld_script": re.compile(r"type\s*=\s*[\"']application/ld\+json[\"']", re.I),
 }
 
 
@@ -205,7 +279,14 @@ def scan_src(root, report):
             image_comp += len(RX["image_comp"].findall(t))
             if RX["storage_url"].search(t) and imgs:
                 storage_imgs.append(r)
-        set_html += [f"{r}:{i} {l}" for i, l in lines_matching(t, RX["set_html"])]
+        # JSON-LD (<script type="application/ld+json" set:html={…}>) : pas du HTML interprété, pas un XSS.
+        # La balise peut s'étaler sur plusieurs lignes (Prettier) : on exclut les lignes de toute la balise ouvrante.
+        lignes_jsonld = set()
+        for m in re.finditer(r"<script\b[^>]*>", t, re.I):
+            if RX["jsonld_script"].search(m.group(0)):
+                debut = t.count("\n", 0, m.start()) + 1
+                lignes_jsonld.update(range(debut, debut + m.group(0).count("\n") + 1))
+        set_html += [f"{r}:{i} {l}" for i, l in lines_matching(t, RX["set_html"]) if i not in lignes_jsonld]
         if f.suffix in CLIENT_EXT or ("<script" in t and f.suffix == ".astro"):
             # dans un .astro, seul le contenu des <script> part au navigateur
             scope = t if f.suffix in CLIENT_EXT else "\n".join(re.findall(r"<script\b[^>]*>(.*?)</script>", t, re.S))
@@ -321,12 +402,18 @@ def scan_src(root, report):
         report["routes"]["endpoints_seo"] = list(eps)
         for name, t in eps.items():
             if "sitemap" in name:
-                if re.search(r"url\.origin|request\.url|Astro\.url\.origin|new URL\(\s*request", t) and "site" not in t:
+                code = sans_commentaires(t)
+                par_requete = re.search(r"url\.origin|request\.url|Astro\.url\.origin|new URL\(\s*request", code)
+                # l'identifiant `site` (Astro.site, context.site, ({ site })…), pas la sous-chaîne de « sitemaps.org »
+                par_site = re.search(r"\bAstro\.site\b|\bcontext\.site\b|import\.meta\.env\.SITE\b|(?<![\w.$-])site\b(?!\s*:)",
+                                     sans_texte_litteral(code))
+                if par_requete and not par_site:
                     add("haute", "seo", f"{name} construit les URL depuis l'origine de la requête : derrière un proxy "
                                         f"elles sortent en http:// (constaté sur le sitemap en ligne ?)", [name],
                         "utiliser l'origine canonique : new URL(path, import.meta.env.SITE ?? 'https://domaine.fr')")
-                if "http://" in t:
-                    add("haute", "seo", f"{name} contient une URL http:// en dur", [name])
+                en_dur = [u for u in re.findall(r"http://[^\s'\"`<>)]+", code) if not NAMESPACES_XML.match(u)]
+                if en_dur:
+                    add("haute", "seo", f"{name} contient une URL http:// en dur ({en_dur[0][:60]})", [name])
                 if "lastmod" not in t:
                     add("basse", "seo", f"{name} sans <lastmod> (aide Google et Bing à recrawler le contenu modifié)", [name])
     # public/
@@ -386,7 +473,7 @@ def latest_astro():
 def scan_astro_features(root, report):
     cfg = next((root / f for f in ("astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts")
                 if (root / f).exists()), None)
-    t = read(cfg) if cfg else ""
+    t = sans_commentaires(read(cfg)) if cfg else ""
     cname = rel(cfg, root) if cfg else "astro.config"
     v = astro_version(root) or (0, 0, 0)
     latest = latest_astro()
@@ -525,7 +612,7 @@ def scan_astro_features(root, report):
                                    "les pages liées dans le navigateur", [cname])
 
     # --- proxy / URL : security.allowedDomains (5.14.2+)
-    if ssr and at_least(5, 14) and "allowedDomains" not in t:
+    if ssr and at_least(5, 14) and not re.search(r"\ballowedDomains\s*:", t):
         add("moyenne", "seo", "Serveur derrière un proxy sans security.allowedDomains : Astro ignore X-Forwarded-Host/"
                               "Proto et Astro.url reflète l'hôte interne (souvent en http://) — cause typique de "
                               "canonicals/sitemap en http", [cname],

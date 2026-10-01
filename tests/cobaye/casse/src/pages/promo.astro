@@ -1,0 +1,6 @@
+---
+export const prerender = false;
+// S10 : redirection temporaire (302) pour une promotion devenue permanente.
+// La forme `redirects: { '/promo': { status: 302, … } }` a été servie en 301 par Astro 7.3 + @astrojs/node (CI run 36722306289).
+return Astro.redirect('/formations/no-code', 302);
+---

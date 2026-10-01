@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.astro/
+public/images/
+src/assets/
+src/lib/gros-module.ts
+src/lib/faux-secret.ts

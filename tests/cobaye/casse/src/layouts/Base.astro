@@ -1,0 +1,58 @@
+---
+import Chat from '../components/Chat.tsx';
+import Secret from '../components/Secret.astro';
+
+interface Props { title: string; description?: string; siteName?: string; robots?: string; canonical?: string }
+const { title, description, siteName = 'Cobaye Formation', robots, canonical } = Astro.props;
+// Canonical https correcte ici (sinon aucune page ne serait « indexable » pour le crawler) ; S36 : garde ?tab=.
+// Pages prérendues (format « directory ») : Astro.url.pathname finit par « / » ; sans ce retrait la canonical
+// pointait vers /profond/1/ au lieu de /profond/1 et masquait S21 (profondeur) et G08 (article hors échantillon).
+const chemin = Astro.url.pathname.length > 1 ? Astro.url.pathname.replace(/\/$/, '') : '/';
+const canonicalUrl = canonical ?? new URL(chemin + Astro.url.search, Astro.site).href;
+---
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    {description && <meta name="description" content={description} />}
+    {robots && <meta name="robots" content={robots} />}
+    <link rel="canonical" href={canonicalUrl} />
+    <meta property="og:title" content={title} />
+    <meta property="og:site_name" content={siteName} />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet" /> {/* P05 */}
+    <script is:inline src="/bloquant.js"></script> {/* P07 : script synchrone et lent dans le head */}
+    <script is:inline src="/fake-analytics.js"></script> {/* R01, R02 : mesure avant consentement */}
+    <slot name="head" />
+    <style>
+      .pale { color: #cfcfcf; background: #ffffff; } /* A01 */
+      .mini { display: inline-block; width: 10px; height: 10px; font-size: 8px; overflow: hidden; } /* A06 */
+    </style>
+  </head>
+  <body>
+    <header>
+      <nav>
+        <a href="/">Accueil</a>
+        <a href="/catalogue">Catalogue</a>
+        <a href="/formations">Formations</a>
+        <a href="/blog/article-ok">Blog</a>
+        <a href="/snippet">Extraits</a>
+        <a href="/contact" rel="nofollow">Contact</a> {/* S32 */}
+      </nav>
+      <button type="button"><svg width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle></svg></button> {/* A02 */}
+    </header>
+    <main>
+      <slot />
+    </main>
+    <footer>
+      <p class="pale">© Cobaye — ce texte est trop pâle pour être lisible.</p>
+      <a href="/formations" class="mini">a</a><a href="/catalogue" class="mini">b</a> {/* A06 */}
+      <a href="/sans-sitemap"><svg width="10" height="10"><rect width="10" height="10"></rect></svg></a> {/* A04 */}
+      <input type="email" placeholder="Votre email" /> {/* A05 */}
+      <img src="/api/storage/logo" alt="Cobaye" fetchpriority="high" loading="eager" /> {/* P14, P03 */}
+    </footer>
+    <Chat client:load /> {/* P04 */}
+    <Secret />
+  </body>
+</html>

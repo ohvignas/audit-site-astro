@@ -1,0 +1,8 @@
+---
+import Base from '../layouts/Base.astro';
+import { paragraphes } from '../data/texte';
+---
+<Base title="Guide du financement CPF pour se former" description="Tout comprendre du financement CPF d'une formation professionnelle.">
+  <h1>Financer sa formation avec le CPF</h1>
+  {paragraphes('financée par le CPF').map((p) => <p>{p}</p>)}
+</Base>
