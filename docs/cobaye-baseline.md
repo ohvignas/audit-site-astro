@@ -1,4 +1,25 @@
-# Mesure de référence du banc d'essai cobaye (phase 0)
+# Mesures du banc d'essai cobaye
+
+## Phase 1 — v2.0.0 (2026-10-01)
+
+- **Exécution CI** : GitHub Actions, `--phase 1`, seuils 1.0 / 0 faux positif / 0 inattendu (cliquet), validé sur deux exécutions consécutives
+- **Rappel global : 104/104 (100 %)** · faux positifs : 0 · inattendus (propre) : 0
+
+| Domaine | Détectés | Rappel |
+|---|---|---|
+| a11y | 6/6 | 100% |
+| code | 16/16 | 100% |
+| geo | 12/12 | 100% |
+| http | 9/9 | 100% |
+| perf | 17/17 | 100% |
+| securite | 6/6 | 100% |
+| seo | 38/38 | 100% |
+
+Défauts des phases suivantes (non comptés) : R01, R02, E01 (phase 2).
+
+---
+
+## Phase 0 — mesure de référence (2026-09-30)
 
 - **Date** : 2026-09-30
 - **Commit mesuré** : `50c78cb`
