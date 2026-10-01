@@ -130,7 +130,7 @@ def _type_jeton(t, m):
 def fuite_texte(texte):
     """[(jeton, extrait, type)] des fuites d'un texte visible (liste vide si aucune). type : "objet" (toujours une fuite), "valeur"
     (jeton collé à une valeur ou à une étiquette) ou "nu" (jeton qui remplit tout le texte)."""
-    t = _norme(texte)
+    t = ho.texte_sans_secret(_norme(texte))  # une adresse ou une clé dans le texte n'entre jamais dans une signature
     if not t:
         return []
     res = []
@@ -206,15 +206,16 @@ class Observateur(ho.Observateur):
     def _attribut(self, nom, valeur, fin_de_phrase=False):
         if not valeur:
             return
+        valeur = ho.texte_sans_secret(_norme(valeur))
         r = fuite_texte(valeur)
         if r:
             jeton = r[0][0]
-            self._ajouter(jeton, '{0} — {1}="{2}"'.format(jeton, nom, _norme(valeur)[:60]), "attribut")
+            self._ajouter(jeton, '{0} — {1}="{2}"'.format(jeton, nom, valeur[:60]), "attribut")
             return
         if fin_de_phrase:  # alt="Photo de undefined" : un alt décrit une image, il ne parle presque jamais de JavaScript
-            fin = re.search(r"(?<![\w-])(undefined|NaN|null)\W*$", _norme(valeur))
+            fin = re.search(r"(?<![\w-])(undefined|NaN|null)\W*$", valeur)
             if fin:
-                self._ajouter(fin.group(1), '{0} — {1}="{2}"'.format(fin.group(1), nom, _norme(valeur)[:60]), "fin_attribut")
+                self._ajouter(fin.group(1), '{0} — {1}="{2}"'.format(fin.group(1), nom, valeur[:60]), "fin_attribut")
 
     def _url(self, nom, valeur):
         if not valeur:
@@ -226,7 +227,7 @@ class Observateur(ho.Observateur):
         schema = p.scheme.lower()
         if schema in SCHEMAS_SANS_URL:
             return
-        jeton = None
+        jeton, param = None, None
         if schema in ("tel", "mailto"):
             reste = unquote(p.path).strip()
             jeton = next((j for j in VALEURS_URL if j in reste), None) if COURRIEL_TEL.search(reste) else None
@@ -237,9 +238,14 @@ class Observateur(ho.Observateur):
                 m = SEGMENT.search(p.path)
                 jeton = m.group(1) if m else None
             if jeton is None:  # une valeur de paramètre est une fuite quel que soit l'hôte
-                jeton = next((v for _, v in parse_qsl(p.query, keep_blank_values=True) if v in VALEURS_URL), None)
+                trouve = next(((n, v) for n, v in parse_qsl(p.query, keep_blank_values=True) if v in VALEURS_URL), None)
+                jeton, param = (trouve[1], trouve[0]) if trouve else (None, None)
         if jeton:
-            self._ajouter(jeton, "{0} — {1} {2}".format(jeton, nom, valeur[:60]), "url")
+            # adresse sans requête ni fragment (jetons, clés) : seul le paramètre fautif est rappelé, et son nom s'il n'a rien d'un secret
+            cible = ho.url_sans_secret(valeur, 60)
+            if param is not None:
+                cible += "?{0}={1}".format("…" if ho._nom_secret(param) else param[:20], jeton)
+            self._ajouter(jeton, "{0} — {1} {2}".format(jeton, nom, cible), "url")
 
     def texte(self, donnees, pile):
         if pile and pile[-1]["tag"] == "title" and not ho.dans(pile, "svg"):
@@ -250,7 +256,7 @@ class Observateur(ho.Observateur):
     def fin(self, noeud, pile):
         if "_t" not in noeud or noeud["masque"]:
             return
-        tag, parts, candidats = noeud["tag"], "".join(noeud["_t"]), noeud["_c"]
+        tag, parts, candidats = noeud["tag"], ho.texte_sans_secret("".join(noeud["_t"])), noeud["_c"]
         en_ligne = (tag in EN_LIGNE or "-" in tag) and pile and "_t" in pile[-1]
         seul = SEUL.fullmatch(_norme(parts)) if en_ligne else None
         if seul:  # le jeton remplit cet élément : le bloc qui le contient décidera s'il s'agit d'une phrase ou d'une valeur
@@ -289,7 +295,7 @@ class Observateur(ho.Observateur):
         vus = set()
         for libelle, valeurs in sorted(self.titres.items()):
             for v in valeurs:
-                v = _norme(v)
+                v = ho.texte_sans_secret(_norme(v))
                 for seg in SEGMENT_TITRE.split(v):
                     trouvees = [(j, "titre" if typ == "nu" else typ) for j, _, typ in fuite_texte(seg)]
                     fin = FIN_DE_TITRE.search(seg) if libelle == "titre" and not trouvees else None

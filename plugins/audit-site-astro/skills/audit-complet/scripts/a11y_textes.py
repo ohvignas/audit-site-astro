@@ -40,6 +40,11 @@ def _propre(alt):
     return " ".join(unicodedata.normalize("NFKC", alt).split())
 
 
+def _affiche(alt):
+    """Alt tel qu'il entre dans une signature : lisible, 80 caractères, sans adresse complète ni clé (un alt peut être une URL signée)."""
+    return ho.texte_sans_secret(_propre(alt))[:80]
+
+
 def alt_suspect(alt):
     a = _propre(alt)
     if not a:
@@ -85,7 +90,7 @@ class Observateur(ho.Observateur):
             alt = a["alt"]
             raison = alt_suspect(alt)
             if raison:
-                _ajouter(self.suspects, "{0} ({1})".format(_propre(alt)[:80], raison))
+                _ajouter(self.suspects, "{0} ({1})".format(_affiche(alt), raison))
             for conteneur in self.liens + self.figures:
                 conteneur["alts"].append(alt)
         elif t == "figure":
@@ -109,7 +114,7 @@ class Observateur(ho.Observateur):
             f = self.figures.pop()
             for alt in f["alts"]:
                 if normaliser(f["legende"]) and normaliser(alt) == normaliser(f["legende"]):
-                    _ajouter(self.redondants, "« {0} » (légende)".format(_propre(alt)[:80]))
+                    _ajouter(self.redondants, "« {0} » (légende)".format(_affiche(alt)))
         elif self.liens and self.liens[-1]["noeud"] is noeud:
             lien = self.liens.pop()
             txt = normaliser("".join(lien["texte"]))
@@ -119,7 +124,7 @@ class Observateur(ho.Observateur):
             self.vus.append((lien["href"], generique, bool(nom)))
             for alt in lien["alts"]:
                 if txt and normaliser(alt) == txt:
-                    _ajouter(self.redondants, "« {0} » (texte du lien)".format(_propre(alt)[:80]))
+                    _ajouter(self.redondants, "« {0} » (texte du lien)".format(_affiche(alt)))
 
     def resultat(self):
         # Un lien générique dont la même destination a aussi un lien explicite sur la page (carte : titre + « Lire la suite »)

@@ -642,7 +642,7 @@ def crawl(args):
     if first["final_url"] and normalize(first["final_url"]):
         final_home = normalize(first["final_url"])
         if urlparse(final_home).netloc != host:
-            print(f"[info] la home redirige vers {final_home} — hôte de crawl ajusté", file=sys.stderr)
+            print(f"[info] la home redirige vers {html_observateurs.url_page_publique(final_home)} — hôte de crawl ajusté", file=sys.stderr)
             host = urlparse(final_home).netloc
             start = final_home
     scheme = urlparse(start).scheme
@@ -798,9 +798,13 @@ def crawl(args):
 
     # --- pages.json et issues.json provisoires écrits tout de suite (atomiquement) : si le délai de l'étape coupe les
     #     contrôles réseau, les données et les constats du crawl restent ; les modules n'y ajoutent rien (ctx "provisoire")
-    ecrire_json(out / "pages.json", {"meta": {"start_url": start, "host": host, "pages_crawled": len(pages), "partiel": True},
-                                      "pages": list(pages.values())})
-    ecrire_json(out / "issues.json", constats({"meta": {}, "provisoire": True}))
+    # Tout ce qui sort (pages.json, issues.json, pages.csv, summary.md) passe par assainir_sortie : les vraies adresses restent
+    # en mémoire pour le crawl, mais ni identifiant, ni fragment, ni paramètre de matrice, ni paramètre qui ressemble à un secret
+    # (token, key, sig, session, sid, auth, code, password…) n'est écrit
+    publier = html_observateurs.assainir_sortie
+    ecrire_json(out / "pages.json", publier({"meta": {"start_url": start, "host": host, "pages_crawled": len(pages), "partiel": True},
+                                              "pages": list(pages.values())}))
+    ecrire_json(out / "issues.json", publier(constats({"meta": {}, "provisoire": True})))
     # --- URL du sitemap non visitées (limite de pages atteinte) : quelques HEAD de preuve, bornés (voir sonder_sitemap)
     sitemap_sondes = sonder_sitemap(sitemap_set, pages, host, scheme, robots, fetch, timeout=args.timeout,
                                     delai=args.delay, budget_s=args.budget_reseau, ignore_robots=args.ignore_robots)
@@ -824,8 +828,8 @@ def crawl(args):
         "astra_detected": any(p.get("astra") for p in pages.values()),
         "astro_detected": any(p.get("astro") for p in pages.values()),
     }
-    ecrire_json(out / "pages.json", {"meta": meta, "pages": list(pages.values())})
-    ecrire_json(out / "issues.json", issues)
+    ecrire_json(out / "pages.json", publier({"meta": meta, "pages": list(pages.values())}))
+    ecrire_json(out / "issues.json", publier(issues))
     write_csv(out / "pages.csv", pages.values())
     write_summary(out / "summary.md", meta, pages, issues)
     for nom, msg in sorted(modules_en_erreur(meta).items()):
@@ -1096,14 +1100,14 @@ def write_csv(path, pages):
         w = csv.writer(f)
         w.writerow(cols)
         for p in pages:
-            w.writerow([p.get("url"), p.get("status"), p.get("final_status"), p.get("final_url"),
+            w.writerow(html_observateurs.assainir_sortie([p.get("url"), p.get("status"), p.get("final_status"), p.get("final_url"),
                         p.get("redirect_hops"), p.get("ttfb"), p.get("time"), p.get("bytes_html"),
                         p.get("indexable"), p.get("noindex"), (p.get("canonicals") or [""])[0], p.get("title", ""),
                         len(p.get("title", "") or ""), len(p.get("meta_description", "") or ""),
                         len(p.get("h1", []) or []), " | ".join(p.get("h1", []) or []), p.get("content_words"),
                         p.get("words"), p.get("inlinks"), p.get("outlinks_internal"), p.get("depth"),
                         p.get("in_sitemap"), p.get("imgs"), p.get("imgs_no_alt"),
-                        ",".join(p.get("jsonld_types", []) or []), p.get("lang")])
+                        ",".join(p.get("jsonld_types", []) or []), p.get("lang")]))
 
 
 def modules_en_erreur(meta):
@@ -1142,7 +1146,7 @@ def write_summary(path, meta, pages, issues):
     ranked = sorted((p for p in pages.values() if p.get("indexable")), key=lambda p: -p.get("inlinks", 0))
     lines += ["## Pages les plus liées", ""] + [f"- {p['inlinks']} ← {p['url']}" for p in ranked[:10]]
     lines += ["", "## Pages indexables les moins liées", ""] + [f"- {p['inlinks']} ← {p['url']}" for p in ranked[-10:]]
-    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    Path(path).write_text(html_observateurs.assainir_sortie("\n".join(lines) + "\n"), encoding="utf-8")
 
 
 def main():

@@ -51,7 +51,7 @@ def _refs(valeur):
 
 def _net(v, n):
     """Valeur lisible : espaces réduits, jamais de paramètre de requête, guillemets neutralisés, tronquée à n caractères."""
-    v = re.sub(r"\s+", " ", (v or "").split("?")[0]).strip().replace('"', "'")
+    v = ho.texte_sans_secret(re.sub(r"\s+", " ", (v or "").split("?")[0]).strip().replace('"', "'"))
     return v if len(v) <= n else v[:n].rstrip() + "…"
 
 
@@ -204,7 +204,7 @@ def _exemples(groupes):
     sortie = []
     for sig in sorted(groupes, key=lambda s: (-groupes[s]["n"], s)):
         g = groupes[sig]
-        urls = sorted(set(g["pages"]))
+        urls = sorted({ho.url_page_publique(u) for u in g["pages"]})  # pages du site audité : sans jeton dans la requête
         e = {"signature": sig, "occurrences": g["n"], "pages": len(urls)}
         if "exemple" in g:
             e["exemple"] = g["exemple"]  # avant les URL : ex_str coupe le texte d'un exemple à 220 caractères
