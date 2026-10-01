@@ -2,14 +2,20 @@ import json
 import pathlib
 import subprocess
 import sys
+import random
+import re
 import tempfile
+import threading
 import time
 import unittest
+import gzip
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ICI = pathlib.Path(__file__).resolve().parent
 SCRIPTS = ICI.parents[1] / "plugins/audit-site-astro/skills/audit-complet/scripts"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ICI))
+import crawl_site  # noqa: E402
 import html_observateurs as ho  # noqa: E402
 import ressources_site  # noqa: E402
 from site_local import HTML, SiteLocal  # noqa: E402
@@ -54,7 +60,7 @@ class TestRessources(unittest.TestCase):
 
     def test_severites_et_domaines(self):
         for cle, sev, dom in (("image_lourde", "moyenne", "Performance"), ("js_lourd", "moyenne", "Performance"),
-                              ("asset_sans_cache", "basse", "Serveur / HTTP"), ("police_sans_font_display", "basse", "Performance")):
+                              ("asset_sans_cache", "moyenne", "Serveur / HTTP"), ("police_sans_font_display", "basse", "Performance")):
             self.assertEqual((self.issues[cle]["severity"], self.issues[cle]["domaine"]), (sev, dom), cle)
 
     def test_ni_tiers_ni_image_dynamique(self):
@@ -65,8 +71,8 @@ class TestRessources(unittest.TestCase):
         m = self.pages["meta"]["modules"]["ressources"]
         self.assertEqual((m["trouvees"], m["mesurees"], m["budget_atteint"], m["non_verifiees"]), (6, 6, False, 0))
 
-    def test_poids_compresse_et_non_compresse_connus(self):
-        # le JS de l'îlot est mesuré par HEAD (Content-Length) : même poids avec ou sans compression quand le serveur ne compresse pas
+    def test_poids_js_mesure_par_get_serveur_sans_compression(self):
+        # serveur de test sans compression : octets transférés = octets décompressés, étiquette « non compressé »
         ex = self.issues["js_lourd"]["examples"][0]
         self.assertIn("non compressé", ex["exemple"])
 
@@ -130,9 +136,7 @@ class TestMesures(unittest.TestCase):
     def test_js_sans_content_length_lu_en_get_compresse_et_decompresse(self):
         u = "https://ex.fr/_astro/Chat.X9aB3cD4.js"
         def f(url, timeout=20, method="GET", max_bytes=3_000_000, ua=None, extra_headers=None, max_hops=10):
-            if method == "HEAD":
-                return {"status": 200, "headers": {"content-encoding": "gzip", "content-type": "text/javascript"}, "raw_bytes": 0,
-                        "body": b"", "chain": [], "final_url": url}
+            self.assertEqual(method, "GET")   # un script n'est jamais jugé sur le HEAD
             return {"status": 200, "headers": {"content-encoding": "gzip", "content-type": "text/javascript"}, "raw_bytes": 120_000,
                     "body": b"a" * 447_000, "chain": [], "final_url": url}
         ctx = {"fetch": f, "host": "ex.fr", "ressources_max": 10, "timeout": 5, "budget_reseau_s": 30, "meta": {}}
@@ -292,7 +296,7 @@ class TestObservateur(unittest.TestCase):
         paires = sorted((x["type"], x["url"].replace("https://ex.fr", "")) for x in r["ressources"])
         self.assertEqual(paires, [("css", "/s.css"), ("police", "/f.woff2"), ("script", "/_astro/C.A1b2C3d4.js"),
                                   ("script", "/_astro/h.A1b2C3d4.js"), ("script", "/_astro/m.A1b2C3d4.js"),
-                                  ("script", "/_astro/r.A1b2C3d4.js"), ("script", "https://cdn.x.org/a.js")])
+                                  ("script", "/_astro/r.A1b2C3d4.js")])   # le tiers (cdn.x.org) n'est plus collecté
 
     def test_style_en_ligne_decoupe_en_plusieurs_morceaux(self):
         r = self.lire('<style>@font-face{font-family:X;<!-- c -->src:url(x.woff2)}</style>')
@@ -311,6 +315,277 @@ class TestBudget(unittest.TestCase):
         self.assertTrue(ctx["meta"]["ressources"]["budget_atteint"])
         self.assertLessEqual(ctx["meta"]["ressources"]["mesurees"], 3)
         self.assertEqual(ctx["meta"]["ressources"]["non_verifiees"], 10 - ctx["meta"]["ressources"]["mesurees"])
+
+
+class TestAnalyseSeverite(unittest.TestCase):
+    """I5 : une seule gravité par clé asset_sans_cache : moyenne si un asset >= 100 Ko est servi sans cache (max-age=0, no-cache, no-store)."""
+
+    def sev(self, ressources):
+        vus = []
+        ctx = {"ressources": ressources, "sources_ressources": {u: ["https://ex.fr/"] for u in ressources}, "polices_css": {}}
+        ressources_site.issues({}, lambda cle, lib, sev, ex, n=1, domaine=None: vus.append((cle, sev)), ctx)
+        return sorted({s for c, s in vus if c == "asset_sans_cache"})
+
+    def m(self, octets, cache):
+        return {"type": "image", "statut": 200, "octets": octets, "cache": cache, "ctype": "image/png"}
+
+    def test_189_ko_max_age_0_moyenne(self):
+        self.assertEqual(self.sev({"https://ex.fr/agent-avatar.png": self.m(189 * 1024, "max-age=0")}), ["moyenne"])
+
+    def test_seuil_100_ko_inclus(self):
+        self.assertEqual(self.sev({"https://ex.fr/a.png": self.m(100 * 1024, "no-store")}), ["moyenne"])
+        self.assertEqual(self.sev({"https://ex.fr/a.png": self.m(100 * 1024, "no-cache")}), ["moyenne"])
+        self.assertEqual(self.sev({"https://ex.fr/a.png": self.m(100 * 1024 - 1, "no-store")}), ["basse"])
+
+    def test_gros_mais_cache_non_nul_ou_absent_basse(self):
+        self.assertEqual(self.sev({"https://ex.fr/a.png": self.m(300_000, "max-age=60")}), ["basse"])
+        self.assertEqual(self.sev({"https://ex.fr/a.png": self.m(300_000, "")}), ["basse"])
+        self.assertEqual(self.sev({"https://ex.fr/a.png": self.m(300_000, "public, s-maxage=86400")}), ["basse"])
+
+    def test_melange_une_seule_gravite_pour_la_cle(self):
+        r = {"https://ex.fr/petit.png": self.m(2_000, "max-age=0"), "https://ex.fr/gros.png": self.m(189 * 1024, "max-age=0")}
+        self.assertEqual(self.sev(r), ["moyenne"])
+        self.assertEqual(self.sev({"https://ex.fr/petit.png": self.m(2_000, "max-age=0")}), ["basse"])
+
+    def test_police_sans_font_display_reste_basse(self):
+        vus = []
+        ressources_site.issues({}, lambda cle, lib, sev, ex, n=1, domaine=None: vus.append((cle, sev)),
+                               {"ressources": {}, "polices_css": {"A (/s.css)": ["https://ex.fr/"]}})
+        self.assertEqual(vus, [("police_sans_font_display", "basse")])
+
+
+def _empreintes(forme, n, graine):
+    """Empreintes Vite/Rollup : 8 caractères de l'alphabet base64url (A-Za-z0-9_-)."""
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+    r = random.Random(graine)
+    return ["/assets/index{0}{1}.js".format(forme, "".join(r.choice(alphabet) for _ in range(8))) for _ in range(n)]
+
+
+class TestHashe(unittest.TestCase):
+    """I4 : empreintes Vite/Astro en formes tiret et point, avec lettres seules, « _ » ou « - » dans l'empreinte, et préfixe base."""
+
+    def test_empreintes_aleatoires_99_pour_cent(self):
+        for forme in ("-", "."):
+            chemins = _empreintes(forme, 5000, 2024)
+            reconnus = sum(ressources_site.hashe(c) for c in chemins)
+            self.assertGreaterEqual(reconnus / len(chemins), 0.99, "forme {0!r} : {1}/{2}".format(forme, reconnus, len(chemins)))
+
+    def test_cas_precis_reconnus(self):
+        for c in ("/assets/index-DiwrgTda.js", "/assets/Layout-C2xYpQ_9.js", "/assets/Layout-C2xY-Q9a.js", "/assets/index.Bx9a8K2q.js.map",
+                  "/blog/_astro/x.png", "/base/_next/static/chunks/a.js", "/assets/app.f3a9c2d1e8.webp", "/assets/index-CPTKQKQK.js",
+                  "/assets/index.DiwrgTda.js"):
+            self.assertTrue(ressources_site.hashe(c), c)
+
+    def test_noms_ordinaires_non_hashes(self):
+        for c in ("/logo.png", "/hero-image.webp", "/logo-original.png", "/Settings.css", "/hero-banner.jpg", "/team-photos-2023.jpg",
+                  "/IMG-20240115.jpg", "/agent-avatar.png", "/images/hero-4000.jpg", "/hero-1920x1080.png", "/background.jpg",
+                  "/fonts/open-sans.woff2", "/images/team-members.png", "/favicon.ico", "/og-image.png"):
+            self.assertFalse(ressources_site.hashe(c), c)
+
+
+class TestProprietesIlots(unittest.TestCase):
+    """I3 : les images passées en props d'un <astro-island> (îlot rendu vide) sont lues. Îlot SYNTHÉTIQUE (aucune donnée de site réel)."""
+
+    def lire(self, html, url="https://ex.fr/p"):
+        return ho.analyser(html, {}, url, modules=[("ressources_site", ressources_site)])["ressources_site"]
+
+    def test_props_image(self):
+        r = self.lire('<astro-island uid="1" component-url="/_astro/C.A1b2C3d4.js" renderer-url="/_astro/client.Q1w2E3r4.js" '
+                      'props="{&quot;avatarUrl&quot;:[0,&quot;/agent-avatar.png&quot;],&quot;color&quot;:[0,&quot;#171717&quot;]}" '
+                      'ssr client="idle"></astro-island>')
+        urls = sorted((x["type"], x["url"]) for x in r["ressources"])
+        self.assertIn(("image", "https://ex.fr/agent-avatar.png"), urls)
+        self.assertEqual([u for _, u in urls if "171717" in u], [])
+        self.assertEqual(len(urls), 3)
+
+    def test_props_imbriquees_et_hotes(self):
+        r = self.lire('<astro-island props="{&quot;items&quot;:[1,[[0,{&quot;src&quot;:[0,&quot;/a/b.WEBP?v=2&quot;]}],'
+                      '[0,{&quot;src&quot;:[0,&quot;https://cdn.ailleurs.org/c.png&quot;]}],[0,{&quot;src&quot;:[0,&quot;https://ex.fr/d.svg&quot;]}]]],'
+                      '&quot;titre&quot;:[0,&quot;logo.png est mon fichier&quot;]}"></astro-island>')
+        urls = sorted(x["url"] for x in r["ressources"])
+        self.assertEqual(urls, ["https://ex.fr/a/b.WEBP?v=2", "https://ex.fr/d.svg"])   # le tiers et le texte libre sont écartés
+
+    def test_props_invalides_ou_enormes_ignorees(self):
+        self.assertEqual(self.lire('<astro-island props="pas du json {"></astro-island>')["ressources"], [])
+        enorme = "{&quot;a&quot;:[0,&quot;" + "x" * 70_000 + ".png&quot;]}"
+        self.assertEqual(self.lire('<astro-island props="{0}"></astro-island>'.format(enorme))["ressources"], [])
+
+
+class TestCoupePage(unittest.TestCase):
+    """I6 : filtre hôte / /_image AVANT la coupe, scripts et CSS d'abord, ressources coupées dénombrées."""
+
+    def lire(self, html):
+        return ho.analyser(html, {}, "https://ex.fr/p", modules=[("ressources_site", ressources_site)])["ressources_site"]
+
+    def test_ilot_apres_200_images_present(self):
+        imgs = "".join('<img src="/i{0}.png" alt="">'.format(i) for i in range(200))
+        tiers = "".join('<img src="https://t.example.org/t{0}.png" alt="">'.format(i) for i in range(50))
+        dyn = "".join('<img src="/_image?href=%2Fa{0}.png&w=10" alt="">'.format(i) for i in range(50))
+        r = self.lire(tiers + dyn + imgs + '<astro-island component-url="/_astro/Chat.X9aB3cD4.js" renderer-url="/_astro/client.Q1w2E3r4.js">'
+                      '</astro-island>')
+        urls = [x["url"] for x in r["ressources"]]
+        self.assertEqual(len(urls), 150)
+        self.assertIn("https://ex.fr/_astro/Chat.X9aB3cD4.js", urls)
+        self.assertIn("https://ex.fr/_astro/client.Q1w2E3r4.js", urls)
+        self.assertFalse([u for u in urls if "t.example.org" in u or "/_image" in u])
+        self.assertEqual(r["ressources_coupees"], 52)   # 200 images + 2 scripts - 150
+
+    def test_meta_cumule_les_coupes(self):
+        pages = {"https://ex.fr/a": {"obs": {"ressources_site": {"ressources": [], "ressources_coupees": 7}}},
+                 "https://ex.fr/b": {"obs": {"ressources_site": {"ressources": [], "ressources_coupees": 5}}}}
+        ctx = {"fetch": lambda *a, **k: None, "host": "ex.fr", "ressources_max": 400, "timeout": 5, "budget_reseau_s": 5, "meta": {}}
+        ressources_site.apres_crawl(pages, ctx)
+        self.assertEqual(ctx["meta"]["ressources"]["coupees_par_page"], 12)
+
+
+class TestMineurs(unittest.TestCase):
+    def lire(self, html):
+        return ho.analyser(html, {}, "https://ex.fr/p", modules=[("ressources_site", ressources_site)])["ressources_site"]
+
+    def test_nomodule_ignore(self):
+        r = self.lire('<script nomodule src="/_astro/polyfills-legacy.A1b2C3d4.js"></script><script type="module" src="/_astro/m.A1b2C3d4.js"></script>')
+        self.assertEqual([x["url"] for x in r["ressources"]], ["https://ex.fr/_astro/m.A1b2C3d4.js"])
+
+    def test_famille_de_l_api_fonts_sans_empreinte_de_build(self):
+        css = '@font-face{font-family:"Inter Variable-b5cc9897a86da6fa";src:url(/_astro/fonts/a.woff2);font-display:block}'
+        self.assertEqual(ressources_site.polices_sans_display(css, "style en ligne"),
+                         ["Inter Variable (style en ligne, font-display: block)"])
+        self.assertEqual(ressources_site.polices_sans_display('@font-face{font-family:Poppins-de0d09395361de89;src:url(a.woff2)}', "/s.css"),
+                         ["Poppins (/s.css)"])
+
+    def test_compteurs_secret_et_css_non_lus(self):
+        urls = ["https://ex.fr/css/{0}.css".format(i) for i in range(12)]
+        pages = pages_de(*([("css", u) for u in urls] + [("image", "https://ex.fr/k/…/a.png")]))
+
+        def f(u, timeout=20, method="GET", max_bytes=3_000_000, ua=None, extra_headers=None):
+            return {"status": 200, "headers": {"content-length": "5"}, "raw_bytes": 5, "body": b"a{}", "chain": [], "final_url": u}
+        ctx = {"fetch": f, "host": "ex.fr", "ressources_max": 400, "timeout": 5, "budget_reseau_s": 30, "meta": {}}
+        ressources_site.apres_crawl(pages, ctx)
+        m = ctx["meta"]["ressources"]
+        self.assertEqual((m["ignorees_secret"], m["css_non_lus"]), (1, 2))
+
+
+class TestSurete(unittest.TestCase):
+    """M6 : aucune requête vers un autre hôte, port ou IP ; filtre figé."""
+
+    def test_aucun_hote_ni_port_etranger(self):
+        appels = []
+
+        def f(u, timeout=20, method="GET", max_bytes=3_000_000, ua=None, extra_headers=None):
+            appels.append(u)
+            return {"status": 200, "headers": {"content-length": "5"}, "raw_bytes": 5, "body": b"", "chain": [], "final_url": u}
+        mauvais = ["http://169.254.169.254/x.png", "//169.254.169.254/x.png", "http://ex.fr@169.254.169.254/x.png",
+                   "http://ex.fr:8080/x.png", "http://ex.fr.evil.com/x.png", "http://[::1]/x.png", "http://127.0.0.1/x.png"]
+        pages = pages_de(*[("image", u) for u in mauvais] + [("image", "https://ex.fr/ok.png")])
+        ctx = {"fetch": f, "host": "ex.fr", "ressources_max": 400, "timeout": 5, "budget_reseau_s": 30, "meta": {}}
+        ressources_site.apres_crawl(pages, ctx)
+        self.assertEqual(appels, ["https://ex.fr/ok.png"])
+
+
+def _serveur(corps, gz):
+    """Serveur imitant nginx / Express : HEAD jamais compressé (Content-Length du fichier brut), GET compressé si gzip accepté."""
+    class H(BaseHTTPRequestHandler):
+        requetes = []
+
+        def _rep(self):
+            H.requetes.append((self.command, self.path, self.headers.get("Accept-Encoding", "")))
+            h = {"Content-Type": "text/javascript", "Cache-Control": "public, max-age=31536000, immutable"}
+            if self.command == "GET" and "gzip" in self.headers.get("Accept-Encoding", ""):
+                data, h["Content-Encoding"] = gz, "gzip"
+            else:
+                data = corps
+            self.send_response(200)
+            for k, v in h.items():
+                self.send_header(k, v)
+            self.send_header("Content-Length", str(len(corps) if self.command == "HEAD" else len(data)))
+            self.end_headers()
+            if self.command == "GET":
+                self.wfile.write(data)
+        do_GET = do_HEAD = _rep
+
+        def log_message(self, *a):
+            pass
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, H
+
+
+class TestPoidsTransfere(unittest.TestCase):
+    """I2 : un bundle bien servi (HEAD brut, GET gzip) n'est pas un js_lourd ; mesure sur les octets réellement transférés."""
+
+    def test_head_brut_get_gzip(self):
+        corps = (b"export const a = function(){ return 'texte repetitif de bundle'; };\n" * 9000)   # ~590 Ko brut, quelques Ko gzip
+        gz = gzip.compress(corps)
+        self.assertLess(len(gz), 20_000)
+        srv, H = _serveur(corps, gz)
+        try:
+            hote = "127.0.0.1:{0}".format(srv.server_port)
+            u = "http://{0}/_astro/ChatBubble.DKLw9cvg.js".format(hote)
+            ctx = {"fetch": crawl_site.fetch, "host": hote, "ressources_max": 10, "timeout": 5, "budget_reseau_s": 30, "meta": {}}
+            ressources_site.apres_crawl(pages_de(("script", u), page="http://{0}/".format(hote)), ctx)
+            m = ctx["ressources"][u]
+            self.assertEqual(m["octets"], len(gz))
+            self.assertEqual(m["octets_decompresses"], len(corps))
+            self.assertEqual(m["encodage"], "gzip")
+            self.assertEqual([r[0] for r in H.requetes], ["GET"])
+            self.assertIn("gzip", H.requetes[0][2])
+            self.assertIn("br", H.requetes[0][2])
+            vus = []
+            ressources_site.issues({}, lambda cle, *a, **k: vus.append(cle), ctx)
+            self.assertNotIn("js_lourd", vus)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_svg_lu_en_get_aussi(self):
+        appels = []
+
+        def f(u, timeout=20, method="GET", max_bytes=3_000_000, ua=None, extra_headers=None):
+            appels.append(method)
+            return {"status": 200, "headers": {"content-encoding": "gzip", "content-type": "image/svg+xml"}, "raw_bytes": 4000,
+                    "body": b"<svg/>" * 1000, "chain": [], "final_url": u}
+        ctx = {"fetch": f, "host": "ex.fr", "ressources_max": 10, "timeout": 5, "budget_reseau_s": 30, "meta": {}}
+        ressources_site.apres_crawl(pages_de(("image", "https://ex.fr/logo.svg")), ctx)
+        self.assertEqual(appels, ["GET"])
+        self.assertEqual(ctx["ressources"]["https://ex.fr/logo.svg"]["octets"], 4000)
+
+    def test_brotli_sans_chiffre_decompresse(self):
+        def f(u, timeout=20, method="GET", max_bytes=3_000_000, ua=None, extra_headers=None):
+            return {"status": 200, "headers": {"content-encoding": "br", "content-type": "text/javascript"}, "raw_bytes": 90_000,
+                    "body": b"\x00" * 90_000, "chain": [], "final_url": u}
+        ctx = {"fetch": f, "host": "ex.fr", "ressources_max": 10, "timeout": 5, "budget_reseau_s": 30, "meta": {}}
+        ressources_site.apres_crawl(pages_de(("script", "https://ex.fr/a.js")), ctx)
+        m = ctx["ressources"]["https://ex.fr/a.js"]
+        self.assertEqual((m["octets"], m["encodage"]), (90_000, "br"))
+        self.assertNotIn("octets_decompresses", m)   # fetch ne décode pas le brotli : le corps reçu n'est pas le texte
+
+
+class TestDecompressionBornee(unittest.TestCase):
+    """I1 : jamais plus que le plafond de lecture une fois décompressé ; le plafond est demandé à fetch quand il l'accepte."""
+
+    def test_plafond_transmis_et_aucun_chiffre_si_atteint(self):
+        recus = []
+
+        def f(u, timeout=20, method="GET", max_bytes=3_000_000, ua=None, extra_headers=None, max_decompressed=None):
+            recus.append(max_decompressed)
+            n = max_decompressed or 30_000_000
+            return {"status": 200, "headers": {"content-encoding": "gzip", "content-type": "text/javascript"}, "raw_bytes": 29_000,
+                    "body": b"\x00" * n, "chain": [], "final_url": u}
+        ctx = {"fetch": f, "host": "ex.fr", "ressources_max": 10, "timeout": 5, "budget_reseau_s": 30, "meta": {}}
+        ressources_site.apres_crawl(pages_de(("script", "https://ex.fr/bombe.js"), ("css", "https://ex.fr/b.css")), ctx)
+        self.assertTrue(recus and all(r is not None and r <= 2_000_000 for r in recus), recus)
+        m = ctx["ressources"]["https://ex.fr/bombe.js"]
+        self.assertNotIn("octets_decompresses", m)
+        self.assertTrue(m["decompresse_tronque"])
+
+    def test_corps_demesure_d_un_fetch_non_borne_jamais_conserve(self):
+        def f(u, timeout=20, method="GET", max_bytes=3_000_000, ua=None, extra_headers=None):
+            return {"status": 200, "headers": {"content-encoding": "gzip", "content-type": "text/css"}, "raw_bytes": 29_000,
+                    "body": b"a{}" * 10_000_000, "chain": [], "final_url": u}
+        ctx = {"fetch": f, "host": "ex.fr", "ressources_max": 10, "timeout": 5, "budget_reseau_s": 30, "meta": {}}
+        ressources_site.apres_crawl(pages_de(("css", "https://ex.fr/b.css")), ctx)
+        self.assertNotIn("corps", ctx["ressources"]["https://ex.fr/b.css"])
+        self.assertLess(len(json.dumps(ctx["ressources"])), 2000)
 
 
 if __name__ == "__main__":

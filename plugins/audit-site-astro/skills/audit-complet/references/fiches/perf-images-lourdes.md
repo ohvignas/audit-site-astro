@@ -19,6 +19,8 @@ sources:
 
 Chaque image de plus de 200 Ko retarde le LCP en 4G et consomme le forfait des visiteurs mobiles. Le cas typique : un avatar de 112 px affiché à partir d'un fichier de 189 Ko placé dans `public/`, que PageSpeed Insights chiffre à près de 300 Ko d'économie sur la page. Les fichiers de `public/` sont recopiés tels quels : Astro ne les redimensionne ni ne les convertit.
 
+L'outil mesure les images du domaine audité trouvées dans `<img src>`, `<link rel="preload" as="image">` et dans les `props` JSON d'un composant en îlot (`<astro-island props="…">`, utile pour l'avatar d'un chat rendu côté client). Les images d'un autre sous-domaine ne sont pas mesurées.
+
 ## Comment le constater soi-même
 
 ```bash

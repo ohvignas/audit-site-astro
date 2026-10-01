@@ -2,13 +2,15 @@
 id: serveur-cache-statiques-non-hashes
 titre: Fichiers statiques non hashés servis sans cache navigateur
 domaine: Serveur / HTTP
-severite_type: basse
+severite_type: moyenne
 effort: S
 declencheurs:
   - "crawl:asset_sans_cache"
 sources:
   - https://developer.mozilla.org/en-US/docs/Web/HTTP/Caching
   - https://docs.astro.build/en/guides/images/
+  - https://web.dev/articles/http-cache
+  - https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control
 ---
 
 # Fichiers statiques non hashés servis sans cache navigateur
@@ -18,6 +20,14 @@ sources:
 ## Pourquoi c'est important
 
 Les fichiers d'`/_astro/` portent un hash dans leur nom : ils peuvent être mis en cache un an. Un fichier de `public/` (`/agent-avatar.png`) garde le même nom d'une version à l'autre : le serveur de votre hébergeur y met souvent `max-age=0`, et le navigateur redemande le fichier à chaque page. Un fichier non hashé ne peut pas être `immutable` (sa mise à jour resterait invisible) ; un cache de quelques heures à un jour est le bon compromis.
+
+**Gravité.** Moyenne quand un fichier de 100 Ko ou plus est servi sans aucun cache (`max-age=0`, `no-cache` ou `no-store`) : il est retéléchargé à chaque page (cas typique : un avatar de 189 Ko en `max-age=0`). Basse sinon (petite icône, `max-age` de quelques minutes, en-tête absent).
+
+**Nuances.**
+- `no-cache` ne veut pas dire « ne pas mettre en cache » : le navigateur garde le fichier mais le revalide à chaque usage. Avec un `ETag` (ou `Last-Modified`), la revalidation coûte un aller-retour `304` sans retéléchargement : c'est la recommandation de web.dev pour une ressource non versionnée, moins grave que `max-age=0` sans validateur. L'outil le signale quand même, car un jour de cache évite aussi cet aller-retour.
+- Sans `Cache-Control`, mais avec `Last-Modified`, les navigateurs appliquent une fraîcheur heuristique (une fraction du temps écoulé depuis la dernière modification, voir MDN) : l'en-tête « absent » est signalé tel quel, le dommage est souvent moindre qu'avec `no-store`. Un `Expires` à plus d'une heure compte comme un cache.
+- Le seuil de 3600 s (`max-age` inférieur à une heure) est un choix de l'outil, volontairement plus souple que Lighthouse (`uses-long-cache-ttl`, qui vise plusieurs jours).
+- Seuls les fichiers du domaine audité sont mesurés : une image servie depuis un autre sous-domaine (stockage, CDN) ne l'est pas ici ; l'endpoint `/_image` d'Astro est vérifié ailleurs (`http_checks.sh`).
 
 ## Comment le constater soi-même
 
