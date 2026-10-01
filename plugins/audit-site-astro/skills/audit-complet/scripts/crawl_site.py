@@ -184,7 +184,8 @@ def sonder_sitemap(sitemap_set, pages, host, scheme, robots, fetch_fn, timeout=2
     """Preuve réseau, bornée, d'une redirection d'URL du sitemap non visitées (limite de pages atteinte) : un HEAD,
     premier saut seulement, sur 5 URL au plus (2 par couple schéma/hôte), en priorité celles dont l'équivalent n'est pas
     déjà crawlé. Jamais d'hôte tiers ; robots.txt respecté ; arrêt après 3 échecs de suite ou budget de temps dépassé.
-    Le comptage des URL concernées se fait sans réseau (build_issues)."""
+    Le comptage des URL concernées se fait sans réseau et le verdict se prend par groupe (build_issues)."""
+    timeout = min(timeout, 8)  # simple preuve : timeout court
     cands = []
     for u in sitemap_set:
         o = None if u in pages else origine_du_crawl(u, host, scheme)
@@ -1006,6 +1007,15 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
     if not sitemap_set:
         add("no_sitemap", "Aucun sitemap XML trouvé (robots.txt, /sitemap_index.xml, /wp-sitemap.xml)", "haute")
     lib_redir = "URL du sitemap qui redirigent (souvent http:// ou slash final incohérent)"
+    # verdict par groupe (schéma, hôte) : 3xx = redirection, 2xx = réponse sans redirection ; 0, 4xx, 5xx (WAF, limitation de
+    # débit, panne) ne concluent pas. Un groupe entièrement en 2xx est compté en entier ; un groupe mixte reste une redirection.
+    groupes = {}
+    for u, sd in sondes.items():
+        g = groupes.setdefault(urlparse(u)[:2], {"redir": 0, "ok": []})
+        if 300 <= sd["statut"] < 400:
+            g["redir"] += 1
+        elif 200 <= sd["statut"] < 300:
+            g["ok"].append(sd["statut"])
     # le comptage des variantes (schéma ou hôte différent du crawl) ne demande aucun réseau ; les sondes ne font que
     # prouver : leurs URL passent en premier pour que le code observé figure dans les exemples
     for u in sorted(sitemap_set, key=lambda x: (x not in sondes, x)):
@@ -1013,17 +1023,22 @@ def build_issues(pages, inlinks, sitemap_set, sm_urls, blocked, robots, variant_
         o = None if p else origine_du_crawl(u, host, scheme)
         variante = bool(o and o[1])
         if not p:
-            if s and not 300 <= s["statut"] < 400:  # la sonde a démenti la redirection : on n'affiche pas de cible
-                if variante:
-                    add("sitemap_sans_redirection",
-                        "URL du sitemap sur une variante d'hôte ou de schéma qui répond sans rediriger", "moyenne",
-                        {"url": u, "statut": s["statut"]})
-            elif s:
+            g = groupes.get(urlparse(u)[:2], {}) if variante else {}
+            redir, oks = g.get("redir", 0), g.get("ok", [])
+            if variante and oks and not redir:  # tout le groupe répond en 2xx : aucune redirection
+                add("sitemap_sans_redirection",
+                    "URL du sitemap sur une variante d'hôte ou de schéma qui répond sans rediriger", "moyenne",
+                    {"url": u, "statut": s["statut"] if s else "non vérifié (groupe sondé : %d)" % oks[0]})
+            elif s and 300 <= s["statut"] < 400:
                 add("sitemap_redirect", lib_redir, "moyenne", {"url": u, "vers": s["vers"], "statut": s["statut"]})
-            elif variante:  # déduit sans réseau
-                add("sitemap_redirect", lib_redir, "moyenne",
-                    {"url": u, "vers": o[0],
-                     "statut": "non vérifié (limite de crawl atteinte)" if eq else "non vérifié"})
+            elif variante:  # déduit sans réseau (ou sonde non concluante)
+                if redir and oks:
+                    st = "non vérifié (groupe mixte : redirections et réponses 2xx)"
+                elif s:
+                    st = "non vérifié (sonde : %s)" % s["statut"]
+                else:
+                    st = "non vérifié (limite de crawl atteinte)" if eq else "non vérifié"
+                add("sitemap_redirect", lib_redir, "moyenne", {"url": u, "vers": o[0], "statut": st})
             if not eq:
                 continue
             cible = pages[eq]

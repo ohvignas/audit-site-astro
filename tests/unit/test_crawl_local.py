@@ -138,15 +138,16 @@ class TestSitemapVariantes(unittest.TestCase):
 class FetchFactice:
     """fetch de remplacement : enregistre les appels ; chaque URL http:// / www répond 301 vers son équivalent https://ex.fr."""
 
-    def __init__(self, statut=301):
-        self.appels, self.statut = [], statut
+    def __init__(self, statut=301, par_url=None):
+        self.appels, self.statut, self.par_url = [], statut, par_url or {}
 
     def __call__(self, url, timeout=20, method="GET", max_hops=10, **kw):
         self.appels.append({"url": url, "timeout": timeout, "method": method, "max_hops": max_hops})
+        statut = self.par_url.get(url, self.statut)
         cible = "https://ex.fr" + url.split("ex.fr", 1)[-1] if "ex.fr" in url else url
-        if self.statut in (301, 302):
-            return {"url": url, "final_url": cible, "status": -1, "chain": [{"url": url, "status": self.statut}]}
-        return {"url": url, "final_url": url, "status": self.statut, "chain": []}
+        if statut in (301, 302):
+            return {"url": url, "final_url": cible, "status": -1, "chain": [{"url": url, "status": statut}]}
+        return {"url": url, "final_url": url, "status": statut, "chain": []}
 
 
 def issues_sitemap(sm, pages, robots="User-agent: *\nAllow: /\n", fetch_fn=None, **kw):
@@ -173,7 +174,7 @@ class TestSondesSitemap(unittest.TestCase):
         self.assertNotIn("not_in_sitemap", issues)
         self.assertLessEqual(len(f.appels), 5)
         self.assertEqual(len(sondes), len(f.appels))
-        self.assertTrue(all(a["method"] == "HEAD" and a["max_hops"] == 1 and a["timeout"] == 20 for a in f.appels))
+        self.assertTrue(all(a["method"] == "HEAD" and a["max_hops"] == 1 and a["timeout"] == 8 for a in f.appels))
         # les URL sondées (priorité à celles sans équivalent crawlé) portent le code observé et passent en tête
         ex = issues["sitemap_redirect"]["examples"]
         self.assertEqual([e["statut"] for e in ex[:len(sondes)]], [301] * len(sondes))
@@ -185,6 +186,34 @@ class TestSondesSitemap(unittest.TestCase):
         self.assertNotIn("sitemap_redirect", issues)
         self.assertEqual(sorted(e["statut"] for e in issues["sitemap_sans_redirection"]["examples"]), [200, 200])
         self.assertTrue(all("vers" not in e for e in issues["sitemap_sans_redirection"]["examples"]))
+
+    def test_groupe_entier_en_2xx_compte_en_entier(self):
+        pages = self.pages()
+        sm = ["http://ex.fr/n%02d" % i for i in range(22)]
+        issues, sondes = issues_sitemap(sm, pages, fetch_fn=FetchFactice(statut=200))
+        self.assertNotIn("sitemap_redirect", issues)
+        self.assertEqual(issues["sitemap_sans_redirection"]["count"], 22)
+        self.assertEqual(len(sondes), 2)
+
+    def test_groupe_mixte_reste_une_redirection_et_le_dit(self):
+        pages = self.pages()
+        sm = ["http://ex.fr/n%02d" % i for i in range(6)]
+        issues, _ = issues_sitemap(sm, pages, fetch_fn=FetchFactice(par_url={"http://ex.fr/n01": 200}))
+        self.assertNotIn("sitemap_sans_redirection", issues)
+        self.assertEqual(issues["sitemap_redirect"]["count"], 6)
+        st = [e["statut"] for e in issues["sitemap_redirect"]["examples"]]
+        self.assertEqual(st[0], 301)
+        self.assertTrue(all("groupe mixte" in x for x in st[1:] if isinstance(x, str)) and len(st) == 6)
+
+    def test_erreurs_de_sonde_ne_concluent_pas(self):
+        pages = self.pages()
+        sm = ["http://ex.fr/n%02d" % i for i in range(6)]
+        for code in (0, 403, 429, 503):
+            with self.subTest(code=code):
+                issues, _ = issues_sitemap(sm, pages, fetch_fn=FetchFactice(statut=code))
+                self.assertNotIn("sitemap_sans_redirection", issues)
+                self.assertEqual(issues["sitemap_redirect"]["count"], 6)
+                self.assertTrue(all(e["statut"].startswith("non vérifié") for e in issues["sitemap_redirect"]["examples"]))
 
     def test_page_absente_du_sitemap_reste_signalee(self):
         pages = self.pages("/a", "/b")
