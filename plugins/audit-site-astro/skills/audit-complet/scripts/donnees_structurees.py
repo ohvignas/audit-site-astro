@@ -15,10 +15,13 @@ télétravail) ; FAQPage n'a plus de propriétés requises (documentation suppri
 Contrôle de cohérence volontairement minimal : un prix de JSON-LD absent du texte visible (« basse ») ; rien d'autre n'est comparé.
 
 Objets contrôlés : seulement ceux que Google évalue comme résultat enrichi, soit la racine, les éléments de @graph ou d'une liste
-racine, mainEntity / mainEntityOfPage, l'item d'un ListItem, et les Review / AggregateRating lus sous review, reviews, aggregateRating.
+racine, mainEntity / mainEntityOfPage, video, breadcrumb, l'item d'un ListItem, un élément placé directement dans
+l'itemListElement d'un ItemList, et les Review / AggregateRating lus sous review, reviews, aggregateRating.
 Jamais les objets valeurs d'autres propriétés (itemOffered, itemReviewed, provider, author, publisher, location, brand,
 hasOfferCatalog…) : Google n'exige rien d'eux. Les @id sont résolus sur toute la page (nœuds fusionnés ; un Offer qui désigne un
-produit par itemOffered, un Review ou AggregateRating par itemReviewed, lui donnent offers, review, aggregateRating)."""
+produit par itemOffered, un Review ou AggregateRating par itemReviewed, lui donnent offers, review, aggregateRating).
+Limite connue : la fusion des @id ne distingue pas le rôle des nœuds ; un objet cité sous une autre propriété qui répète l'@id d'un nœud
+racine avec des propriétés plus riches peut masquer un défaut de ce nœud (rare, sans effet sur un graphe normal)."""
 import json
 import math
 import re
@@ -87,7 +90,7 @@ def _famille(t):
 
 def _objets(racine):
     """(objet, rôle) pour tout objet typé (ou à @id) du JSON-LD. rôle = « plein » (Google l'évalue : racine, @graph, liste racine, mainEntity,
-    item d'un ListItem), « avis » (Review / AggregateRating lus sous review, reviews, aggregateRating) ou None (valeur d'une autre
+    item d'un ListItem, video, breadcrumb, élément direct d'un ItemList), « avis » (Review / AggregateRating lus sous review, reviews, aggregateRating) ou None (valeur d'une autre
     propriété : itemOffered, provider, location… ; jamais contrôlé, mais lu pour les types retirés, les prix et les @id)."""
     pile = [(racine, "plein", 0)]
     while pile:
@@ -101,7 +104,8 @@ def _objets(racine):
             for k, v in o.items():
                 if k == "@graph":
                     r = role
-                elif k in ("mainEntity", "mainEntityOfPage") or (k == "item" and "ListItem" in types):
+                elif (k in ("mainEntity", "mainEntityOfPage", "video", "breadcrumb") or (k == "item" and "ListItem" in types)
+                      or (k == "itemListElement" and "ItemList" in types)):
                     r = "plein"
                 elif k in ("review", "reviews", "aggregateRating"):
                     r = "avis"

@@ -202,6 +202,19 @@ class TestDonnees(unittest.TestCase):
                  "aggregateRating": {"@type": "AggregateRating", "ratingValue": 4}})
         self.assertEqual(r["manquantes"], ["AggregateRating : ratingCount|reviewCount", "Review : reviewRating"])
 
+    def test_video_fil_d_ariane_et_liste_d_elements_evalues(self):
+        self.assertEqual(une({"@type": "Article", "headline": "H", "video": {"@type": "VideoObject", "name": "v"}})["manquantes"],
+                         ["VideoObject : thumbnailUrl, uploadDate"])
+        self.assertEqual(une({"@type": "WebPage", "breadcrumb": {"@type": "BreadcrumbList"}})["manquantes"],
+                         ["BreadcrumbList : itemListElement"])
+        # élément placé directement dans itemListElement, sans enveloppe ListItem
+        self.assertEqual(une({"@type": "ItemList", "itemListElement": [{"@type": "Product", "name": "P"}]})["manquantes"],
+                         ["Product : offers|review|aggregateRating"])
+        # un fil d'Ariane complet et une vidéo complète ne produisent rien
+        r = une({"@type": "WebPage", "breadcrumb": {"@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1}]},
+                 "video": {"@type": "VideoObject", "name": "v", "thumbnailUrl": "u", "uploadDate": "2026-01-01"}})
+        self.assertEqual(r, {"manquantes": [], "retires": []})
+
     # --- relecture 1 : @id résolus (M1) ----------------------------------------------------------------------------------
 
     def test_id_resolus_dans_le_graphe(self):
@@ -312,7 +325,8 @@ class TestDonnees(unittest.TestCase):
         blocs = [{"@context": "https://schema.org", "@type": "Event", "name": "Atelier"},
                  {"@context": "https://schema.org", "@type": "ClaimReview", "claimReviewed": "x"},
                  {"@context": "https://schema.org", "@type": "Course", "name": "C", "description": "D",
-                  "hasCourseInstance": {"@type": "CourseInstance"}}]
+                  "hasCourseInstance": {"@type": "CourseInstance"}},
+                 {"@context": "https://schema.org", "@type": "Course", "name": "Cours isolé sans description"}]
         scripts = "".join('<script type="application/ld+json">{0}</script>'.format(json.dumps(b)) for b in blocs)
         page = ('<html lang="fr"><head><title>Atelier de test des données structurées</title>' + scripts +
                 '</head><body><main><h1>Atelier</h1><p>x</p></main></body></html>')
@@ -320,6 +334,9 @@ class TestDonnees(unittest.TestCase):
         req, sans = issues["jsonld_proprietes_requises"], issues["jsonld_type_sans_effet"]
         self.assertEqual((req["severity"], req["domaine"], req["examples"][0]["signature"]),
                          ("moyenne", "SEO technique", "Event : startDate, location"))
+        cours = issues["jsonld_cours_incomplet"]  # moins de trois cours : basse, pas moyenne
+        self.assertEqual((cours["severity"], cours["domaine"], cours["examples"][0]["signature"]),
+                         ("basse", "SEO technique", "Course : description"))
         self.assertEqual((sans["severity"], sans["domaine"]), ("info", "SEO technique"))
         self.assertEqual(sorted(e["signature"].split(" ")[0] for e in sans["examples"]), ["ClaimReview", "Course"])
 
