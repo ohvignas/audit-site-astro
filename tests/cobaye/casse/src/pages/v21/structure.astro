@@ -1,0 +1,14 @@
+---
+import Base from '../../layouts/Base.astro';
+const carte = "<!doctype html><html lang='fr'><head><title>Carte</title></head><body><main><p>Carte du centre</p></main></body></html>";
+---
+<Base title="Programme détaillé du module" description="Programme détaillé avec titres, aide de saisie, carte intégrée et note des participants.">
+  <h1>Programme détaillé</h1>
+  <h2>Module 1</h2>
+  <h4>Objectifs du module</h4> {/* A11 : h2 puis h4 */}
+  <label for="v21-email">Email</label>
+  <input id="v21-email" type="email" aria-describedby="aide-email-absente" /> {/* A13 : id absent */}
+  <iframe srcdoc={carte} width="300" height="150"></iframe> {/* A15 : iframe sans title */}
+  <span aria-label="5 sur 5">★★★★★</span> {/* A18 : aria-label sur un span sans rôle */}
+  <p><a href="/v21/zoom.html">Version mobile figée du programme</a></p>
+</Base>

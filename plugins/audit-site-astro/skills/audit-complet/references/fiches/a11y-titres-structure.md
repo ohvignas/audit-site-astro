@@ -5,6 +5,7 @@ domaine: Accessibilité
 severite_type: moyenne
 effort: S
 declencheurs:
+  - "crawl:titres_sautes"
   - "lighthouse:heading-order|empty-heading|landmark-one-main"
   - "lighthouse:éléments d'en-tête ne sont pas classés séquentiellement|éléments de titre n'ont pas de contenu|ne contient pas de repère principal"
 sources:
