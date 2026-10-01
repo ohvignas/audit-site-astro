@@ -8,7 +8,7 @@ declencheurs:
   - "crawl:slow_ttfb"
   - "lighthouse:server-response-time"
   - "lighthouse:Réduire le temps de réponse initial du serveur"
-  - "lighthouse:document-latency-insight|Latence de la demande de document"
+  - "lighthouse:document-latency-insight .*réponse serveur lente"
 sources:
   - https://web.dev/articles/ttfb
   - https://docs.astro.build/en/guides/caching/
