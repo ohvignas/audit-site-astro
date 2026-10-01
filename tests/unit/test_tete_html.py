@@ -1,0 +1,202 @@
+import json
+import pathlib
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ICI = pathlib.Path(__file__).resolve().parent
+SCRIPTS = ICI.parents[1] / "plugins/audit-site-astro/skills/audit-complet/scripts"
+sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(ICI))
+import html_observateurs as ho  # noqa: E402
+import tete_html  # noqa: E402
+from site_local import HTML, SiteLocal  # noqa: E402
+
+
+def crawler(routes):
+    """Crawl d'un SiteLocal (aucun réseau externe) → issues.json."""
+    with SiteLocal(routes) as site, tempfile.TemporaryDirectory() as d:
+        subprocess.run([sys.executable, str(SCRIPTS / "crawl_site.py"), site.url, "--out", d, "--delay", "0", "--max-pages", "10",
+                        "--liens-externes", "0", "--ressources", "0"], check=True, capture_output=True, timeout=120)
+        return json.loads(pathlib.Path(d, "issues.json").read_text(encoding="utf-8")), site.base
+
+
+def res(html):
+    return [e["signature"] for e in ho.analyser(html, {}, "https://ex.fr/", modules=[("tete_html", tete_html)])["tete_html"]["interruptions"]]
+
+
+def page(tete, corps="<body></body>"):
+    return "<!doctype html><html><head>" + tete + "</head>" + corps + "</html>"
+
+
+class TestTete(unittest.TestCase):
+    def test_image_dans_la_tete(self):
+        self.assertEqual(res('<html><head><title>T</title><meta name="viewport" content="width=device-width"><img src="/p.png" alt="">'
+                             '<link rel="canonical" href="/x"><meta name="description" content="d"></head><body></body></html>'),
+                         ["<img> puis : link canonical, meta description"])
+
+    def test_texte_dans_la_tete(self):
+        self.assertEqual(res('<html><head><title>T</title>Bonjour<meta name="robots" content="noindex"></head><body></body></html>'),
+                         ["#texte puis : meta robots"])
+
+    def test_cas_valides(self):
+        self.assertEqual(res('<html><head><title>T</title><noscript><img src="/px.gif"></noscript>'
+                             '<link rel="canonical" href="/x"></head><body></body></html>'), [])
+        self.assertEqual(res('<html><head><meta charset="utf-8"><meta http-equiv="content-security-policy" content="x">'
+                             '<link rel="preload" href="/_astro/f.woff2" as="font"><style>:root{}</style>'
+                             '<script type="module" src="/_astro/p.js"></script><title>T</title></head><body><img src="/a.png"></body></html>'), [])
+        self.assertEqual(res('<html><head><title>T</title><link rel="canonical" href="/x"><div>bandeau</div></head><body></body></html>'), [])
+
+    def test_crawl(self):
+        page = ('<html lang="fr"><head><title>Tête interrompue de test</title><iframe src="/x"></iframe>'
+                '<meta name="description" content="Description ignorée par Google après l iframe dans la tête."></head>'
+                '<body><main><p>x</p></main></body></html>')
+        issues, _ = crawler({"/": (200, HTML, page)})
+        it = issues["tete_interrompue"]
+        # écart au brief : la description seule perdue est « moyenne » (haute seulement si canonical, robots ou hreflang sont perdus)
+        self.assertEqual((it["severity"], it["domaine"], it["examples"][0]["signature"]),
+                         ("moyenne", "SEO technique", "<iframe> puis : meta description"))
+
+    def test_crawl_canonical_perdue_est_haute(self):
+        page = ('<html lang="fr"><head><title>Tête interrompue de test</title><img src="/p.png" alt="">'
+                '<meta name="description" content="Description ignorée."><link rel="canonical" href="/"></head>'
+                '<body><main><p>x</p></main></body></html>')
+        issues, _ = crawler({"/": (200, HTML, page), "/b": (200, HTML, page.replace("/p.png", "/q.png"))})
+        it = issues["tete_interrompue"]
+        self.assertEqual((it["severity"], it["domaine"]), ("haute", "SEO technique"))
+        self.assertEqual(it["examples"][0]["signature"], "<img> puis : meta description, link canonical")
+
+    def test_crawl_page_valide_sans_constat(self):
+        page = ('<html lang="fr"><head><meta charset="utf-8"><title>Page valide</title><noscript><img src="/px.gif"></noscript>'
+                '<link rel="canonical" href="/"></head><body><main><p>x</p></main></body></html>')
+        issues, _ = crawler({"/": (200, HTML, page)})
+        self.assertNotIn("tete_interrompue", issues)
+
+
+class TestSpecWhatwg(unittest.TestCase):
+    """Mode d'insertion « in head » : éléments permis, blancs, commentaires, doctype, html, contenu brut."""
+
+    def test_astro_et_balises_permises_jamais_signales(self):
+        tete = ('<meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta name="generator" content="Astro v5">'
+                '<meta name="astro-view-transitions-enabled" content="true"><meta name="astro-view-transitions-fallback" content="animate">'
+                '<link rel="modulepreload" href="/_astro/a.js"><link rel="stylesheet" href="/_astro/a.css">'
+                '<script type="application/ld+json">{"@type":"Organization"}</script><script type="module" src="/_astro/p.js"></script>'
+                '<style>a{}</style><base href="/"><basefont size="3"><bgsound src="x.wav"><noframes>texte</noframes>'
+                '<template><div><meta name="robots" content="x"></div></template><title>T</title>'
+                '<noscript><link rel="stylesheet" href="/n.css"></noscript>'
+                '<link rel="canonical" href="/x"><meta name="robots" content="index"><meta property="og:title" content="T">'
+                '<link rel="alternate" hreflang="en" href="/en"><meta name="description" content="d">')
+        self.assertEqual(res(page(tete)), [])
+
+    def test_blancs_commentaires_doctype_et_html_ignores(self):
+        tete = '\n\t <!-- c --> <title>T</title> \r\n<!--x--> <html lang="fr"> <head> <link rel="canonical" href="/x">'
+        self.assertEqual(res("<!DOCTYPE html><!-- avant --><html><head>" + tete + "</head><body></body></html>"), [])
+
+    def test_espace_insecable_est_du_texte(self):
+        # seuls tab, LF, FF, CR et espace sont des blancs pour le parseur : &nbsp; interrompt la tête
+        self.assertEqual(res(page('<title>T</title>&nbsp;<meta name="description" content="d">')), ["#texte puis : meta description"])
+        self.assertEqual(res(page('<title>T</title> <link rel="canonical" href="/x">')), ["#texte puis : link canonical"])
+        self.assertEqual(res(page('<title>T</title>&#32;&#9;<link rel="canonical" href="/x">')), [])
+
+    def test_interruption_sans_balise_de_reference_apres(self):
+        self.assertEqual(res(page('<title>T</title><meta name="description" content="d"><img src="/p.png"><meta charset="utf-8">')), [])
+        self.assertEqual(res(page('<title>T</title><div>x</div>')), [])
+        self.assertEqual(res(page("<title>T</title>Bonjour")), [])
+
+    def test_seule_la_premiere_interruption_compte(self):
+        self.assertEqual(res(page('<title>T</title><img src="/a.png"><meta name="robots" content="noindex"><div>x</div>'
+                                  '<link rel="canonical" href="/x">')), ["<img> puis : meta robots, link canonical"])
+
+    def test_elements_invalides_courants(self):
+        for balise, attendu in (('<div>a</div>', "<div>"), ('<iframe src="/x"></iframe>', "<iframe>"), ('<p>a</p>', "<p>"),
+                                ('<a href="/x">l</a>', "<a>"), ('<input type="hidden">', "<input>"), ('<svg><title>i</title></svg>', "<svg>"),
+                                ('<my-widget></my-widget>', "<my-widget>"), ('<br>', "<br>"), ('<h1>t</h1>', "<h1>")):
+            with self.subTest(balise=balise):
+                self.assertEqual(res(page('<title>T</title>' + balise + '<link rel="canonical" href="/x">')),
+                                 [attendu + " puis : link canonical"])
+
+    def test_contenu_des_conteneurs_n_est_pas_lu_comme_balises(self):
+        # <title>, <script>, <style>, <template> : texte brut ou contenu inerte
+        self.assertEqual(res(page('<title>A <b>b</b> <div>c</div></title><link rel="canonical" href="/x">')), [])
+        self.assertEqual(res(page('<script>var a="<div>";</script><style>/* <img> */</style><meta name="robots" content="x">')), [])
+        self.assertEqual(res(page('<template><img><div></div></template><meta name="robots" content="x">')), [])
+
+    def test_apres_interruption_contenus_inertes_ignores(self):
+        # <svg><title> ou <iframe>…<meta></iframe> après l'interruption ne sont pas des métadonnées perdues
+        self.assertEqual(res(page('<div></div><svg><title>icône</title></svg>')), [])
+        self.assertEqual(res(page('<div></div><iframe><meta name="robots" content="x"></iframe>')), [])
+        self.assertEqual(res(page('<div></div><noscript><link rel="canonical" href="/x"></noscript>')), [])
+        self.assertEqual(res(page('<div></div><template><meta name="robots" content="x"></template>')), [])
+
+    def test_balises_de_reference_reconnues(self):
+        tete = ('<div></div><title>T</title><meta name="Description" content="d"><meta name="robots" content="x">'
+                '<meta name="googlebot" content="x"><meta name="viewport" content="x"><meta property="og:image" content="x">'
+                '<meta name="twitter:card" content="x"><meta name="theme-color" content="x"><meta charset="utf-8">'
+                '<link rel="Canonical" href="/x"><link rel="alternate" hreflang="en" href="/en"><link rel="alternate" href="/feed">'
+                '<link rel="stylesheet" href="/a.css"><meta name="robots" content="y">')
+        self.assertEqual(res(page(tete)), ["<div> puis : title, meta description, meta robots, meta googlebot, meta viewport, "
+                                           "meta og:image, link canonical, link hreflang"])
+
+    def test_deuxieme_head_et_html_dans_la_tete_ne_cassent_pas(self):
+        self.assertEqual(res("<html><head><title>T</title><head><html><link rel=canonical href=/x></head><body></body></html>"), [])
+
+    def test_body_termine_la_tete_sans_head_fermant(self):
+        self.assertEqual(res('<html><head><title>T</title><body><div></div><link rel="canonical" href="/x"></body></html>'), [])
+
+    def test_head_implicite(self):
+        # pas de <head> : les éléments valides ouvrent la tête implicite, l'interruption s'y applique
+        self.assertEqual(res('<html><title>T</title><img src="/p.png"><link rel="canonical" href="/x"><body></body></html>'),
+                         ["<img> puis : link canonical"])
+        self.assertEqual(res('<title>T</title><meta name="robots" content="x"><div>a</div><link rel="canonical" href="/x">'),
+                         ["<div> puis : link canonical"])
+        # corps direct, sans rien dans la tête : pas une tête interrompue
+        self.assertEqual(res('<html><div>a</div><link rel="canonical" href="/x">'), [])
+        self.assertEqual(res('<html><body><div>a</div><link rel="canonical" href="/x"></body></html>'), [])
+        self.assertEqual(res("Bonjour<link rel=canonical href=/x>"), [])
+
+    def test_metadonnees_dans_le_corps_hors_sujet(self):
+        self.assertEqual(res(page('<title>T</title>', '<body><img src="/a.png"><link rel="canonical" href="/x"></body>')), [])
+
+    def test_resultat_json_strict_et_stable(self):
+        r = ho.analyser(page('<img src="/a.png"><meta name="robots" content="x">'), {}, "https://ex.fr/",
+                        modules=[("tete_html", tete_html)])["tete_html"]
+        self.assertEqual(r, {"interruptions": [{"signature": "<img> puis : meta robots", "n": 1}]})
+        json.dumps(r, allow_nan=False)
+        self.assertEqual(ho.analyser("", {}, "https://ex.fr/", modules=[("tete_html", tete_html)])["tete_html"], {"interruptions": []})
+
+
+class TestConstats(unittest.TestCase):
+    def constats(self, signatures):
+        pages = {"https://ex.fr/p%d" % i: {"obs": {"tete_html": {"interruptions": [{"signature": s, "n": 1}]}}}
+                 for i, s in enumerate(signatures)}
+        issues = {}
+
+        def add(cle, libelle, sev, exemple=None, n=1, domaine=None):
+            it = issues.setdefault(cle, {"severity": sev, "count": 0, "examples": [], "domaine": domaine})
+            it["count"] += n
+            it["examples"].append(exemple)
+        tete_html.issues(pages, add, {})
+        return issues
+
+    def test_haute_si_canonical_robots_ou_hreflang_perdus(self):
+        for perdu in ("link canonical", "meta robots", "meta googlebot", "link hreflang", "meta description, link canonical"):
+            with self.subTest(perdu=perdu):
+                self.assertEqual(self.constats(["<img> puis : " + perdu])["tete_interrompue"]["severity"], "haute")
+
+    def test_moyenne_sinon(self):
+        for perdu in ("meta description", "title", "meta og:title, meta viewport"):
+            with self.subTest(perdu=perdu):
+                self.assertEqual(self.constats(["<img> puis : " + perdu])["tete_interrompue"]["severity"], "moyenne")
+
+    def test_un_constat_au_plus_haute_gravite_et_tous_les_exemples(self):
+        it = self.constats(["<div> puis : meta description", "<img> puis : link canonical"])["tete_interrompue"]
+        self.assertEqual((it["severity"], it["count"], it["domaine"]), ("haute", 2, "SEO technique"))
+        self.assertEqual(sorted(e["signature"] for e in it["examples"]), ["<div> puis : meta description", "<img> puis : link canonical"])
+
+    def test_aucun_constat_sans_interruption(self):
+        self.assertEqual(self.constats([]), {})
+
+
+if __name__ == "__main__":
+    unittest.main()
