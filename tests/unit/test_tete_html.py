@@ -41,8 +41,11 @@ class TestTete(unittest.TestCase):
                          ["#texte puis : meta robots"])
 
     def test_cas_valides(self):
-        self.assertEqual(res('<html><head><title>T</title><noscript><img src="/px.gif"></noscript>'
+        self.assertEqual(res('<html><head><title>T</title><noscript><link rel="stylesheet" href="/n.css"><style>a{}</style></noscript>'
                              '<link rel="canonical" href="/x"></head><body></body></html>'), [])
+        # pixel en <noscript> APRÈS les balises de référencement : rien n'est perdu
+        self.assertEqual(res('<html><head><title>T</title><link rel="canonical" href="/x"><noscript><img src="/px.gif"></noscript>'
+                             '</head><body></body></html>'), [])
         self.assertEqual(res('<html><head><meta charset="utf-8"><meta http-equiv="content-security-policy" content="x">'
                              '<link rel="preload" href="/_astro/f.woff2" as="font"><style>:root{}</style>'
                              '<script type="module" src="/_astro/p.js"></script><title>T</title></head><body><img src="/a.png"></body></html>'), [])
@@ -68,10 +71,23 @@ class TestTete(unittest.TestCase):
         self.assertEqual(it["examples"][0]["signature"], "<img> puis : meta description, link canonical")
 
     def test_crawl_page_valide_sans_constat(self):
-        page = ('<html lang="fr"><head><meta charset="utf-8"><title>Page valide</title><noscript><img src="/px.gif"></noscript>'
-                '<link rel="canonical" href="/"></head><body><main><p>x</p></main></body></html>')
+        page = ('<html lang="fr"><head><meta charset="utf-8"><title>Page valide</title><link rel="canonical" href="/">'
+                '<noscript><img src="/px.gif"></noscript></head><body><main><p>x</p></main></body></html>')
         issues, _ = crawler({"/": (200, HTML, page)})
         self.assertNotIn("tete_interrompue", issues)
+
+
+    def test_crawl_noscript_sans_javascript_est_moyenne(self):
+        page = ('<html lang="fr"><head><meta charset="utf-8"><title>Page avec pixel</title>'
+                '<noscript><img src="/px.gif" alt=""></noscript><link rel="canonical" href="/"></head>'
+                '<body><main><p>x</p></main></body></html>')
+        issues, _ = crawler({"/": (200, HTML, page)})
+        it = issues["tete_interrompue"]
+        self.assertEqual((it["severity"], it["domaine"]), ("moyenne", "SEO technique"))
+        self.assertEqual(it["examples"][0]["signature"], "<noscript><img> (sans JavaScript) puis : link canonical")
+        self.assertIn("Google", it["label"])
+        self.assertIn("sans JavaScript", it["label"])
+        self.assertIn("<body>", it["examples"][0]["exemple"])
 
 
 class TestSpecWhatwg(unittest.TestCase):
@@ -134,9 +150,12 @@ class TestSpecWhatwg(unittest.TestCase):
                 '<meta name="googlebot" content="x"><meta name="viewport" content="x"><meta property="og:image" content="x">'
                 '<meta name="twitter:card" content="x"><meta name="theme-color" content="x"><meta charset="utf-8">'
                 '<link rel="Canonical" href="/x"><link rel="alternate" hreflang="en" href="/en"><link rel="alternate" href="/feed">'
+                '<link rel="manifest" href="/m.webmanifest"><link rel="preload" href="/hero.avif" as="image">'
+                '<link rel="preload" href="/f.woff2" as="font"><link rel="preload" href="/h.css" as="style" fetchpriority="high">'
                 '<link rel="stylesheet" href="/a.css"><meta name="robots" content="y">')
         self.assertEqual(res(page(tete)), ["<div> puis : title, meta description, meta robots, meta googlebot, meta viewport, "
-                                           "meta og:image, link canonical, link hreflang"])
+                                           "meta og:image, meta twitter:card, meta theme-color, link canonical, link hreflang, "
+                                           "link alternate, link manifest, link preload LCP"])
 
     def test_deuxieme_head_et_html_dans_la_tete_ne_cassent_pas(self):
         self.assertEqual(res("<html><head><title>T</title><head><html><link rel=canonical href=/x></head><body></body></html>"), [])
@@ -166,6 +185,87 @@ class TestSpecWhatwg(unittest.TestCase):
         self.assertEqual(ho.analyser("", {}, "https://ex.fr/", modules=[("tete_html", tete_html)])["tete_html"], {"interruptions": []})
 
 
+ASTRO = ('<meta charset="utf-8"><meta http-equiv="content-security-policy" content="script-src \'self\'">'
+         '<meta name="viewport" content="width=device-width"><meta name="generator" content="Astro v5.1">'
+         '<meta name="astro-view-transitions-enabled" content="true"><meta name="astro-view-transitions-fallback" content="animate">'
+         '<link rel="preload" href="/_astro/inter.woff2" as="font" type="font/woff2" crossorigin>'
+         '<link rel="modulepreload" href="/_astro/client.js"><style>@font-face{font-family:Inter}</style>'
+         '<script>document.documentElement.dataset.theme=localStorage.theme||"light"</script>'
+         '<script type="text/partytown">1</script><script type="module" src="/_astro/page.js"></script>'
+         '<link rel="icon" href="/favicon.svg" type="image/svg+xml">')
+SEO = ('<title>Titre</title><meta name="description" content="d"><link rel="canonical" href="https://ex.fr/">'
+       '<meta name="robots" content="index, follow"><link rel="alternate" hreflang="en" href="https://ex.fr/en">'
+       '<meta property="og:title" content="T"><meta name="twitter:card" content="summary">'
+       '<script type="application/ld+json">{"@type":"Organization"}</script>')
+GTM_NOSCRIPT = ('<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-XXXX" height="0" width="0" '
+                'style="display:none;visibility:hidden"></iframe></noscript>')
+PIXEL_META = '<noscript><img height="1" width="1" style="display:none" src="https://www.facebook.com/tr?id=1&ev=PageView&noscript=1"></noscript>'
+
+
+class TestAstroGtmBom(unittest.TestCase):
+    def test_tete_astro_complete_sans_constat(self):
+        for ordre in (ASTRO + SEO, SEO + ASTRO):
+            with self.subTest(debut=ordre[:30]):
+                self.assertEqual(res("<!doctype html><html lang=fr><head>" + ordre + "</head><body><main></main></body></html>"), [])
+
+    def test_gtm_noscript_en_tete_avant_les_balises_est_signale_sans_javascript(self):
+        r = res(page(ASTRO + GTM_NOSCRIPT + SEO))
+        self.assertEqual(r, ["<noscript><iframe> (sans JavaScript) puis : title, meta description, link canonical, meta robots, "
+                             "link hreflang, meta og:title, meta twitter:card"])
+
+    def test_pixel_meta_en_tete_avant_les_balises(self):
+        self.assertEqual(res(page(ASTRO + PIXEL_META + SEO)),
+                         ["<noscript><img> (sans JavaScript) puis : title, meta description, link canonical, meta robots, "
+                          "link hreflang, meta og:title, meta twitter:card"])
+
+    def test_noscript_invalide_apres_les_balises_ou_dans_le_corps_sans_constat(self):
+        self.assertEqual(res(page(ASTRO + SEO + GTM_NOSCRIPT + PIXEL_META)), [])
+        self.assertEqual(res(page(ASTRO + SEO, "<body>" + GTM_NOSCRIPT + PIXEL_META + "<main></main></body>")), [])
+
+    def test_noscript_div_et_texte(self):
+        self.assertEqual(res(page('<noscript><div>x</div></noscript><link rel="canonical" href="/x">')),
+                         ["<noscript><div> (sans JavaScript) puis : link canonical"])
+        self.assertEqual(res(page('<noscript>Activez JavaScript</noscript><link rel="canonical" href="/x">')),
+                         ["<noscript>#texte (sans JavaScript) puis : link canonical"])
+        self.assertEqual(res(page('<noscript>  \n </noscript><link rel="canonical" href="/x">')), [])
+
+    def test_noscript_valide_jamais_signale(self):
+        for contenu in ('<link rel="stylesheet" href="/n.css">', '<style>a{}</style>', '<meta http-equiv="refresh" content="0;url=/x">',
+                        '<link rel="stylesheet" href="/a.css"><style>b{}</style><!-- c --> '):
+            with self.subTest(contenu=contenu):
+                self.assertEqual(res(page("<noscript>" + contenu + '</noscript><title>T</title><link rel="canonical" href="/x">')), [])
+
+    def test_noscript_invalide_perd_aussi_ce_qui_suit_dans_le_noscript(self):
+        self.assertEqual(res(page('<noscript><img src="/p.gif"><link rel="canonical" href="/x"></noscript>')),
+                         ["<noscript><img> (sans JavaScript) puis : link canonical"])
+
+    def test_noscript_dans_un_noscript_ou_un_template_ou_apres_interruption(self):
+        self.assertEqual(res(page('<template><noscript><img></noscript></template><link rel="canonical" href="/x">')), [])
+        # interruption avec JavaScript d'abord : un seul constat, celui de l'interruption ordinaire
+        self.assertEqual(res(page('<div></div>' + GTM_NOSCRIPT + '<link rel="canonical" href="/x">')), ["<div> puis : link canonical"])
+
+    def test_les_deux_constats_quand_noscript_puis_interruption(self):
+        self.assertEqual(res(page(GTM_NOSCRIPT + '<meta name="description" content="d"><div></div><link rel="canonical" href="/x">')),
+                         ["<div> puis : link canonical", "<noscript><iframe> (sans JavaScript) puis : meta description, link canonical"])
+
+    def test_noscript_implicite_sans_head(self):
+        self.assertEqual(res('<html>' + GTM_NOSCRIPT + '<title>T</title><body></body></html>'),
+                         ["<noscript><iframe> (sans JavaScript) puis : title"])
+
+    def test_bom_utf8_tolere(self):
+        tete = '<title>T</title><div></div><link rel="canonical" href="/x">'
+        for html in ("\ufeff<!doctype html><html><head>" + tete + "</head><body></body></html>",
+                     "\ufeff" + page(tete), "\ufeff<html><head>" + tete + "</head></html>", "\ufeff\n<html><head>" + tete + "</head>"):
+            with self.subTest(html=html[:25]):
+                self.assertEqual(res(html), ["<div> puis : link canonical"])
+        self.assertEqual(res("\ufeff" + page(ASTRO + SEO)), [])
+        self.assertEqual(res("\ufeff" + page(ASTRO + GTM_NOSCRIPT + SEO))[0][:36], "<noscript><iframe> (sans JavaScript)")
+
+    def test_bom_ailleurs_reste_du_texte(self):
+        self.assertEqual(res(page('<title>T</title>\ufeff<link rel="canonical" href="/x">')), ["#texte puis : link canonical"])
+        self.assertEqual(res("\ufeff\ufeff" + page('<title>T</title><link rel="canonical" href="/x">')), [])  # 2e BOM : texte avant la tête
+
+
 class TestConstats(unittest.TestCase):
     def constats(self, signatures):
         pages = {"https://ex.fr/p%d" % i: {"obs": {"tete_html": {"interruptions": [{"signature": s, "n": 1}]}}}
@@ -193,6 +293,20 @@ class TestConstats(unittest.TestCase):
         it = self.constats(["<div> puis : meta description", "<img> puis : link canonical"])["tete_interrompue"]
         self.assertEqual((it["severity"], it["count"], it["domaine"]), ("haute", 2, "SEO technique"))
         self.assertEqual(sorted(e["signature"] for e in it["examples"]), ["<div> puis : meta description", "<img> puis : link canonical"])
+
+    def test_sans_javascript_plafonne_a_moyenne_meme_avec_canonical(self):
+        for perdu in ("link canonical", "meta robots", "link hreflang", "meta description, link canonical"):
+            with self.subTest(perdu=perdu):
+                it = self.constats(["<noscript><iframe> (sans JavaScript) puis : " + perdu])["tete_interrompue"]
+                self.assertEqual(it["severity"], "moyenne")
+        self.assertFalse(tete_html.grave("<noscript><img> (sans JavaScript) puis : link canonical"))
+        self.assertTrue(tete_html.grave("<img> puis : link canonical"))
+
+    def test_melange_la_gravite_vient_du_cas_avec_javascript(self):
+        it = self.constats(["<noscript><iframe> (sans JavaScript) puis : link canonical", "<div> puis : meta description"])["tete_interrompue"]
+        self.assertEqual((it["severity"], it["count"]), ("moyenne", 2))
+        it = self.constats(["<noscript><iframe> (sans JavaScript) puis : link canonical", "<div> puis : link canonical"])["tete_interrompue"]
+        self.assertEqual(it["severity"], "haute")
 
     def test_aucun_constat_sans_interruption(self):
         self.assertEqual(self.constats([]), {})

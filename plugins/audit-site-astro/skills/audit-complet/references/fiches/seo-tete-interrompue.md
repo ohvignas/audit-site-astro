@@ -17,19 +17,34 @@ sources:
 
 ## Pourquoi c'est important
 
-Google lit les métadonnées jusqu'au premier élément invalide. Une canonical ignorée laisse Google choisir lui-même l'URL de référence (doublons) ; un `noindex` ignoré laisse indexer une page privée ; des hreflang ignorés cassent le ciblage par langue. La signature du constat indique l'élément fautif et les balises perdues. Le constat est « haute » quand une canonical, un robots ou des hreflang sont perdus, « moyenne » quand seuls title, description, viewport ou Open Graph le sont.
+Google lit les métadonnées jusqu'au premier élément invalide. Une canonical ignorée laisse Google choisir lui-même l'URL de référence (doublons) ; un `noindex` ignoré laisse indexer une page privée ; des hreflang ignorés cassent le ciblage par langue. La signature du constat indique l'élément fautif et les balises perdues. Le constat est « haute » quand une canonical, un robots ou des hreflang sont perdus, « moyenne » quand seuls title, description, viewport, Open Graph, twitter:*, theme-color, manifest, alternate ou un préchargement d'image (LCP) le sont.
+
+**Cas « (sans JavaScript) »** : un `<noscript>` au contenu invalide placé dans `<head>` avant ces balises (iframe de Google Tag Manager, pixel Meta en `<img>`, `<div>`) ferme la tête pour les robots qui n'exécutent pas JavaScript et pour la première lecture du HTML brut (aperçus de liens, outils SEO, `curl`). Google, qui rend la page avec JavaScript, n'est pas concerné d'après sa documentation : ce cas est donc plafonné à « moyenne ». Dans un `<noscript>` de la tête, seuls `link`, `style`, `meta`, `basefont`, `bgsound` et `noframes` sont permis (`<noscript><link …></noscript>` reste valide).
 
 ## Comment le constater soi-même
 
 ```bash
-curl -s https://SITE/PAGE | python3 -c "import sys,re;h=sys.stdin.read().split('</head>')[0];print(re.findall(r'<(?!/)(?!title|meta|link|style|script|noscript|base|template)([a-z0-9-]+)', h)[:5])"
+curl -s https://SITE/PAGE | python3 -c '
+import sys, re
+h = sys.stdin.read().split("</head>")[0]
+h = re.sub(r"<(script|style|noscript|template)\b.*?</\1>", "", h, flags=re.S | re.I)
+print(re.findall(r"<(?!/)(?!html|head|title|meta|link|base|basefont|bgsound|noframes)([a-z][a-z0-9-]*)", h, re.I)[:1])'
 ```
+Affiche le premier élément invalide de la tête (liste vide : tête valide). Pour le cas « sans JavaScript », lister les `<noscript>` de la tête :
+```bash
+curl -s https://SITE/PAGE | python3 -c '
+import sys, re
+h = sys.stdin.read().split("</head>")[0]
+print(re.findall(r"<noscript\b.*?</noscript>", h, re.S | re.I))'
+```
+Tout `<noscript>` contenant autre chose que `link`, `style` ou `meta` est à déplacer.
+
 Souvent un composant Astro placé dans le `<head>` du layout (bandeau, pixel `<img>`, `<iframe>` de chat, `<div>` d'un script tiers).
 
 ## Correction
 
 1. Repérer l'élément signalé dans `src/layouts/*.astro` (ou le composant inclus dans `<head>`).
-2. Le déplacer dans `<body>` ; pour un pixel de suivi, le mettre dans `<noscript>` en fin de `<body>` :
+2. Le déplacer dans `<body>`. Pour Google Tag Manager, c'est sa propre consigne : le `<noscript><iframe …></iframe></noscript>` va juste après l'ouverture de `<body>`, jamais dans `<head>` ; même règle pour un pixel de suivi en `<noscript><img>` :
 ```astro
 <head>
   <title>{title}</title>
@@ -37,8 +52,8 @@ Souvent un composant Astro placé dans le `<head>` du layout (bandeau, pixel `<i
   <meta name="description" content={description} />
 </head>
 <body>
+  <noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-XXXX" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
   <slot />
-  <noscript><img src="https://exemple-pixel/p.gif" alt="" width="1" height="1" /></noscript>
 </body>
 ```
 3. Placer les balises de référencement **avant** tout script tiers dans le `<head>`, par prudence.
@@ -58,5 +73,6 @@ python3 -c "import json;print(json.load(open('/tmp/verif/crawl/issues.json')).ge
 
 ## Pièges et retour arrière
 
+- Avec JavaScript actif, un `<noscript>` invalide dans la tête « passe » (son contenu est lu comme du texte) ; sans JavaScript, la tête se ferme à cet endroit. Google rend avec JavaScript : c'est pourquoi ce cas reste « moyenne », mais les autres robots et les aperçus de liens perdent canonical, description et Open Graph.
 - Le navigateur corrige silencieusement le HTML : l'inspecteur de Chrome montre l'élément dans `<body>`, ce qui masque le problème ; toujours vérifier le HTML brut (`curl`).
 - Retour arrière : `git revert` du layout.
