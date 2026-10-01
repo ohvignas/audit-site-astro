@@ -7,6 +7,7 @@
 #             variables d'environnement de build ; rien n'est écrit dans le projet hormis le cache .astro/).
 # Sortie : DOSSIER_SORTIE/project-checks.md + fichiers bruts (outdated.json, audit.json, astro-check.txt, build.log)
 set -u
+export LC_ALL=C   # sed/grep/sort sans « illegal byte sequence » sur des octets non UTF-8 (macOS)
 PROJ="${1:?usage: project_checks.sh CHEMIN_PROJET DOSSIER_SORTIE [--build]}"
 OUT="${2:?dossier de sortie requis}"
 BUILD="${3:-}"
@@ -23,7 +24,7 @@ else PM=npm; fi
 
 echo "# Santé du projet — $(basename "$PWD")"
 echo
-echo "- Node : $(node -v 2>/dev/null || echo absent) — gestionnaire : $PM $($PM -v 2>/dev/null)"
+echo "- Node : $(node -v 2>/dev/null || echo absent) — gestionnaire : $PM $([ -d node_modules ] && $PM -v 2>/dev/null)"
 echo "- Astro installé : $(node -p "require('./node_modules/astro/package.json').version" 2>/dev/null || echo 'node_modules absent')"
 echo "- Convex installé : $(node -p "require('./node_modules/convex/package.json').version" 2>/dev/null || echo '—')"
 echo "- Git : $(git rev-parse --abbrev-ref HEAD 2>/dev/null) @ $(git rev-parse --short HEAD 2>/dev/null) — $(git status --porcelain 2>/dev/null | wc -l | tr -d ' ') fichier(s) modifié(s) non commité(s)"
@@ -33,6 +34,9 @@ echo
 
 echo "## Dépendances obsolètes"
 echo
+if [ ! -d node_modules ]; then
+  echo "- node_modules absent : non vérifié (lancer \`$PM install\` puis relancer)"
+else
 if [ "$PM" = "npm" ]; then
   npm outdated --json > "$OUT/outdated.json" 2>/dev/null
   python3 - "$OUT/outdated.json" <<'PY'
@@ -58,10 +62,14 @@ PY
 else
   $PM outdated 2>&1 | head -60
 fi
+fi
 echo
 
 echo "## Vulnérabilités connues (dépendances de production)"
 echo
+if [ ! -d node_modules ]; then
+  echo "- node_modules absent : non vérifié (lancer \`$PM install\` puis relancer)"
+else
 if [ "$PM" = "npm" ]; then
   npm audit --omit=dev --json > "$OUT/audit.json" 2>/dev/null
   python3 - "$OUT/audit.json" <<'PY'
@@ -81,6 +89,7 @@ for name, v in list(d.get("vulnerabilities", {}).items())[:30]:
 PY
 else
   $PM audit --prod 2>&1 | tail -30
+fi
 fi
 echo
 
@@ -109,7 +118,7 @@ if [ "$BUILD" = "--build" ]; then
     code=$?
     echo "- Code de sortie : $code — durée : $(( $(date +%s) - start )) s"
     w=$(grep -ciE 'warn' "$OUT/build.log"); echo "- Avertissements dans le log : $w"
-    grep -iE 'warn|error' "$OUT/build.log" | sort | uniq -c | sort -rn | head -15 | sed 's/^/    /'
+    grep -aiE 'warn|error' "$OUT/build.log" | cut -c1-300 | sort | uniq -c | sort -rn | head -15 | sed 's/^/    /'
     if [ -d "$OUT/build" ]; then
       echo
       echo "- Pages prérendues (HTML) : $(find "$OUT/build" -name '*.html' | wc -l | tr -d ' ')"
@@ -126,7 +135,7 @@ fi
 
 echo "## Images sources lourdes (public/ et src/)"
 echo
-find public src -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.webp' \) -size +200k -exec ls -lh {} \; 2>/dev/null \
-  | awk '{print "- " $5 " " $9}' | head -20
+find public src -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.webp' \) -size +200k 2>/dev/null \
+  | sort | head -20 | while IFS= read -r f; do printf -- '- %s %s\n' "$(du -h "$f" | cut -f1)" "$f"; done
 echo
 echo "> Les images de public/ ne passent PAS par l'optimisation d'Astro : les déplacer dans src/assets et utiliser <Image>."
