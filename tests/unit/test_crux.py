@@ -144,8 +144,13 @@ class TestTendance(unittest.TestCase):
         self.assertTrue(self._deg("cumulative_layout_shift", serie))
         self.assertEqual(crux.tendances(_serie("cumulative_layout_shift", serie)), {})  # pourcentage indéfini : omis
 
-    def test_changement_de_categorie_meme_petit(self):
-        self.assertTrue(self._deg("largest_contentful_paint", [2400] * 4 + [2600] * 4))  # +200 ms mais bon -> à améliorer
+    def test_bascule_de_categorie_exige_aussi_le_plancher(self):
+        self.assertFalse(self._deg("largest_contentful_paint", [2490] * 4 + [2510] * 4))  # +20 ms : oscillation autour du seuil
+        self.assertFalse(self._deg("largest_contentful_paint", [2400] * 4 + [2600] * 4))  # +200 ms < 500
+        self.assertFalse(self._deg("cumulative_layout_shift", ["0.09"] * 4 + ["0.11"] * 4))
+        self.assertTrue(self._deg("largest_contentful_paint", [2000] * 4 + [2700] * 4))   # bon -> à améliorer, +700 ms
+        self.assertTrue(self._deg("largest_contentful_paint", [2400] * 4 + [3000] * 4))   # +600 ms
+        self.assertTrue(self._deg("cumulative_layout_shift", ["0.08"] * 4 + ["0.14"] * 4))  # +0,06
 
     def test_plancher_absolu_par_metrique(self):
         # même catégorie (à améliorer) : il faut atteindre le plancher
@@ -191,6 +196,30 @@ class TestTendance(unittest.TestCase):
         res = crux.construire_issues([dict(base, historique=oui)])
         self.assertEqual(res["terrain_degradation"]["severity"], "moyenne")
         self.assertEqual(res["terrain_degradation"]["examples"][0]["variations"]["LCP"]["apres"], 3000)
+
+    def test_age_dans_les_issues_et_info_au_dela_de_8_semaines(self):
+        def issues(age):
+            h = crux.analyser_historique(_serie("largest_contentful_paint", [2000] * 4 + [3000] * 4 + [None] * age))
+            return crux.construire_issues([{"portee": "origine", "cible": "https://ex.fr", "appareil": "tous", "metriques": {},
+                                            "historique": h}])["terrain_degradation"]
+        recent = issues(2)
+        self.assertEqual(recent["severity"], "moyenne")
+        self.assertEqual(recent["examples"][0]["age_semaines"], 2)
+        self.assertEqual(recent["examples"][0]["variations"]["LCP"]["age_semaines"], 2)
+        self.assertEqual(issues(8)["severity"], "moyenne")  # limite incluse
+        ancien = issues(9)
+        self.assertEqual(ancien["severity"], "info")
+        self.assertIn("9 semaines", ancien["label"])
+        self.assertEqual(ancien["examples"][0]["age_semaines"], 9)
+        self.assertEqual(issues(0)["examples"][0]["age_semaines"], 0)
+
+    def test_degradation_mixte_fraiche_et_ancienne_reste_moyenne(self):
+        frais = crux.analyser_historique(_serie("largest_contentful_paint", [2000] * 4 + [3000] * 4))
+        vieux = crux.analyser_historique(_serie("largest_contentful_paint", [2000] * 4 + [3000] * 4 + [None] * 20))
+        res = crux.construire_issues([{"portee": "origine", "cible": "https://ex.fr", "appareil": a, "metriques": {}, "historique": h}
+                                      for a, h in (("tous", frais), ("mobile", vieux))])["terrain_degradation"]
+        self.assertEqual(res["severity"], "moyenne")
+        self.assertEqual([e["age_semaines"] for e in res["examples"]], [0, 20])
 
     def test_collecter_ecrit_degradation_et_anciennete(self):
         histo = _serie("largest_contentful_paint", [2000] * 4 + [3000] * 4 + [None] * 2)
@@ -280,6 +309,13 @@ class TestAdressesEtArret(unittest.TestCase):
         self.assertEqual([c.get("url") for c in vus if "url" in c], [longue])
         self.assertNotIn("token", md)
         self.assertNotIn("abc", md)
+
+    def test_parametres_de_chemin_retires_avant_envoi(self):
+        vus, md = self._lancer(lambda c: (404, {}), urls=["https://ex.fr/a;jsessionid=SECRET123?x=1", "https://ex.fr/b;v=1/c;w=2/d",
+                                                         "https://ex.fr/a"])
+        self.assertEqual([c.get("url") for c in vus if "url" in c], ["https://ex.fr/a", "https://ex.fr/b/c/d"])
+        self.assertNotIn("SECRET123", md)
+        self.assertNotIn("jsessionid", md)
 
     def test_identifiants_retires_de_l_adresse_envoyee(self):
         vus, _ = self._lancer(lambda c: (404, {}), urls=["https://user:pw@ex.fr/p"])
@@ -431,6 +467,29 @@ class TestCleJamaisEcrite(unittest.TestCase):
         self.assertIn("⏭️ https://ex.fr : données terrain non lues (HTTP 302)", md)
         self.assertIn("redirection refusée", md)
         self.assertNotIn("❌", md)
+
+    def test_cle_mal_formee_message_clair_sans_requete_ni_fuite(self):
+        for mauvaise in ("abc\ndef", "clé-é", "ab\x00cd", "tab\tcle", "espace cle", "\u0153uvre"):
+            with self.subTest(cle=repr(mauvaise)):
+                vus = []
+
+                def transport(url, corps, entetes):
+                    vus.append(1)
+                    return 200, {}
+                with tempfile.TemporaryDirectory() as d:
+                    sortie = crux.collecter("https://ex.fr", ["https://ex.fr/a"], mauvaise, d, transport=transport)
+                    tout = _lire_tout(d)
+                    issues = json.loads(pathlib.Path(d, "issues.json").read_text(encoding="utf-8"))
+                self.assertEqual(vus, [])
+                self.assertEqual(issues, {})
+                self.assertIn("⏭️ clé CrUX invalide", tout)
+                self.assertIn("clé CrUX invalide", sortie)
+                self.assertNotIn(mauvaise, tout)
+                self.assertNotIn("injoignable", tout)
+
+    def test_cle_normale_acceptee(self):
+        self.assertTrue(crux._cle_valide("AIzaSyA-B_c123"))
+        self.assertTrue(crux._cle_valide(CLE))
 
     def test_message_libre_de_google_jamais_recopie(self):
         _, md = TestAdressesEtArret()._lancer(lambda c: (403, {"error": {"status": "PERMISSION_DENIED",

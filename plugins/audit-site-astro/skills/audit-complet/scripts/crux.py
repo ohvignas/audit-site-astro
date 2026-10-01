@@ -36,6 +36,7 @@ METRIQUES = (("largest_contentful_paint", "LCP", 2500, 4000), ("interaction_to_n
              ("experimental_time_to_first_byte", "TTFB", 800, 1800))
 _LABELS = {nom: label for nom, label, _, _ in METRIQUES}
 PLANCHER_HAUSSE = {"LCP": 500, "INP": 100, "CLS": 0.05, "FCP": 300, "TTFB": 300}  # hausse absolue minimale (même catégorie)
+AGE_MAX_SEMAINES = 8  # au-delà, un dernier point d'historique est trop ancien pour parler de dégradation en cours (info)
 FENETRE = 4        # périodes comparées : moyenne des 4 dernières contre les 4 précédentes
 SEV = {"mauvais": "haute", "à améliorer": "moyenne"}
 APPAREILS = (("tous", None, "tous appareils"), ("mobile", "PHONE", "mobile"), ("ordinateur", "DESKTOP", "ordinateur"))
@@ -46,6 +47,8 @@ STOP = (401, 403, 429)  # clé refusée ou quota : inutile d'insister (un 400 su
 SEV_PLAFOND_MOYENNE = ("FCP", "TTFB")  # ni FCP ni TTFB ne sont des Core Web Vitals : jamais au-dessus de « moyenne »
 _CLE_DANS_TEXTE = re.compile(r"(?i)\bkey=[^&\s'\"]*")
 _CODE = re.compile(r"[A-Z_]{3,60}")
+_CLE_VALIDE = re.compile(r"[\x21-\x7e]+")  # ASCII imprimable sans espace : une clé Google ; le reste ferait échouer l'en-tête HTTP
+_PARAMS_CHEMIN = re.compile(r";[^/]*")      # paramètres de matrice « ;jsessionid=… »
 
 
 class _SansRedirection(urllib.request.HTTPRedirectHandler):
@@ -107,7 +110,8 @@ def analyser_historique(historique):
     """{"LCP": {"avant", "apres", "pct", "age_semaines", "degradation"}, …} pour chaque métrique ayant au moins 2 périodes valides.
     avant / apres = moyennes des 4 périodes valides précédentes / des 4 dernières (moins si la série est courte) ; les périodes
     vides finales sont écartées (age_semaines = leur nombre : ancienneté du dernier point) ; pct est None si la base vaut 0.
-    degradation : jamais pour un « bon » ; sinon changement de catégorie vers pire, ou hausse absolue ≥ PLANCHER_HAUSSE."""
+    degradation : jamais pour un « bon » ; sinon hausse absolue ≥ PLANCHER_HAUSSE (une simple bascule de catégorie, par exemple
+    2490 → 2510 ms, ne suffit pas : une valeur qui oscille autour du seuil ne déclenche rien)."""
     out = {}
     for nom, label, _, _ in METRIQUES:
         brut = (((historique or {}).get("metrics") or {}).get(nom) or {}).get("percentilesTimeseries", {}).get("p75s", [])
@@ -121,11 +125,11 @@ def analyser_historique(historique):
             continue
         k = min(FENETRE, len(serie) // 2)
         apres, avant = sum(serie[-k:]) / k, sum(serie[-2 * k:-k]) / k
-        cat_apres, cat_avant = _categorie(label, apres), _categorie(label, avant)
+        cat_apres = _categorie(label, apres)
         hausse = round(apres - avant, 6)
         out[label] = {"avant": round(avant, 3), "apres": round(apres, 3),
                       "pct": round((apres - avant) / avant * 100, 1) if avant else None, "age_semaines": age,
-                      "degradation": cat_apres > 0 and (cat_apres > cat_avant or hausse >= PLANCHER_HAUSSE[label])}
+                      "degradation": cat_apres > 0 and hausse >= PLANCHER_HAUSSE[label]}
     return out
 
 
@@ -212,13 +216,19 @@ def construire_issues(resultats):
                 it["count"] += 1
                 it["examples"].append({"portee": r["portee"], "appareil": r.get("appareil"), "cible": r["cible"],
                                        "p75": m["p75"], "verdict": m["verdict"]})
-        hausses = {k: {"avant": v["avant"], "apres": v["apres"], "pct": v["pct"]}
+        hausses = {k: {"avant": v["avant"], "apres": v["apres"], "pct": v["pct"], "age_semaines": v.get("age_semaines", 0)}
                    for k, v in sorted((r.get("historique") or {}).items()) if v.get("degradation")}
         if hausses:
             it = issues.setdefault("terrain_degradation", {"label": "Dégradation des métriques terrain sur l'historique CrUX",
                                                            "severity": "moyenne", "count": 0, "examples": [], "domaine": "Performance"})
             it["count"] += 1
-            it["examples"].append({"appareil": r.get("appareil"), "cible": r["cible"], "variations": hausses})
+            it["examples"].append({"appareil": r.get("appareil"), "cible": r["cible"], "variations": hausses,
+                                   "age_semaines": max(v["age_semaines"] for v in hausses.values())})
+    it = issues.get("terrain_degradation")
+    if it and all(e["age_semaines"] > AGE_MAX_SEMAINES for e in it["examples"]):
+        it["severity"] = "info"
+        it["label"] += (f" (information : dernier point de l'historique vieux de {max(e['age_semaines'] for e in it['examples'])} "
+                        f"semaines, plus de {AGE_MAX_SEMAINES} : à vérifier, pas forcément en cours)")
     return issues
 
 
@@ -232,11 +242,12 @@ def _decouper(adresse):
     schema = p.scheme.lower()
     if schema not in ("http", "https") or not hote:
         return None
+    chemin = _PARAMS_CHEMIN.sub("", p.path)
     if ":" in hote:
         hote = f"[{hote}]"
     if port and port != (443 if schema == "https" else 80):
         hote += f":{port}"
-    return schema, hote, p.path
+    return schema, hote, chemin
 
 
 def _origine_propre(origine):
@@ -330,12 +341,18 @@ def _ligne_resultat(r):
             + (f" ; historique : dernier point il y a {age} semaine{'s' if age > 1 else ''}" if age else ""))
 
 
+def _cle_valide(cle):
+    return bool(_CLE_VALIDE.fullmatch(cle or ""))
+
+
 def collecter(origine, urls, cle, dossier, transport=None):
     d = Path(dossier)
     d.mkdir(parents=True, exist_ok=True)
     resultats, lignes = [], ["# Données terrain (Chrome UX Report)", ""]
     if not cle:
         lignes.append("- ⏭️ pas de clé CrUX (CRUX_API_KEY) : données terrain non lues")
+    elif not _cle_valide(cle):  # saut de ligne, espace ou caractère hors ASCII : l'en-tête HTTP échouerait sans message utile
+        lignes.append("- ⏭️ clé CrUX invalide (saut de ligne, espace ou caractère non ASCII dans CRUX_API_KEY) : aucune requête envoyée")
     elif not _origine_propre(origine):
         lignes.append("- ⏭️ origine invalide (attendu https://hôte) : aucune requête envoyée")
     else:
