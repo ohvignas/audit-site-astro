@@ -113,6 +113,10 @@
     {"id": "A05", "domaine": "a11y", "titre": "Champ sans label", "phase": "base", "matcher": {"type": "crawl_issue", "cle": "form_no_label"}},
     {"id": "A06", "domaine": "a11y", "titre": "Zones tactiles trop petites", "phase": "base", "matcher": {"type": "lighthouse", "regex": "(zones cibles|target|tactile)"}},
 
+    {"id": "X08", "domaine": "securite", "titre": "Clé OpenAI (sk-proj-) dans le JS client", "phase": 2, "matcher": {"type": "texte", "fichier": "securite/security-probe.md", "regex": "OpenAI : sk-proj-"}},
+    {"id": "S39", "domaine": "seo", "titre": "og:image absent", "phase": 2, "matcher": {"type": "crawl_issue", "cle": "og_image_absent"}},
+    {"id": "S40", "domaine": "seo", "titre": "Contenu de démonstration en ligne", "phase": 2, "matcher": {"type": "crawl_issue", "cle": "contenu_demo", "contient": "/v21/demo"}},
+    {"id": "P23", "domaine": "perf", "titre": "Fautifs du CLS et compression lus en Lighthouse 13", "phase": 2, "matcher": {"type": "unitaire", "test": "tests.unit.test_lighthouse13"}},
     {"id": "R01", "domaine": "rgpd", "titre": "Analytics avant consentement", "phase": 2, "matcher": {"type": "texte", "fichier": "rendu/rendu.md", "regex": "avant consentement.*fake-analytics"}},
     {"id": "R02", "domaine": "rgpd", "titre": "Cookie posé sans consentement", "phase": 2, "matcher": {"type": "texte", "fichier": "rendu/rendu.md", "regex": "_ga_cobaye"}},
     {"id": "E01", "domaine": "liens", "titre": "Lien externe cassé", "phase": 2, "matcher": {"type": "crawl_issue", "cle": "external_broken", "contient": "nx.cobaye.invalid"}},

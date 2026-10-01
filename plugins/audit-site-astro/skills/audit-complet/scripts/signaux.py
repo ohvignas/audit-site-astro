@@ -32,7 +32,7 @@ DOMAINES_CONNUS = frozenset(("Performance", "Serveur / HTTP", "SEO technique", "
 
 def charger(p):
     try:
-        return json.loads(Path(p).read_text(encoding="utf-8"))
+        return json.loads(Path(p).read_text(encoding="utf-8", errors="replace"))
     except Exception:
         return None
 
@@ -124,7 +124,7 @@ def collecter(audit):
     for path, dom_name, source in ((d / "securite/security-probe.md", "Sécurité", "securite"), (d / "http/http-checks.md", "Serveur / HTTP", "http")):
         if path.exists():
             # « > ⚠️ TLS non vérifié (mode test AUDIT_INSECURE_TLS=1) » : avis du mode test de l'audit, pas un constat sur le site
-            lignes = [l for l in path.read_text(encoding="utf-8").splitlines() if not ("mode test" in l and "AUDIT_INSECURE_TLS" in l)]
+            lignes = [l for l in path.read_text(encoding="utf-8", errors="replace").splitlines() if not ("mode test" in l and "AUDIT_INSECURE_TLS" in l)]
             source_signals = []
             for line in lignes:
                 if "❌" in line:
@@ -149,7 +149,7 @@ def collecter(audit):
     path = d / "code/project-checks.md"
     if path.exists():
         majeurs = []  # lignes du tableau « Dépendances obsolètes » avec saut de version majeure : un seul signal agrégé
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             brute = line.strip()
             if brute.startswith("|") and "⚠️ oui" in brute:
                 majeurs.append(brute)
