@@ -1,0 +1,9 @@
+---
+import Base from '../../layouts/Base.astro';
+const etapes = ['Cadrage', 'Maquette', 'Automatisation', 'Tests', 'Mise en ligne', 'Suivi', 'Formation', 'Support', 'Bilan', 'Évolution', 'Documentation', 'Communauté'];
+---
+<Base title="Icônes du parcours" description="Parcours de formation illustré par douze icônes décoratives et un indicateur de progression.">
+  <h1>Parcours en douze étapes</h1>
+  <ul>{etapes.map((e) => <li><span class="icone"><svg viewBox="0 0 24 24" fill="none" width="24" height="24" stroke="currentColor"><path d="M5 12h14" /></svg></span> {e}</li>)}</ul> {/* A07 : icônes décoratives sans aria-hidden */}
+  <svg role="img" viewBox="0 0 8 8" width="24" height="24"><circle cx="4" cy="4" r="3" /></svg> {/* A08 : SVG role=img sans nom */}
+</Base>
