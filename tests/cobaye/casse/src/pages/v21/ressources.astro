@@ -1,0 +1,8 @@
+---
+import Base from '../../layouts/Base.astro';
+---
+<Base title="Galerie de la salle" description="Galerie de la salle de formation avec une photo pleine résolution et une police de titre personnalisée.">
+  <style is:inline>@font-face { font-family: 'CobayeTitre'; src: url('/v21/cobaye-titre.woff2'); }</style> {/* P20 : sans font-display */}
+  <h1>Galerie</h1>
+  <img src="/images/hero-4000.jpg" alt="Salle de formation vue d'ensemble" width="400" height="267" /> {/* P18, P19 : 4000 px, max-age=0 */}
+</Base>

@@ -6,6 +6,7 @@ severite_type: moyenne
 effort: M
 declencheurs:
   - "lighthouse:unused-javascript|legacy-javascript|duplicated-javascript|unminified-javascript|Réduisez les ressources JavaScript inutilisées|Évitez d'utiliser de l'ancien code JavaScript|Supprimez les modules en double|Ancien JavaScript|JavaScript en double|Réduisez la taille des ressources JavaScript"
+  - "crawl:js_lourd"
 sources:
   - https://docs.astro.build/en/guides/client-side-scripts/
   - https://docs.astro.build/en/reference/configuration-reference/#vite
