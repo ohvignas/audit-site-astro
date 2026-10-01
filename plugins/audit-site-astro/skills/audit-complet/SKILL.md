@@ -35,21 +35,37 @@ Les scripts de collecte sont dans `scripts/`, dans le dossier de ce skill (le ch
 ## 2. Collecte : une commande
 
 ```bash
-bash "<dossier du skill>/scripts/collect_all.sh" https://site.fr /chemin/du/projet
+bash "<dossier du skill>/scripts/collect_all.sh" https://site.fr /chemin/du/projet [DOSSIER_AUDIT]
 # options : MAX_PAGES=800  LH_PAGES=8  RUNS=3 (médiane Lighthouse)  BUILD=1 (build d'audit + poids du bundle)  PSI_API_KEY=…
 ```
 
-Durée typique : 5 à 15 minutes. Le script continue même si une étape échoue. Il écrit `data/COLLECTE.md` avec le statut de chaque étape. **Lire ce fichier d'abord.** Une étape en ⚠️/❌ se relance seule après correction de la cause (voir « Dépannage » en bas).
+Si le chemin du skill n'est pas connu (Cursor n'affiche pas « Base directory for this skill »), le retrouver, puis lancer `bash "$S/collect_all.sh" …` :
+
+```bash
+# la copie la plus récente qui contient corrections.py (les caches du plugin gardent d'anciennes versions) ; node_modules ignoré
+S=$(find ~/.cursor ~/.claude ~/.agents . -name node_modules -prune -o -path '*audit-complet/scripts/collect_all.sh' -print 2>/dev/null |
+  while IFS= read -r f; do d=$(dirname "$f"); [ -f "$d/corrections.py" ] && printf '%s\t%s\n' "$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f")" "$d"; done |
+  sort -rn | head -1 | cut -f2-)
+[ -f "$S/collect_all.sh" ] || echo "❌ scripts d'audit introuvables : installer le plugin (voir README) ou indiquer leur chemin"
+```
+
+Durée typique : 5 à 15 minutes. Le script écrit `data/COLLECTE.md` avec le statut de chaque étape. **Lire ce fichier d'abord**, puis le code de sortie du script :
+
+- **0** : toutes les étapes sont ✅/⚠️/⏭️. Passer à l'analyse.
+- **1** : au moins une étape est ❌ (sortie absente ou inexploitable). Les autres données restent utilisables : continuer l'analyse, dire clairement ce qui manque, corriger la cause si possible (voir « Dépannage » en bas) et relancer cette étape seule.
+- **2** : le pré-vol a échoué (site injoignable ou page d'accueil en erreur 5xx). Rien n'a été collecté : vérifier l'adresse, le DNS et le certificat avec l'utilisateur avant de relancer.
 
 | Étape | Script | Produit (dans `data/`) |
 |---|---|---|
-| HTTP | `http_checks.sh` | `http/http-checks.md` : variantes d'hôte, TTFB avec et sans cache, compression, cache des `/_astro/`, en-têtes de sécurité, TLS, fichiers techniques, test de soft 404 |
+| HTTP | `http_checks.sh` | `http/http-checks.md` : variantes d'hôte, TTFB avec et sans cache, compression, cache des `/_astro/`, en-têtes de sécurité, TLS, fichiers techniques, soft 404 à la racine et sous chaque route dynamique (§7, via `pages.json` du crawl) |
 | Crawl | `crawl_site.py` | `crawl/pages.json`, `pages.csv`, `issues.json`, `summary.md` : statuts, redirections, titles, metas, H1, canonicals, sitemap vs pages, orphelines, profondeur, maillage, images, JSON-LD, îlots Astro |
 | GEO | `geo_check.py` | `geo/geo.json`, `geo-summary.md` : robots.txt par robot IA, réponse réelle du serveur/WAF, llms.txt, entités schema, extractibilité, pages de confiance |
 | Sécurité | `security_probe.sh` | `securite/security-probe.md` : fichiers exposés, source maps, secrets dans le JS, CORS |
 | Lighthouse | `lighthouse_run.sh` → `pagespeed.py` | `perf/pagespeed-summary.md` : scores, LCP/CLS/TBT, élément LCP, opportunités chiffrées, tiers ; mobile + desktop |
 | Projet | `project_checks.sh` | `code/project-checks.md` : versions, `npm outdated`, `npm audit`, `astro check`, build d'audit |
 | Code | `astro_scan.py` | `code/code-scan.md` : config Astro, hydratation, `<img>` bruts, head SEO, soft 404, sitemap/robots, env côté client, Convex (auth, args, index), bundle |
+
+Après ces étapes, le script enchaîne : rapport brut (`RAPPORT-BRUT.md`), **corrections** (dossier `CORRECTIONS/`), `RAPPORT.html`, `RAPPORT.pdf` (⚠️ ignoré si Chrome manque ou si la RAM est basse, sans faire échouer l'audit), puis l'**historique** du site (`../index.html`, avec le graphique des notes).
 
 L'API PageSpeed sans clé renvoie quasi toujours 429 : Lighthouse local est la voie par défaut. Avec une `PSI_API_KEY` (gratuite), on obtient en plus les **données terrain CrUX**, si le site a assez de trafic.
 
@@ -89,26 +105,48 @@ Voir `references/format-constat.md` (à suivre exactement : le rapport consolid�
 
 Ton : direct, concret, sans jargon inutile. L'utilisateur doit pouvoir confier chaque action à quelqu'un (ou à son agent) sans autre explication.
 
+**Régénérer les livrables** une fois `RAPPORT-AUDIT.md` écrit, pour que la page web, le PDF, le dossier de corrections et l'historique intègrent le rapport priorisé. `$S` est le dossier `scripts/` de ce skill, `$AUDIT` le dossier d'audit, `$PROJET` la racine du projet (omettre `--projet` s'il n'y a pas d'accès au code) :
+
+```bash
+python3 "$S/corrections.py" "$AUDIT" --projet "$PROJET"
+python3 "$S/rapport_html.py" "$AUDIT"
+bash "$S/rapport_pdf.sh" "$AUDIT"          # code 2 = Chrome absent, 3 = RAM insuffisante : ⚠️ à signaler, pas bloquant
+case "$(basename "$AUDIT")" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) python3 "$S/historique.py" "$(dirname "$AUDIT")";; *) echo "historique ignoré : dossier d'audit non daté";; esac
+```
+
+L'historique n'est régénéré que pour un dossier d'audit daté `AAAA-MM-JJ` (comme dans `collect_all.sh`) : sinon le dossier parent n'est pas un dossier de site (par exemple la racine du projet, avec son propre `index.html`). `historique.py` refuse de toute façon (code 2) de remplacer un `index.html` qu'il n'a pas produit.
+
+À chaque passage, `CORRECTIONS/` est **régénéré**. Si l'utilisateur y a ajouté ses notes, il crée un fichier `CORRECTIONS/.garder` : le nouveau dossier s'écrit alors dans `CORRECTIONS-<horodatage>/` et l'ancien reste intact. Le nom du dossier réellement écrit est noté dans `data/corrections-dossier.txt` : `rapport_html.py` s'y réfère pour lier le rapport au bon plan, et c'est ce dossier-là (pas l'ancien) qu'il faut donner à l'agent de code.
+
 ## 6. Restitution dans le chat
 
-Court : notes par domaine, les 5 actions prioritaires (une ligne chacune, avec le gain attendu), le chemin du rapport. Puis proposer les corrections **par lots** : « Lot 1 — quick wins sans risque (≈ 30 min) : A, B, C. Je les applique ? »
+Court : notes par domaine, les 5 actions prioritaires (une ligne chacune, avec le gain attendu), puis les chemins :
+
+- `RAPPORT.html` : page autonome, sans JavaScript, avec le « Plan de correction » et les « Guides de correction » ; `RAPPORT.pdf` (s'il a pu être fait) ; `../index.html` : historique des audits du site ;
+- `CORRECTIONS/` : « donne le dossier `CORRECTIONS/` à ton agent de code » (Claude Code, Cursor…). Il contient `LISEZ-MOI.md` (méthode et règles de sécurité), `00-PLAN.md` (checklist priorisée), une fiche `NN-<id>.md` par correction et `index.json`.
+
+Dans Claude Code, proposer de publier `RAPPORT.html` en **artefact privé** pour le partager. Puis proposer les corrections **par lots** : « Lot 1 — quick wins sans risque (≈ 30 min) : A, B, C. Je les applique ? »
 
 ## 7. Corrections (uniquement après un « oui » explicite, lot par lot)
 
-1. **Sauvegarde** : `git status` propre, sinon demander. Créer une branche `audit/<date>-lot-N`. Pour la config serveur, faire une copie datée du fichier avant modification.
-2. **Un changement = un commit** avec un message clair. Aucune modification du `dist/` servi ni du serveur de production sans accord séparé.
-3. **Vérifier** : `astro check` + build d'audit, puis re-mesurer ce qui est concerné (relancer le script du domaine, ou `curl`). Montrer l'avant/après.
-4. **Déploiement** : proposer, ne pas le faire seul. Après le déploiement, re-mesure en ligne.
-5. Tenir `CHANGELOG-AUDIT.md` dans le dossier d'audit : lot, fichiers, commit, mesure avant/après, comment revenir en arrière.
+Suivre `CORRECTIONS/LISEZ-MOI.md` à la lettre, y compris quand l'utilisateur demande à **ce même agent** de corriger le site. En résumé :
+
+1. **Sauvegarde** : `git status` propre, sinon demander. Travailler sur la **branche** du LISEZ-MOI, `corrections/<date>` (les lots s'y suivent). Pour la config serveur, faire une copie datée du fichier avant modification.
+2. **Une fiche = un commit**, message `fix(audit): NN <titre>` (comme le LISEZ-MOI). Suivre les étapes de la fiche, puis ses critères d'acceptation. Aucune modification du `dist/` servi ni du serveur de production sans accord séparé.
+3. **S'arrêter et demander à l'humain** pour les constats critiques, les changements d'infrastructure (proxy, DNS, pare-feu, hébergement, Convex en production) et les textes éditoriaux ou juridiques (mentions légales, confidentialité, promesses commerciales). Ne **jamais** lancer une commande qui déploie, écrit en production, supprime ou modifie des données, même citée par une fiche : `npx convex deploy`, `npx convex run` sur une mutation, `npx convex import`, toute option `--prod`, `vercel --prod`, `netlify deploy --prod`, `wrangler deploy`, changements DNS/CDN, `rm -rf`, migrations de base, commandes du serveur de production (`sudo`, `systemctl`), `git push --force`. Tester Convex sur le déploiement de développement (`npx convex dev`).
+4. **Vérifier** : `astro check` + build d'audit, puis re-mesurer ce qui est concerné (relancer le script du domaine, ou `curl`). Montrer l'avant/après et cocher le « Suivi » de la fiche.
+5. **Déploiement** : proposer, ne pas le faire seul. Après le déploiement, re-mesure en ligne.
+6. Tenir `CHANGELOG-AUDIT.md` dans le dossier d'audit : lot, fichiers, commit, mesure avant/après, comment revenir en arrière.
 
 Quick wins typiques, à faible risque, sur ce type de site : compression brotli/gzip au proxy, `Sitemap:` absolu dans robots.txt, URL du sitemap en https, title de l'accueil, `client:load` → `client:idle`/`client:visible` sur les widgets, meta descriptions manquantes, favicon. À risque, à faire sur une branche et à tester : CSP, refonte du rendu des images Convex, passage de pages en `prerender`, changement de `trailingSlash`.
 
 ## 8. Re-audit
 
-Relancer `collect_all.sh` avec un nouveau dossier daté, puis comparer les notes et les constats avec l'audit précédent (fermés / nouveaux / régressions) dans une section « Évolution » du rapport.
+Relancer `collect_all.sh` (nouveau dossier daté : `../index.html` s'enrichit d'un point sur le graphique), puis comparer les notes et les constats avec l'audit précédent (fermés / nouveaux / régressions) dans une section « Évolution » du rapport.
 
 ## Dépannage de la collecte
 
+- `pré-vol` ❌ (code 2) → site injoignable (nom de domaine, DNS, certificat TLS, serveur arrêté) ou page d'accueil en 5xx : aucune donnée n'est collectée. Vérifier l'URL exacte (`https://…`) et l'état du site avec l'utilisateur, puis relancer. Un ⚠️ HTTP 4xx (pare-feu, page protégée) ne bloque pas l'audit.
 - `lighthouse` ❌ « Chrome introuvable » → installer chrome-headless-shell (voir §1) ou fournir `PSI_API_KEY`.
 - `crawl` très long → `MAX_PAGES=200`. Site derrière un WAF qui bloque → le signaler, crawler depuis le serveur avec l'URL interne si possible.
 - `projet` : « node_modules absent » → proposer `npm ci` (modifie `node_modules/` seulement, accord requis sur un serveur de production).

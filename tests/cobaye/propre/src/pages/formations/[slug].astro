@@ -1,0 +1,19 @@
+---
+export const prerender = false;
+import Base from '../../layouts/Base.astro';
+import { formations } from '../../data/formations';
+import { paragraphes } from '../../data/texte';
+const f = formations.find((x) => x.slug === Astro.params.slug);
+if (!f) return Astro.rewrite('/404');
+Astro.cache.set({ maxAge: 300, swr: 60, tags: ['formations'] });
+const jsonld = { '@context': 'https://schema.org', '@type': 'Course', name: f.titre, description: f.description,
+  provider: { '@id': new URL('/#organisation', Astro.site).href } };
+---
+<Base title={f.titre} description={f.description} jsonld={jsonld}>
+  <h1>{f.titre}</h1>
+  {f.texte.map((p) => <p>{p}</p>)}
+  <h2>Programme et déroulé</h2>
+  {paragraphes(`détaillé (${f.slug})`).filter((_, i) => i !== 2 && i !== 4).map((p) => <p>{p}</p>)}
+  <h2>Comment financer cette formation ?</h2>
+  <p>Le CPF, un OPCO ou France Travail peuvent financer tout ou partie de la formation.</p>
+</Base>

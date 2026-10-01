@@ -1,0 +1,38 @@
+name: cobaye
+networks:
+  cobaye:
+    name: cobaye
+services:
+  app-casse:
+    build: ./casse
+    environment: { HOST: 0.0.0.0, PORT: "4321", SECRET_KEY: "valeur-factice-cobaye" }
+    networks: [cobaye]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4321/robots.txt').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      retries: 40
+  app-propre:
+    build: ./propre
+    environment: { HOST: 0.0.0.0, PORT: "4321" }
+    networks: [cobaye]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4321/robots.txt').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      retries: 40
+  proxy:
+    image: nginx:1.27-alpine
+    depends_on:
+      app-casse: { condition: service_healthy }
+      app-propre: { condition: service_healthy }
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+      - ./nginx/leurres:/srv/leurres:ro
+      - ./nginx/images:/srv/images:ro   # X06 : image « tierce » servie dans le réseau du banc
+    networks:
+      cobaye:
+        aliases: [casse.cobaye.test, propre.cobaye.test, images.cobaye.test]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --no-check-certificate -O /dev/null https://127.0.0.1/ && wget -q --no-check-certificate --header 'Host: casse.cobaye.test' -O /dev/null https://127.0.0.1/robots.txt && wget -q --header 'Host: images.cobaye.test' -O /dev/null http://127.0.0.1/cobaye.png"]
+      interval: 5s
+      retries: 20

@@ -1,0 +1,16 @@
+---
+export const prerender = true;
+import Base from '../layouts/Base.astro';
+import { paragraphes } from '../data/texte';
+---
+<Base title="Contacter Cobaye Formation : conseil et inscription" description="Posez vos questions sur nos formations, le financement et les inscriptions.">
+  <h1>Contact</h1>
+  {paragraphes('du contact').map((p) => <p>{p}</p>)}
+  <h2>Nous écrire</h2>
+  {paragraphes("de l'inscription").filter((_, i) => i !== 2 && i !== 4).map((p) => <p>{p}</p>)}
+  <form>
+    <label for="email">Votre email</label>
+    <input id="email" name="email" type="email" autocomplete="email" required />
+    <button type="submit">Envoyer</button>
+  </form>
+</Base>

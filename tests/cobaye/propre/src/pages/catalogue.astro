@@ -1,0 +1,14 @@
+---
+export const prerender = true;
+import Base from '../layouts/Base.astro';
+import { formations } from '../data/formations';
+import { paragraphes } from '../data/texte';
+---
+<Base title="Catalogue des formations no-code et IA" description="Toutes nos formations no-code et intelligence artificielle, par métier et par outil.">
+  <h1>Catalogue des formations</h1>
+  {paragraphes('du catalogue').map((p) => <p>{p}</p>)}
+  <h2>Choisir la formation adaptée</h2>
+  {paragraphes('par métier').filter((_, i) => i !== 2 && i !== 4).map((p) => <p>{p}</p>)}
+  <h2>Les formations disponibles</h2>
+  <ul>{formations.map((f) => <li><a href={`/formations/${f.slug}`}>{f.titre}</a></li>)}</ul>
+</Base>

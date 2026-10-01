@@ -92,6 +92,8 @@ if [ -d node_modules/astro ]; then
   errs=$(grep -cE '\berror\b' "$OUT/astro-check.txt" 2>/dev/null); warns=$(grep -cE '\bwarning\b' "$OUT/astro-check.txt" 2>/dev/null)
   echo
   echo "- Lignes d'erreur : ${errs:-0} — avertissements : ${warns:-0} (détail : astro-check.txt)"
+  [ "${errs:-0}" -gt 0 ] && echo "- ❌ astro check : ${errs} erreur(s) de diagnostic"
+  [ "${warns:-0}" -gt 0 ] && echo "- ⚠️ astro check : ${warns} avertissement(s)"
   grep -q "@astrojs/check" "$OUT/astro-check.txt" && echo "- ℹ️ @astrojs/check non installé : astro check a demandé à l'installer (ne rien installer sans accord)"
 else
   echo "- node_modules absent : lancer \`$PM install\` (ou npm ci) avant pour activer ce contrôle"

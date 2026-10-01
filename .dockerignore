@@ -3,3 +3,5 @@ audits
 **/__pycache__
 *.md
 !plugins/**/*.md
+tests/
+audits-cobaye/

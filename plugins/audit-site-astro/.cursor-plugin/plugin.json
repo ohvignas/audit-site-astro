@@ -1,0 +1,6 @@
+{
+  "name": "audit-site-astro",
+  "description": "Audit A→Z de sites Astro (+ Convex) : performance & Core Web Vitals, SEO technique, contenu, GEO (ChatGPT, Perplexity, Claude, Gemini, AI Overviews), code, sécurité, accessibilité — rapport priorisé, page web et PDF.",
+  "version": "1.2.0",
+  "author": { "name": "ILLITH" }
+}

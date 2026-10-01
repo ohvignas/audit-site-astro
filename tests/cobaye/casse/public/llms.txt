@@ -1,0 +1,6 @@
+# Cobaye Formation
+> Organisme de formation fictif qui sert de banc d'essai à l'outil d'audit.
+
+## Pages
+- [Accueil](https://casse.cobaye.test/): présentation
+- [Guide gratuit](https://casse.cobaye.test/ressources/guide-supprime): lien cassé volontaire

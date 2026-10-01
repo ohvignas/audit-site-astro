@@ -42,6 +42,7 @@ fi
 echo "Chrome : $CHROME_PATH"
 
 FLAGS="--headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --disable-extensions --no-first-run --disable-background-networking --disable-sync --disable-default-apps --mute-audio"
+[ "${AUDIT_INSECURE_TLS:-}" = "1" ] && FLAGS="$FLAGS --ignore-certificate-errors"
 MIN_FREE_MB="${MIN_FREE_MB:-1200}"
 
 free_mb() {  # mémoire disponible sans swapper (Linux : MemAvailable ; macOS : free + inactive + speculative)

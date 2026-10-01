@@ -1,0 +1,20 @@
+---
+export const prerender = true;
+import { getCollection, render } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+  return posts.map((post) => ({ params: { slug: post.id }, props: { post } }));
+}
+const { post } = Astro.props;
+const { Content } = await render(post);
+const jsonld = post.id === 'article-casse'
+  ? '{"@context": "https://schema.org", "@type": "Article", "headline": "Comparatif",}' // S27 : virgule finale
+  : JSON.stringify({ '@context': 'https://schema.org', '@type': 'Article', headline: post.data.titre }); // G08 : ni auteur ni date
+---
+<Base title={post.data.titre} description={post.data.description}>
+  <script type="application/ld+json" set:html={jsonld}></script>
+  <h1>{post.data.titre}</h1>
+  <Content />
+</Base>

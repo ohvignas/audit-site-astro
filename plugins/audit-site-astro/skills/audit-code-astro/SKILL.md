@@ -5,7 +5,7 @@ description: Audit de la qualité et de la santé du code d'un projet Astro (et 
 
 # Audit du code — Astro + Convex
 
-Scripts : `../audit-complet/scripts/`. Format : `../audit-complet/references/format-constat.md`. Sortie : `rapports/code.md`.
+Scripts : `../audit-complet/scripts/` (sinon, même commande `find` que dans audit-complet §2). Format : `../audit-complet/references/format-constat.md`. Sortie : `rapports/code.md`.
 
 ## Données
 ```bash
