@@ -135,5 +135,110 @@ class TestSitemapVariantes(unittest.TestCase):
             self.assertEqual(ex, [{"url": site.base + "/r/a", "vers": site.base + "/a", "statut": 301}])
 
 
+class FetchFactice:
+    """fetch de remplacement : enregistre les appels ; chaque URL http:// / www répond 301 vers son équivalent https://ex.fr."""
+
+    def __init__(self, statut=301):
+        self.appels, self.statut = [], statut
+
+    def __call__(self, url, timeout=20, method="GET", max_hops=10, **kw):
+        self.appels.append({"url": url, "timeout": timeout, "method": method, "max_hops": max_hops})
+        cible = "https://ex.fr" + url.split("ex.fr", 1)[-1] if "ex.fr" in url else url
+        if self.statut in (301, 302):
+            return {"url": url, "final_url": cible, "status": -1, "chain": [{"url": url, "status": self.statut}]}
+        return {"url": url, "final_url": url, "status": self.statut, "chain": []}
+
+
+def issues_sitemap(sm, pages, robots="User-agent: *\nAllow: /\n", fetch_fn=None, **kw):
+    """sondes (fetch factice) puis build_issues, comme `crawl` pour un site https://ex.fr."""
+    rb = crawl_site.RobotsTxt(robots)
+    sondes = crawl_site.sonder_sitemap(set(sm), pages, "ex.fr", "https", rb, fetch_fn or FetchFactice(), **kw)
+    ctx = {"meta": {}, "sitemap_sondes": sondes}
+    return crawl_site.build_issues(pages, {u: {"https://ex.fr/"} for u in pages}, set(sm), sm, [], rb, {}, Counter(), {},
+                                   "ex.fr", "https", {}, ctx), sondes
+
+
+class TestSondesSitemap(unittest.TestCase):
+    """Revue T6 (M1-M6) : comptage sans réseau, sondes bornées, hôtes tiers jamais contactés."""
+
+    def pages(self, *chemins):
+        return {"https://ex.fr" + c: page_ok("https://ex.fr" + c) for c in ("/",) + chemins}
+
+    def test_sitemap_http_vers_https_compte_sans_reseau_et_sonde_bornee(self):
+        pages = self.pages("/a", "/b")
+        sm = ["http://ex.fr/", "http://ex.fr/a", "http://ex.fr/b"] + ["http://ex.fr/n%02d" % i for i in range(60)]
+        f = FetchFactice()
+        issues, sondes = issues_sitemap(sm, pages, fetch_fn=f)
+        self.assertEqual(issues["sitemap_redirect"]["count"], len(sm))   # toutes les variantes, pas seulement les sondées
+        self.assertNotIn("not_in_sitemap", issues)
+        self.assertLessEqual(len(f.appels), 5)
+        self.assertEqual(len(sondes), len(f.appels))
+        self.assertTrue(all(a["method"] == "HEAD" and a["max_hops"] == 1 and a["timeout"] == 20 for a in f.appels))
+        # les URL sondées (priorité à celles sans équivalent crawlé) portent le code observé et passent en tête
+        ex = issues["sitemap_redirect"]["examples"]
+        self.assertEqual([e["statut"] for e in ex[:len(sondes)]], [301] * len(sondes))
+        self.assertTrue(all(e["url"] not in pages and "n0" in e["url"] for e in ex[:len(sondes)]))
+
+    def test_une_sonde_a_200_ne_dit_pas_redirige(self):
+        pages = self.pages("/a")
+        issues, _ = issues_sitemap(["http://ex.fr/", "http://ex.fr/a"], pages, fetch_fn=FetchFactice(statut=200))
+        self.assertNotIn("sitemap_redirect", issues)
+        self.assertEqual(sorted(e["statut"] for e in issues["sitemap_sans_redirection"]["examples"]), [200, 200])
+        self.assertTrue(all("vers" not in e for e in issues["sitemap_sans_redirection"]["examples"]))
+
+    def test_page_absente_du_sitemap_reste_signalee(self):
+        pages = self.pages("/a", "/b")
+        issues, _ = issues_sitemap(["http://ex.fr/", "http://www.ex.fr/a"], pages)
+        self.assertEqual(issues["not_in_sitemap"]["examples"], ["https://ex.fr/b"])
+
+    def test_variante_www_equivalente(self):
+        pages = self.pages("/a")
+        issues, _ = issues_sitemap(["https://www.ex.fr/", "https://www.ex.fr/a"], pages, max_sondes=0)
+        self.assertNotIn("not_in_sitemap", issues)
+        self.assertEqual(issues["sitemap_redirect"]["count"], 2)
+
+    def test_hote_tiers_jamais_sonde_ni_compte(self):
+        pages = self.pages("/a")
+        sm = ["https://ex.fr/", "https://ex.fr/a", "http://localhost:4321/x", "https://staging.autre.com/a"]
+        f = FetchFactice()
+        issues, sondes = issues_sitemap(sm, pages, fetch_fn=f)
+        self.assertEqual(f.appels, [])
+        self.assertEqual(sondes, {})
+        self.assertNotIn("sitemap_redirect", issues)
+        self.assertNotIn("sitemap_sans_redirection", issues)
+
+    def test_robots_respecte_par_les_sondes(self):
+        pages = self.pages()
+        sm = ["http://ex.fr/prive/a", "http://ex.fr/prive/b", "http://ex.fr/ok"]
+        f = FetchFactice()
+        issues, sondes = issues_sitemap(sm, pages, robots="User-agent: *\nDisallow: /prive/\n", fetch_fn=f)
+        self.assertEqual([a["url"] for a in f.appels], ["http://ex.fr/ok"])
+        self.assertEqual(issues["sitemap_redirect"]["count"], 3)   # comptage sans réseau : robots ne l'affecte pas
+        f2 = FetchFactice()
+        issues_sitemap(sm, pages, robots="User-agent: *\nDisallow: /prive/\n", fetch_fn=f2, ignore_robots=True, par_groupe=5)
+        self.assertEqual(len(f2.appels), 3)
+
+    def test_bornes_par_groupe_echecs_et_budget(self):
+        pages = self.pages()
+        sm = ["http://ex.fr/%02d" % i for i in range(30)] + ["http://www.ex.fr/%02d" % i for i in range(30)]
+        f = FetchFactice()
+        crawl_site.sonder_sitemap(set(sm), pages, "ex.fr", "https", crawl_site.RobotsTxt(""), f, max_sondes=20)
+        self.assertEqual(len(f.appels), 4)   # 2 par couple (schéma, hôte) : http://ex.fr et http://www.ex.fr
+        panne = FetchFactice(statut=0)
+        crawl_site.sonder_sitemap(set(sm), pages, "ex.fr", "https", crawl_site.RobotsTxt(""), panne, par_groupe=50, max_sondes=20)
+        self.assertEqual(len(panne.appels), 3)   # arrêt après 3 échecs de suite
+        nul = FetchFactice()
+        crawl_site.sonder_sitemap(set(sm), pages, "ex.fr", "https", crawl_site.RobotsTxt(""), nul, budget_s=-1)
+        self.assertEqual(nul.appels, [])
+
+    def test_og_title_absent_seul(self):
+        p = page_ok("https://ex.fr/")
+        p["og_title"] = False
+        issues = crawl_site.build_issues({"https://ex.fr/": p}, {}, set(), [], [], crawl_site.RobotsTxt(""), {}, Counter(), {},
+                                         "ex.fr", "https", {}, {"meta": {}})
+        self.assertEqual(issues["og_title_absent"]["examples"], ["https://ex.fr/"])
+        self.assertNotIn("og_image_absent", issues)
+
+
 if __name__ == "__main__":
     unittest.main()

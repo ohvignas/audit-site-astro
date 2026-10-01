@@ -6,6 +6,7 @@ severite_type: haute
 effort: S
 declencheurs:
   - "crawl:sitemap_redirect"
+  - "crawl:sitemap_sans_redirection"
   - "code:construit les URL depuis l'origine de la requête"
   - "code:contient une URL http:// en dur"
 sources:
@@ -91,7 +92,7 @@ curl -s https://SITE/sitemap.xml | grep -o '<loc>[^<]*' | sed 's/<loc>//' | head
   | while read u; do curl -s -o /dev/null -w "%{http_code} $u\n" "$u"; done   # attendu : 200 partout
 ```
 
-Relancer `python3 scripts/crawl_site.py https://SITE/ --out /tmp/verif` : `sitemap_redirect` doit disparaître.
+Relancer `python3 scripts/crawl_site.py https://SITE/ --out /tmp/verif` : `sitemap_redirect` et `sitemap_sans_redirection` doivent disparaître.
 
 ## Pièges et retour arrière
 
