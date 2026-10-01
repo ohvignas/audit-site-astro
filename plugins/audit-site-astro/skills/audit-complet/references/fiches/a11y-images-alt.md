@@ -9,6 +9,8 @@ declencheurs:
   - "code:\\d+ <img> sans attribut alt"
   - "lighthouse:image-alt|image-redundant-alt|input-image-alt|svg-img-alt|object-alt"
   - "lighthouse:Des éléments d'image n'ont pas d'attribut|attributs `\\[alt\\]` qui correspondent à du texte redondant|`<input type=\"image\">` ne contiennent pas|SVG avec un rôle `img` n'ont pas|`<object>` ne contiennent pas de texte"
+  - "crawl:alt_suspect"
+  - "crawl:alt_redondant"
 sources:
   - https://www.w3.org/WAI/WCAG22/Understanding/non-text-content.html
   - https://www.w3.org/WAI/tutorials/images/decision-tree/
