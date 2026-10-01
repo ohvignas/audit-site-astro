@@ -335,6 +335,8 @@ class TestCouverture(unittest.TestCase):
         self.assertEqual(nouveaux, [], f"{famille} : échantillons sans fiche (nouveaux trous) : {nouveaux}")
         self.assertEqual(perimees, [], f"{famille} : lacunes connues désormais couvertes, à retirer de LACUNES_CONNUES : {perimees}")
 
+    CLES_INFO_SANS_FICHE = {"sri_non_applicable"}
+
     # (a) crawl ------------------------------------------------------------------------------------------------------------
 
     def test_cles_du_crawl(self):
@@ -343,6 +345,8 @@ class TestCouverture(unittest.TestCase):
         for nom in ("crawl_site",) + tuple(html_observateurs.MODULES):
             cles |= extraction.cles_crawl(_lire(nom + ".py"))
         self.assertGreaterEqual(len(cles), 55, f"extraction des clés du crawl dégradée : {sorted(cles)}")
+        # constats purement informatifs, volontairement SANS fiche (une fiche les ferait entrer dans CORRECTIONS pour rien)
+        cles -= self.CLES_INFO_SANS_FICHE
         trous = self._trous([sig("crawl", k) for k in sorted(cles)])
         self.assertEqual(trous, [], f"clés d'issue du crawl sans fiche : {trous}")
 

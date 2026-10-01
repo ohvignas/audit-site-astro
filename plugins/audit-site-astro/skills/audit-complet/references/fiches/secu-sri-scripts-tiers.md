@@ -6,11 +6,10 @@ severite_type: basse
 effort: S
 declencheurs:
   - "crawl:sri_absent"
-  - "crawl:sri_non_applicable"
 sources:
   - https://developer.mozilla.org/en-US/docs/Web/Security/Subresource_Integrity
   - https://developer.mozilla.org/en-US/observatory/docs/tests_and_scoring
-  - https://docs.stripe.com/security/guide#content-security-policy
+  - https://docs.stripe.com/js
 ---
 
 # Scripts tiers chargés sans Subresource Integrity
@@ -23,10 +22,10 @@ L'attribut `integrity` (empreinte SHA-384) fait bloquer un fichier modifié. MDN
 
 L'outil distingue donc deux constats :
 
-- **`sri_absent` (basse, à vérifier)** : script d'un hôte tiers sans `integrity`, hors des cas ci-dessous. Cas typique : bibliothèque de jsdelivr, unpkg ou cdnjs à version exacte (`lib@1.2.3`, `/ajax/libs/jquery/3.7.1/`), ou fichier d'un hôte inconnu, à héberger soi-même ou à épingler.
-- **`sri_non_applicable` (info, rien à corriger)** : chargeurs sans version dont le contenu change à dessein (Google Tag Manager et gtag, Google Analytics, Plausible, Stripe.js, Cloudflare Insights et Turnstile, reCAPTCHA, hCaptcha, pixels et widgets courants) et bibliothèques de jsdelivr/unpkg/cdnjs sans version exacte (`@latest`, `@1`, aucun `@`). Stripe demande explicitement de ne pas y mettre de SRI. Pour une bibliothèque de CDN sans version exacte, le seul conseil est d'épingler une version, puis d'ajouter l'empreinte.
+- **`sri_absent` (basse, à vérifier)** : script d'un autre site (hôte différent, hors sous-domaines du même domaine) sans `integrity`, hors des cas ci-dessous. Cas typique : bibliothèque de jsdelivr, unpkg ou cdnjs à version exacte (`lib@1.2.3`, `/ajax/libs/jquery/3.7.1/`), ou fichier d'un hôte inconnu, à héberger soi-même ou à épingler.
+- **`sri_non_applicable` (info, rien à corriger)** : chargeurs sans version dont le contenu change à dessein (Google Tag Manager et gtag, Google Analytics, Plausible, Stripe.js, Cloudflare Insights et Turnstile, reCAPTCHA, hCaptcha, lecteurs et API vidéo, Google Maps et Sign-In, PayPal, gestionnaires de consentement, pixels et widgets courants) et bibliothèques de jsdelivr/unpkg/cdnjs sans version exacte (`@latest`, `@1`, aucun `@`). Stripe.js est mis à jour en continu par Stripe et doit toujours être chargé depuis `js.stripe.com` (documentation Stripe) : une empreinte le casserait. Ce constat info n'apparaît que dans le rapport, il n'ouvre pas cette fiche. Pour une bibliothèque de CDN sans version exacte, le seul conseil est d'épingler une version, puis d'ajouter l'empreinte.
 
-Ne sont pas comptés : les scripts du même hôte que la page (y compris les modules `/_astro/` du site), les feuilles de style tierces (Google Fonts sert un CSS différent selon le navigateur, impossible à hacher) et les scripts `type="text/plain"` ou `text/partytown` bloqués par un gestionnaire de consentement.
+Ne sont pas comptés : les scripts du même site que la page (même hôte ou sous-domaine du même domaine, par exemple des statistiques auto-hébergées sur `stats.monsite.fr`, y compris les modules `/_astro/`), les scripts d'un `<template>` ou d'un `<noscript>`, les scripts dont le `type` n'est pas du JavaScript (`text/plain`, `text/partytown`, `didomi/javascript`, `opt-in` : un gestionnaire de consentement les réécrit plus tard), les feuilles de style tierces (Google Fonts sert un CSS différent selon le navigateur, impossible à hacher).
 
 ## Comment le constater soi-même
 
