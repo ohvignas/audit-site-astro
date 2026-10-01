@@ -21,7 +21,7 @@ sources:
 
 Les fichiers d'`/_astro/` portent un hash dans leur nom : ils peuvent être mis en cache un an. Un fichier de `public/` (`/agent-avatar.png`) garde le même nom d'une version à l'autre : le serveur de votre hébergeur y met souvent `max-age=0`, et le navigateur redemande le fichier à chaque page. Un fichier non hashé ne peut pas être `immutable` (sa mise à jour resterait invisible) ; un cache de quelques heures à un jour est le bon compromis.
 
-**Gravité.** Moyenne quand un fichier de 100 Ko ou plus est servi sans aucun cache (`max-age=0`, `no-cache` ou `no-store`) : il est retéléchargé à chaque page (cas typique : un avatar de 189 Ko en `max-age=0`). Basse sinon (petite icône, `max-age` de quelques minutes, en-tête absent).
+**Gravité.** Moyenne quand un fichier de 100 Ko ou plus est servi sans aucun cache (`max-age=0`, `no-cache` ou `no-store`) : il est retéléchargé à chaque page (cas typique : un avatar de 189 Ko en `max-age=0`). Basse sinon (`max-age` de quelques minutes, en-tête absent). Les fichiers de moins de 10 Ko (favicon, petite icône) ne sont jamais signalés.
 
 **Nuances.**
 - `no-cache` ne veut pas dire « ne pas mettre en cache » : le navigateur garde le fichier mais le revalide à chaque usage. Avec un `ETag` (ou `Last-Modified`), la revalidation coûte un aller-retour `304` sans retéléchargement : c'est la recommandation de web.dev pour une ressource non versionnée, moins grave que `max-age=0` sans validateur. L'outil le signale quand même, car un jour de cache évite aussi cet aller-retour.

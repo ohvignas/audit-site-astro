@@ -218,7 +218,7 @@ class TestAnalyse(unittest.TestCase):
         return out
 
     def base(self, **kw):
-        m = {"type": "image", "statut": 200, "octets": 10, "cache": "public, max-age=86400", "ctype": "image/png"}
+        m = {"type": "image", "statut": 200, "octets": 20_000, "cache": "public, max-age=86400", "ctype": "image/png"}
         m.update(kw)
         return m
 
@@ -343,9 +343,20 @@ class TestAnalyseSeverite(unittest.TestCase):
         self.assertEqual(self.sev({"https://ex.fr/a.png": self.m(300_000, "public, s-maxage=86400")}), ["basse"])
 
     def test_melange_une_seule_gravite_pour_la_cle(self):
-        r = {"https://ex.fr/petit.png": self.m(2_000, "max-age=0"), "https://ex.fr/gros.png": self.m(189 * 1024, "max-age=0")}
+        r = {"https://ex.fr/petit.png": self.m(20_000, "max-age=0"), "https://ex.fr/gros.png": self.m(189 * 1024, "max-age=0")}
         self.assertEqual(self.sev(r), ["moyenne"])
-        self.assertEqual(self.sev({"https://ex.fr/petit.png": self.m(2_000, "max-age=0")}), ["basse"])
+        self.assertEqual(self.sev({"https://ex.fr/petit.png": self.m(20_000, "max-age=0")}), ["basse"])
+
+    def test_seuil_10_ko_petits_fichiers_jamais_signales(self):
+        for octets, attendu in ((9 * 1024, []), (10 * 1024 - 1, []), (10 * 1024, ["basse"]), (100 * 1024 - 1, ["basse"]),
+                                (100 * 1024, ["moyenne"])):
+            self.assertEqual(self.sev({"https://ex.fr/a.png": self.m(octets, "max-age=0")}), attendu, octets)
+        # le petit fichier n'est pas non plus un exemple de la clé quand un gros est signalé
+        vus = []
+        ctx = {"ressources": {"https://ex.fr/icone.png": self.m(9 * 1024, "max-age=0"), "https://ex.fr/gros.png": self.m(120 * 1024, "max-age=0")},
+               "sources_ressources": {}, "polices_css": {}}
+        ressources_site.issues({}, lambda cle, lib, sev, ex, n=1, domaine=None: vus.append((cle, ex["signature"])), ctx)
+        self.assertEqual([sg for c, sg in vus if c == "asset_sans_cache"], ["/gros.png (Cache-Control : max-age=0)"])
 
     def test_police_sans_font_display_reste_basse(self):
         vus = []
@@ -404,6 +415,15 @@ class TestProprietesIlots(unittest.TestCase):
                       '&quot;titre&quot;:[0,&quot;logo.png est mon fichier&quot;]}"></astro-island>')
         urls = sorted(x["url"] for x in r["ressources"])
         self.assertEqual(urls, ["https://ex.fr/a/b.WEBP?v=2", "https://ex.fr/d.svg"])   # le tiers et le texte libre sont écartés
+
+    def test_image_d_ilot_prioritaire_sous_la_coupe(self):
+        imgs = "".join('<img src="/i{0}.png" alt="">'.format(i) for i in range(200))
+        r = self.lire(imgs + '<astro-island props="{&quot;avatarUrl&quot;:[0,&quot;/agent-avatar.png&quot;]}"></astro-island>')
+        urls = [x["url"] for x in r["ressources"]]
+        self.assertEqual(len(urls), 150)
+        self.assertIn("https://ex.fr/agent-avatar.png", urls)
+        self.assertEqual(urls[0], "https://ex.fr/agent-avatar.png")
+        self.assertEqual([x["type"] for x in r["ressources"]][0], "image")
 
     def test_props_invalides_ou_enormes_ignorees(self):
         self.assertEqual(self.lire('<astro-island props="pas du json {"></astro-island>')["ressources"], [])

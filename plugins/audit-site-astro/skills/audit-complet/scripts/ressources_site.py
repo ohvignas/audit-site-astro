@@ -37,6 +37,7 @@ MAX_DECOMPRESSE = 2_000_000   # jamais plus d'octets décompressés (bombe gzip)
 MAX_PROPS = 65_536
 IMAGE_PROPS = re.compile(r"^(?:/(?!/)|https?://)[^\s\"'<>]+\.(?:png|jpe?g|gif|webp|avif|svg)(?:\?[^\s\"']*)?$", re.I)
 SEUIL_CACHE_MOYENNE = 100 * 1024
+SEUIL_CACHE_MINI = 10 * 1024  # en dessous, un fichier non mis en cache ne vaut pas un constat (favicon, petite icône)
 PRIORITE_TYPE = {"script": 0, "css": 1, "police": 2, "image": 3}
 SANS_EMPREINTE = re.compile(r"-[0-9a-f]{16}$")
 MAX_OCTETS_IMAGE = 1_048_576  # lecture plafonnée si le serveur ignore Range
@@ -51,7 +52,9 @@ _EMPREINTE = re.compile(r"[.\-_]([A-Za-z0-9_-]{8})$")
 def _empreinte_plausible(e):
     """8 caractères base64url (Vite / Rollup) : chiffres et lettres mêlés, majuscules et minuscules mêlées (la première lettre ne compte pas :
     « Original »), majuscules seules (CPTKQKQK), ou « _ » / « - » au milieu. Une empreinte de lettres minuscules seules (0,07 % des
-    tirages) reste « non hashée » : un mot (« original ») lui ressemble, et on préfère un silence à un faux constat."""
+    tirages) reste « non hashée » : un mot (« original ») lui ressemble, et on préfère un silence à un faux constat.
+    Conséquence assumée : 8 majuscules seules après un séparateur comptent comme une empreinte (« -CPTKQKQK »), donc un nom en capitales de
+    8 lettres (« logo-BANNIERE ») est lui aussi traité comme hashé : on se trompe dans le sens du silence (aucun constat de cache)."""
     if re.fullmatch(r"\d+[xX]\d+", e):  # 1920x108 : dimensions
         return False
     mixte = re.search(r"\d", e) and re.search(r"[A-Za-z]", e)
@@ -109,13 +112,16 @@ class Observateur(ho.Observateur):
         super().__init__(entetes, url)
         self.hote = urlparse(url).netloc.lower()
         self.ressources, self.polices, self._style = {}, {}, None
+        self.ilot = set()  # ressources d'un îlot (props) : même priorité que les scripts, la coupe ne doit pas les écarter
 
-    def _ajouter(self, type_, href):
+    def _ajouter(self, type_, href, ilot=False):
         u = urljoin(self.url, href.strip())
         pr = urlparse(u)
         # même hôte seulement, hors /_image : le filtre est posé AVANT la coupe à PAR_PAGE (un tiers ne doit pas évincer un îlot)
         if pr.scheme in ("http", "https") and pr.netloc.lower() == self.hote and not pr.path.startswith("/_image"):
             self.ressources.setdefault(u, type_)
+            if ilot:
+                self.ilot.add(u)
 
     def _props(self, props):
         """Images passées en props d'un îlot (rendu côté client : aucun <img> dans le HTML). Rien d'autre n'est supposé."""
@@ -127,7 +133,7 @@ class Observateur(ho.Observateur):
             return
         for c in _chaines(donnees):
             if IMAGE_PROPS.match(c):
-                self._ajouter("image", c)
+                self._ajouter("image", c, ilot=True)
 
     def debut(self, noeud, pile):
         t, a = noeud["tag"], noeud["a"]
@@ -165,9 +171,9 @@ class Observateur(ho.Observateur):
             self._style = None
 
     def resultat(self):
-        # scripts et CSS d'abord (le cas lourd n°1 : le JS d'un îlot, en fin de <body>), images ensuite ; ordre d'apparition dans chaque
+        # scripts, images d'îlot (props) et CSS d'abord (le cas lourd n°1 : le JS d'un îlot, en fin de <body>), images ensuite ; ordre d'apparition dans chaque
         # groupe (tri stable, déterministe). Ce qui dépasse PAR_PAGE est compté, pas perdu en silence.
-        toutes = sorted(self.ressources.items(), key=lambda e: PRIORITE_TYPE.get(e[1], 9))
+        toutes = sorted(self.ressources.items(), key=lambda e: 0 if e[0] in self.ilot else PRIORITE_TYPE.get(e[1], 9))
         return {"ressources": [{"type": t, "url": u} for u, t in toutes[:PAR_PAGE]],
                 "ressources_coupees": max(0, len(toutes) - PAR_PAGE),
                 "polices": [{"signature": k, "n": v} for k, v in sorted(self.polices.items())]}
@@ -391,7 +397,7 @@ def issues(pages, add, ctx):
                 detail += ", plus de {0} Ko décompressés".format(MAX_DECOMPRESSE // 1000)
             detail += " ({0})".format(m["encodage"] if m.get("encodage") else "non compressé")
             js["{0} ({1}{2} Ko transférés)".format(sig_chemin, plus, _ko(m["octets"]))] = {"n": 1, "pages": pages_src, "exemple": detail}
-        if not hashe(chemin) and _cache_court(m["cache"], m.get("expire_dans_s")):
+        if not hashe(chemin) and m["octets"] >= SEUIL_CACHE_MINI and _cache_court(m["cache"], m.get("expire_dans_s")):
             cc = ho.texte_sans_secret(m["cache"] or "absent")[:80]
             sans_cache["{0} (Cache-Control : {1})".format(sig_chemin, cc)] = {"n": 1, "pages": pages_src}
             grave = grave or (m["octets"] >= SEUIL_CACHE_MOYENNE and _cache_nul(m["cache"]))
