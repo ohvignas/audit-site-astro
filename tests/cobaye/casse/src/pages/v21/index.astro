@@ -1,0 +1,9 @@
+---
+import Base from '../../layouts/Base.astro';
+// Banc v2.1 : chaque contrôle ajoute sa page ./<sujet>.astro, listée ici automatiquement (aucun fichier partagé à modifier).
+const pages = Object.keys(import.meta.glob('./*.astro')).filter((p) => p !== './index.astro').map((p) => p.slice(2, -6)).sort();
+---
+<Base title="Laboratoire v2.1 du cobaye cassé" description="Pages des défauts ajoutés en version 2.1 de l'outil d'audit, une page par contrôle.">
+  <h1>Laboratoire v2.1</h1>
+  <ul>{pages.map((p) => <li><a href={`/v21/${p}`}>Défaut : {p}</a></li>)}</ul>
+</Base>

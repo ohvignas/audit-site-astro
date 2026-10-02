@@ -612,7 +612,9 @@ class TestSecrets(Base):
     def test_la_sonde_reelle_ne_sort_pas_de_contenu(self):
         # security_probe.sh n'écrit que chemin, code, taille, verdict et des motifs tronqués à 12 caractères
         script = (SCRIPTS / "security_probe.sh").read_text(encoding="utf-8")
-        self.assertIn("sed -E 's/(.{12}).*/\\1…/'", script)
+        # troncature à 12 caractères désormais dans secrets_js.formater (la sonde ne fait que l'appeler)
+        self.assertIn('python3 "$DIR/secrets_js.py"', script)
+        self.assertIn("valeur[:12]", (SCRIPTS / "secrets_js.py").read_text(encoding="utf-8"))
         self.assertIn('echo "| $path | $code | $size | $verdict |"', script)
 
 
@@ -967,6 +969,12 @@ class TestCommandesDeProduction(Base):
             else:
                 self.assertIn("npx convex dev", texte, ident)
                 self.assertIn("demander à l'humain", texte, ident)
+
+    def test_mise_en_garde_rgpd_arret_humain(self):
+        notes = corrections._mise_en_garde({"id": "rgpd-x", "fiche": {"corps": ""}, "severite": "moyenne", "domaine": "RGPD / traceurs"})
+        texte = " ".join(notes)
+        self.assertIn("demander l'accord de l'humain", texte)
+        self.assertIn("juridique", texte)
 
     def test_regle_d_arret_du_lisez_moi(self):
         audit = self.copie_fixture()

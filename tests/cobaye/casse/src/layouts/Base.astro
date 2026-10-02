@@ -51,6 +51,7 @@ const canonicalUrl = canonical ?? new URL(chemin + Astro.url.search, Astro.site)
       <a href="/sans-sitemap"><svg width="10" height="10"><rect width="10" height="10"></rect></svg></a> {/* A04 */}
       <input type="email" placeholder="Votre email" /> {/* A05 */}
       <img src="/api/storage/logo" alt="Cobaye" fetchpriority="high" loading="eager" /> {/* P14, P03 */}
+      <a href="/v21">Laboratoire v2.1</a> {/* banc v2.1 : dernier lien, crawlé après les pages historiques */}
     </footer>
     <Chat client:load /> {/* P04 */}
     <Secret />

@@ -236,5 +236,79 @@ class TestCliquetPhase1(unittest.TestCase):
         self.assertEqual((seuils["faux_positifs_max"], seuils["inattendus_max"]), (0, 0))
 
 
+class TestSourcesV21(unittest.TestCase):
+    def _audit(self, d, fichiers):
+        for rel, contenu in fichiers.items():
+            f = pathlib.Path(d, "data", rel)
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(json.dumps(contenu), encoding="utf-8")
+        return pathlib.Path(d)
+
+    def test_crawl_issue_dans_un_autre_fichier(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = self._audit(d, {"rendu/issues.json": {"axe:color-contrast": {
+                "label": "Contraste", "severity": "haute", "count": 2,
+                "examples": [{"signature": ".discret", "exemples_pages": ["https://c.test/v21/contraste"],
+                              "variables": ["--texte-discret"]}]}}})
+            m = {"type": "crawl_issue", "fichier": "rendu/issues.json", "cle": "axe:color-contrast", "contient": "--texte-discret"}
+            self.assertTrue(score.detecte(m, a))
+            self.assertFalse(score.detecte(dict(m, cle="axe:region"), a))
+            self.assertFalse(score.detecte({"type": "crawl_issue", "cle": "axe:color-contrast"}, a), "défaut : crawl/issues.json")
+
+    def test_inattendus_de_toutes_les_sources(self):
+        def it(sev):
+            return {"label": "l", "severity": sev, "count": 1, "examples": []}
+        with tempfile.TemporaryDirectory() as d:
+            a = self._audit(d, {
+                "crawl/issues.json": {"http_5xx": it("haute"), "noindex": it("info"), "lent": it("moyenne")},
+                "rendu/issues.json": {"axe:link-name": it("haute")},
+                "domaine/issues.json": {"spf_permissif": it("critique")},
+                "terrain/issues.json": {"terrain_lcp": it("haute"), "terrain_cls": it("moyenne")}})
+            inattendus = score._inattendus(a)
+        self.assertEqual(sorted((i["source"], i["cle"]) for i in inattendus),
+                         [("crawl", "http_5xx"), ("domaine", "spf_permissif"), ("rendu", "axe:link-name"), ("terrain", "terrain_lcp")])
+
+    def test_rendu_requis_a_partir_de_la_phase_2(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = self._audit(d, {"crawl/issues.json": {}, "geo/geo.json": {}, "code/code-scan.json": {}, "perf/pagespeed.json": []})
+            (a / "data/COLLECTE.md").write_text("| crawl | ✅ | 1 s | x |\n", encoding="utf-8")
+            self.assertEqual(score.valider_audit(a, phase=1), [])
+            self.assertEqual(score.valider_audit(a, phase=2), ["data/rendu/issues.json manquant"])
+
+    def _propre_valide(self, d, **extra):
+        fichiers = {"crawl/issues.json": {}, "geo/geo.json": {}, "code/code-scan.json": {}, "perf/pagespeed.json": [],
+                    "rendu/issues.json": {}}
+        fichiers.update(extra)
+        a = self._audit(d, {k: v for k, v in fichiers.items() if v is not None})
+        (a / "data/COLLECTE.md").write_text("| crawl | ✅ | 1 s | x |\n", encoding="utf-8")
+        return a
+
+    def test_issues_vide_valide_mais_illisible_refuse(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = self._propre_valide(d)
+            self.assertEqual(score.valider_audit(a, phase=2), [], "{} = aucun constat, valide")
+            cible = a / "data/rendu/issues.json"
+            for contenu in ("", '{"axe:region": {"severity": "haute", "examples": [', "[]", "null"):
+                cible.write_text(contenu, encoding="utf-8")
+                self.assertEqual(score.valider_audit(a, phase=2),
+                                 ["data/rendu/issues.json illisible (JSON de type objet attendu)"], repr(contenu))
+
+    def test_issues_illisible_refuse_pour_toutes_les_sources(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = self._propre_valide(d)
+            for rel in ("crawl", "domaine", "terrain"):
+                (a / "data" / rel).mkdir(parents=True, exist_ok=True)
+                (a / "data" / rel / "issues.json").write_text("{", encoding="utf-8")
+            self.assertEqual(score.valider_audit(a, phase=1), [
+                "data/crawl/issues.json illisible (JSON de type objet attendu)",
+                "data/domaine/issues.json illisible (JSON de type objet attendu)",
+                "data/terrain/issues.json illisible (JSON de type objet attendu)"])
+
+    def test_matcher_propre_garde_la_source_domaine_terrain(self):
+        for src in ("rendu", "domaine", "terrain"):
+            m = {"type": "crawl_issue", "fichier": src + "/issues.json", "cle": "k", "contient": "x"}
+            self.assertEqual(score.matcher_propre(m), {"type": "crawl_issue", "fichier": src + "/issues.json", "cle": "k"})
+
+
 if __name__ == "__main__":
     unittest.main()

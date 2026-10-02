@@ -76,5 +76,57 @@ class TestHttpChecksRedirection(unittest.TestCase):  # revue finale M4 : apex �
         self.assertIn("asset hashé Astro", md)
 
 
+class TestEntetesV21(unittest.TestCase):
+    def test_cookie_et_csp_meta_sur_la_page(self):
+        page = ('<html><head><meta http-equiv="Content-Security-Policy" content="script-src \'self\' \'unsafe-inline\'; '
+                'frame-ancestors \'none\'"><title>Accueil</title></head><body></body></html>')
+        md = lancer({"/": (200, dict(HTML, **{"Set-Cookie": "session_cobaye=valeur-secrete; Path=/"}), page)}, {})
+        self.assertIn("| Cookie session_cobaye | Path=/ | ❌ sans SameSite", md)   # site local en http : Secure non exigé ; cookie de session : haute
+        self.assertNotIn("valeur-secrete", md)
+        self.assertIn("frame-ancestors ignoré dans une CSP <meta>", md)
+        self.assertIn("script-src 'unsafe-inline' sans nonce/hash (meta)", md)
+        self.assertIn("⚠️ protège peu contre le XSS [moyenne] |", md)
+
+    def test_csp_a_hash_et_cookie_conforme_sans_constat(self):
+        page = ('<html><head><meta http-equiv="Content-Security-Policy" content="script-src \'self\' \'sha256-abc=\' \'unsafe-inline\'">'
+                '<title>Accueil</title></head><body></body></html>')
+        md = lancer({"/": (200, dict(HTML, **{"Set-Cookie": "sid=valeur-secrete; Path=/; HttpOnly; SameSite=Lax",
+                                              "X-Frame-Options": "DENY"}), page)}, {})
+        self.assertIn("| Cookie sid | Path=/; HttpOnly; SameSite=Lax | ✅ |", md)
+        self.assertNotIn("valeur-secrete", md)
+        self.assertNotRegex(md, r"\| CSP[^\n]*(⚠️|❌)")
+        self.assertIn("script-src 'unsafe-inline' neutralisé (meta)", md)
+
+    def test_csp_meta_seulement_pas_de_faux_absent(self):
+        page = ('<html><head><meta http-equiv="Content-Security-Policy" content="script-src \'self\' \'sha256-abc=\'">'
+                '<title>Accueil</title></head><body></body></html>')
+        md = lancer({"/": (200, HTML, page)}, {})
+        self.assertIn("| content-security-policy | — | ⚠️ en <meta> seulement (pas de frame-ancestors, report-uri ni sandbox ; préférer l'en-tête) |", md)
+        self.assertNotIn("content-security-policy | — | ❌ absent", md)
+
+    def test_ni_en_tete_ni_meta_reste_absent(self):
+        md = lancer({"/": (200, HTML, "<html><head><title>Accueil</title></head><body></body></html>")}, {})
+        self.assertIn("| content-security-policy | — | ❌ absent |", md)
+        self.assertNotIn("en <meta> seulement", md)
+
+    def test_meta_hors_head_ne_compte_pas_et_aucune_valeur_de_cookie(self):
+        page = ('<html><head><!-- <meta http-equiv="Content-Security-Policy" content="script-src \'self\'"> --><title>A</title></head>'
+                '<body><meta http-equiv="Content-Security-Policy" content="script-src \'self\'"></body></html>')
+        md = lancer({"/": (200, dict(HTML, **{"Set-Cookie": "SECRETSANSNOM; Path=/"}), page)}, {})
+        self.assertIn("| content-security-policy | — | ❌ absent |", md)
+        self.assertNotIn("en <meta> seulement", md)
+        self.assertIn("| Cookie sans nom | Path=/ |", md)
+        md = lancer({"/": (200, dict(HTML, **{"Set-Cookie": "sid=1; Path=/SECRETPATH; Domain=SECRETDOM.fr; HttpOnly; SameSite=Lax"}), page)}, {})
+        self.assertIn("| Cookie sid | Path=…; Domain=…; HttpOnly; SameSite=Lax | ✅ |", md)
+        self.assertNotIn("SECRET", md)
+        self.assertNotIn("SECRETSANSNOM", md)
+
+    def test_en_tete_et_meta_reste_valide(self):
+        page = ('<html><head><meta http-equiv="Content-Security-Policy" content="script-src \'self\' \'sha256-abc=\'">'
+                '<title>Accueil</title></head><body></body></html>')
+        md = lancer({"/": (200, dict(HTML, **{"Content-Security-Policy": "frame-ancestors 'none'"}), page)}, {})
+        self.assertIn("| content-security-policy | frame-ancestors 'none' | ✅ |", md)
+
+
 if __name__ == "__main__":
     unittest.main()

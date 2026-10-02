@@ -1,0 +1,7 @@
+---
+import Base from '../../layouts/Base.astro';
+---
+<Base title="Widget d'avis tiers" description="Page qui charge un widget d'avis depuis un CDN tiers, sans empreinte d'intégrité.">
+  <h1>Avis clients</h1>
+  <script is:inline src="https://cdn.cobaye.invalid/widget.js"></script> {/* X12 : script tiers sans integrity */}
+</Base>

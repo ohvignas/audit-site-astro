@@ -9,6 +9,7 @@ declencheurs:
   - "code:Polices chargées sans l'API Fonts d'Astro"
   - "code:API Fonts configurée mais aucune <Font preload>"
   - "lighthouse:font-display|preload-fonts|font-display-insight|Assurez-vous que le texte reste visible pendant le chargement des polices Web|Affichage de la police|polices qui utilisent `font-display: optional`"
+  - "crawl:police_sans_font_display"
 versions_astro: ">=6.0 pour l'API Fonts ; avant : @fontsource"
 sources:
   - https://docs.astro.build/en/guides/fonts/

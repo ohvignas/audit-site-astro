@@ -5,6 +5,7 @@ domaine: Accessibilité
 severite_type: moyenne
 effort: S
 declencheurs:
+  - "crawl:iframe_sans_titre"
   - "lighthouse:\\blist\\b|listitem|definition-list|dlitem|th-has-data-cells|td-has-header|td-headers-attr|table-fake-caption|table-duplicate-name|frame-title"
   - "lighthouse:Les listes ne contiennent pas uniquement|ne sont pas inclus dans des éléments parents|`<dl>` ne contiennent pas uniquement|liste de définition ne sont pas encapsulés|ne décrivent aucune cellule de données|d'un grand `<table>` n'ont pas|font référence à un élément `id`|n'utilisent pas `<caption>`|attribut \"summary\"|`<frame>` ou `<iframe>` n'ont pas de titre"
 sources:

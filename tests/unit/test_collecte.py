@@ -108,6 +108,13 @@ class TestValidationDesEtapes(unittest.TestCase):
                 collecte = lire_collecte(d)
                 ligne_crawl = next(l for l in collecte.splitlines() if l.startswith("| crawl"))
                 self.assertIn("❌", ligne_crawl)
+                # le crawl est ❌ : ses dernières lignes de journal sont recopiées en fin de COLLECTE.md, une seule fois à l'écran
+                self.assertIn("## Dernières lignes des étapes en échec ou en avertissement", collecte)
+                self.assertIn("### crawl", collecte)
+                self.assertGreater(collecte.index("## Dernières lignes des étapes"), collecte.index("Dossier d'audit"))  # la section est la dernière
+                dernier = [l for l in pathlib.Path(d, "data", ".log-crawl.txt").read_text(encoding="utf-8").splitlines() if l.strip()][-1].strip()
+                self.assertEqual(r.stdout.count(dernier), 1, r.stdout[-3000:])   # extrait affiché en direct, pas répété dans le récapitulatif final
+                self.assertNotIn("### crawl", r.stdout)
                 self.assertIn("⏭️", next(l for l in collecte.splitlines() if l.startswith("| lighthouse")))
                 self.assertIn("✅", next(l for l in collecte.splitlines() if l.startswith("| rapport-html")))
                 # dossier CORRECTIONS/ produit même sans donnée exploitable (plan vide), étape entre « rapport brut » et « rapport-html »
@@ -336,11 +343,50 @@ class TestEtapeSortieVide(unittest.TestCase):
         debut = src.index("step() {")
         fin = src.index("\n}\n", debut) + 3
         with tempfile.TemporaryDirectory() as d:
-            prog = (f'set -u\nD="{d}"; AUDIT="{d}"; LOG="{d}/collecte.md"; FAILS=0\nvalid_aucun() {{ return 0; }}\n'
+            prog = (f'set -u\nD="{d}"; AUDIT="{d}"; LOG="{d}/collecte.md"; FAILS=0\n. "{SCRIPT.parent / "etapes.sh"}"\n'
+                    'valid_aucun() { return 0; }\n'
                     + src[debut:fin]
                     + f'\nstep essai "{d}/sortie.html" valid_aucun bash -c "echo No space left on device >&2; : > {d}/sortie.html"\n'
                     'echo "FAILS=$FAILS"\n')
             r = subprocess.run(["bash", "-c", prog], capture_output=True, text=True, timeout=60)
             self.assertIn("❌ sortie vide, 0 octet", r.stdout)
             self.assertIn("FAILS=1", r.stdout)
-            self.assertIn("No space left on device", r.stdout)
+            self.assertEqual(r.stdout.count("No space left on device"), 1, r.stdout)  # extrait affiché une seule fois
+            self.assertIn("### essai", pathlib.Path(d, ".erreurs-etapes.md").read_text(encoding="utf-8"))
+
+
+class TestEtapeCrawlModulesEnErreur(unittest.TestCase):
+    """Vague 0 : un module du crawl en erreur écrit `modules_en_erreur` dans issues.json et une ligne « module … désactivé »
+    dans le journal. L'étape crawl ne peut plus être ✅ : ⚠️ avec la raison, sans compter comme un échec."""
+
+    def _etape_crawl(self, issues_json, journal=""):
+        src = SCRIPT.read_text(encoding="utf-8")
+        debut = src.index("step() {")
+        fin = src.index("\n}\n", debut) + 3
+        with tempfile.TemporaryDirectory() as d:
+            commande = (f"mkdir -p {d}/crawl; echo '{{\"pages\": []}}' > {d}/crawl/pages.json; "
+                        f"echo '{issues_json}' > {d}/crawl/issues.json; printf '%s' '{journal}'")
+            prog = (f'set -u\nD="{d}"; AUDIT="{d}"; LOG="{d}/collecte.md"; FAILS=0\n. "{SCRIPT.parent / "etapes.sh"}"\n'
+                    'valid_aucun() { return 0; }\n'
+                    + src[debut:fin]
+                    + f'\nstep crawl "{d}/crawl/pages.json" valid_aucun bash -c "{commande}"\n'
+                    'echo "FAILS=$FAILS"\n')
+            r = subprocess.run(["bash", "-c", prog], capture_output=True, text=True, timeout=60)
+            ligne = next(l for l in pathlib.Path(d, "collecte.md").read_text(encoding="utf-8").splitlines() if l.startswith("| crawl"))
+            return r.stdout, ligne
+
+    def test_module_en_erreur_donne_avertissement_pas_echec(self):
+        sortie, ligne = self._etape_crawl(
+            '{"modules_en_erreur": {"label": "x", "severity": "haute", "count": 1, "examples": ["a11y_svg"]}}',
+            "⚠️ module a11y_svg désactivé : KeyError\n")
+        self.assertIn("⚠️", ligne)
+        self.assertNotIn("✅", ligne)
+        self.assertIn("a11y_svg", ligne)
+        self.assertIn("FAILS=0", sortie)
+        self.assertIn("module a11y_svg désactivé", sortie)          # fin du journal affichée (étape non ✅)
+        self.assertEqual(sortie.count("module a11y_svg désactivé"), 1, sortie)
+
+    def test_crawl_sans_module_en_erreur_reste_valide(self):
+        sortie, ligne = self._etape_crawl('{"broken_images": {"label": "x", "severity": "moyenne", "count": 1, "examples": []}}')
+        self.assertIn("✅", ligne)
+        self.assertIn("FAILS=0", sortie)

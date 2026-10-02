@@ -1,0 +1,14 @@
+---
+export const prerender = true;
+import { Image } from 'astro:assets';
+import Base from '../../layouts/Base.astro';
+import TexteLong from '../../components/TexteLong.astro';
+import logo from '../../assets/logo.png';
+---
+<Base title="Textes de liens et alternatives d'images explicites" description="Des liens qui disent où ils mènent et des images dont le texte alternatif décrit l'information utile, sans répétition.">
+  <h1>Liens et images explicites</h1>
+  <p><a href="/catalogue">Voir le catalogue des formations no-code et IA</a></p>
+  <Image src={logo} alt="Logo de Cobaye Formation, organisme certifié" width={128} height={32} />
+  <a href="/formations"><Image src={logo} alt="" width={128} height={32} /> Nos formations</a>
+  <TexteLong sujet="des liens explicites" complement="sur les textes alternatifs" />
+</Base>

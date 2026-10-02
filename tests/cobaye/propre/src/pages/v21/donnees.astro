@@ -1,0 +1,11 @@
+---
+export const prerender = true;
+import Base from '../../layouts/Base.astro';
+import TexteLong from '../../components/TexteLong.astro';
+---
+<Base title="Valeurs vides en JavaScript : bien les afficher" description="Article technique : distinguer une valeur vide d'une donnée absente et afficher un texte utile plutôt qu'une valeur brute.">
+  <h1>Afficher proprement une donnée absente</h1>
+  <p>En JavaScript, <code>undefined</code> signifie qu'une variable n'a pas reçu de valeur.</p>
+  <p>La valeur null indique l'absence de donnée dans la base, ce qui est différent d'une chaîne vide.</p>
+  <TexteLong sujet="des données absentes" complement="sur l'affichage des valeurs" />
+</Base>

@@ -9,6 +9,7 @@ declencheurs:
   - "http:non compressé"
   - "lighthouse:uses-text-compression"
   - "lighthouse:Activez la compression de texte"
+  - "lighthouse:document-latency-insight .*compression du document absente"
 sources:
   - https://docs.astro.build/en/guides/integrations-guide/node/
   - https://nginx.org/en/docs/http/ngx_http_gzip_module.html

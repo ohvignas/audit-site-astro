@@ -18,5 +18,7 @@ writeFileSync('src/lib/gros-module.ts', `export const dictionnaire: Record<strin
 
 // X03 : faux secret reconstitué ici pour ne jamais apparaître tel quel dans le dépôt
 const faux = ['sk', 'live', 'COBAYE0FAUX0SECRET0NE0PAS0UTILISER'].join('_');
-writeFileSync('src/lib/faux-secret.ts', `export const FAUX_SECRET = '${faux}';\n`);
+// X08 : fausse clé OpenAI (préfixe sk-proj-), reconstituée de même
+const fausseCleIa = ['sk', 'proj', 'COBAYEa1B2c3D4e5F6g7H8j9K0'].join('-');
+writeFileSync('src/lib/faux-secret.ts', `export const FAUX_SECRET = '${faux}';\nexport const FAUSSE_CLE_IA = '${fausseCleIa}';\n`);
 console.log('assets du cobaye générés');

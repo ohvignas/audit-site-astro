@@ -1,0 +1,10 @@
+---
+import Base from '../../layouts/Base.astro';
+const evenement = { '@context': 'https://schema.org', '@type': 'Event', name: 'Atelier découverte no-code' }; // S44 : sans startDate ni location
+const verification = { '@context': 'https://schema.org', '@type': 'ClaimReview', claimReviewed: 'Le no-code remplace les développeurs' }; // S45
+---
+<Base title="Atelier découverte" description="Atelier découverte du no-code, avec une vérification d'affirmation publiée en données structurées.">
+  <h1>Atelier découverte</h1>
+  <script type="application/ld+json" set:html={JSON.stringify(evenement)}></script>
+  <script type="application/ld+json" set:html={JSON.stringify(verification)}></script>
+</Base>

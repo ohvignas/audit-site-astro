@@ -5,7 +5,8 @@ domaine: Contenu
 severite_type: basse
 effort: S
 declencheurs:
-  - "crawl:og_missing"
+  - "crawl:og_title_absent"
+  - "crawl:og_image_absent"
   - "code:Layout .* : balises absentes du <head> : .*\\bog\\b"
 sources:
   - https://ogp.me/
@@ -84,7 +85,7 @@ const imageUrl = new URL(image, Astro.site);
 curl -s https://SITE/ | grep -oE '<meta property="og:(title|image|url)" content="[^"]*"'
 curl -sI "$(curl -s https://SITE/ | grep -oE 'og:image" content="[^"]*"' | sed 's/.*content="//;s/"$//')" | head -1     # HTTP/2 200
 python3 scripts/crawl_site.py https://SITE/ --out /tmp/verif/crawl
-python3 -c "import json;d=json.load(open('/tmp/verif/crawl/issues.json'));print(d.get('og_missing',{}).get('count',0))"
+python3 -c "import json;d=json.load(open('/tmp/verif/crawl/issues.json'));print(d.get('og_title_absent',{}).get('count',0), d.get('og_image_absent',{}).get('count',0))"     # 0 0
 ```
 
 ## Pièges et retour arrière

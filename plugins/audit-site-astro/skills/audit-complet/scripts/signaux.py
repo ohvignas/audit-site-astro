@@ -23,11 +23,16 @@ _DOMAINES_CODE = {"performance": "Performance", "seo": "SEO technique", "securit
 
 
 _VULN = {"- **critical**": "critique", "- **high**": "haute", "- **moderate**": "moyenne"}
+SOURCES_ISSUES = (("crawl", "crawl/issues.json", "SEO technique"), ("rendu", "rendu/issues.json", "Accessibilité"),
+                  ("domaine", "domaine/issues.json", "Sécurité"), ("terrain", "terrain/issues.json", "Performance"))
+# Domaines acceptés dans le champ « domaine » d'une entrée d'issues.json (sinon : domaine par défaut de la source)
+DOMAINES_CONNUS = frozenset(("Performance", "Serveur / HTTP", "SEO technique", "Contenu", "GEO / IA", "Code", "Sécurité", "Accessibilité",
+                             "RGPD / traceurs", "Bonnes pratiques"))
 
 
 def charger(p):
     try:
-        return json.loads(Path(p).read_text(encoding="utf-8"))
+        return json.loads(Path(p).read_text(encoding="utf-8", errors="replace"))
     except Exception:
         return None
 
@@ -36,7 +41,7 @@ def ex_str(e):
     if isinstance(e, str):
         return e
     if isinstance(e, dict):
-        return " — ".join(f"{k}: {v}" for k, v in e.items() if not isinstance(v, (list, dict)) or k in ("liens_depuis", "urls"))[:220]
+        return " — ".join(f"{k}: {v}" for k, v in e.items() if not isinstance(v, (list, dict)) or k in ("liens_depuis", "urls", "exemples_pages"))[:220]
     return str(e)[:220]
 
 
@@ -63,7 +68,7 @@ def meta_crawl(audit):
 
 
 def _signal(sev, domaine, texte, exemples, source, cle):
-    """source ∈ {crawl, geo, code, http, securite, lighthouse, projet} ; cle identifie le constat dans sa source
+    """source ∈ {crawl, rendu, domaine, terrain, geo, code, http, securite, lighthouse, projet} ; cle identifie le constat dans sa source
     (crawl : clé d'issue ; geo : texte du signal ; code : texte du constat ; http/securite/projet : ligne brute
     du fichier ; lighthouse : « <id> <titre> » ou titre de l'échec). Sert à associer les fiches de correction."""
     return {"severite": sev, "domaine": domaine, "texte": texte, "exemples": list(exemples), "source": source, "cle": cle}
@@ -74,10 +79,13 @@ def collecter(audit):
     d = audit / "data"
     signals = []
 
-    crawl = charger(d / "crawl/issues.json") or {}
-    for k, it in crawl.items():
-        signals.append(_signal(it["severity"], "SEO technique", f"{it['label']} — {it['count']}", [ex_str(e) for e in it["examples"][:5]],
-                               "crawl", k))
+    # Sources au format du crawl : {clé: {label, severity, count, examples, domaine?}} ; « domaine » remplace le défaut de la source
+    for source, rel, dom_defaut in SOURCES_ISSUES:
+        issues = charger(d / rel)
+        for k, it in (issues.items() if isinstance(issues, dict) else ()):
+            dom = it.get("domaine")
+            signals.append(_signal(it["severity"], dom if isinstance(dom, str) and dom in DOMAINES_CONNUS else dom_defaut, f"{it['label']} — {it['count']}",
+                                   [ex_str(e) for e in it["examples"][:5]], source, k))
 
     geo = charger(d / "geo/geo.json") or {}
     for s in geo.get("signaux", []):
@@ -93,13 +101,17 @@ def collecter(audit):
     for r in lighthouse(audit):
         for o in r.get("opportunites", [])[:6]:
             key = o["id"]
-            if key in seen or not (o.get("gain_ms") or o.get("gain_octets")):
+            sans_gain = not (o.get("gain_ms") or o.get("gain_octets"))
+            # LH 13 : un insight en échec (score 0) n'a pas toujours de gain chiffré (ex. cls-culprits-insight) : on le garde
+            insight_en_echec = str(o["id"]).endswith("-insight") and o.get("score") == 0
+            if key in seen or (sans_gain and not insight_en_echec):
                 continue
             seen.add(key)
             sev = severite_opportunite(o.get("gain_ms"), o.get("gain_octets"))
             gain = " + ".join(g for g in (f"{o['gain_ms']} ms" if o.get("gain_ms") else "",
                                           f"{int(o['gain_octets']) // 1024} Ko" if o.get("gain_octets") else "") if g)
-            signals.append(_signal(sev, "Performance", f"{o['titre']} (gain estimé {gain}, {r.get('strategie')})", o.get("exemples", [])[:3],
+            texte = f"{o['titre']} (gain estimé {gain}, {r.get('strategie')})" if gain else f"{o['titre']} ({r.get('strategie')})"
+            signals.append(_signal(sev, "Performance", texte, o.get("exemples", [])[:3],
                                    "lighthouse", f"{o['id']} {o['titre']}"))
         for cat, fails in (r.get("echecs_autres_categories") or {}).items():
             for f in fails:
@@ -112,7 +124,7 @@ def collecter(audit):
     for path, dom_name, source in ((d / "securite/security-probe.md", "Sécurité", "securite"), (d / "http/http-checks.md", "Serveur / HTTP", "http")):
         if path.exists():
             # « > ⚠️ TLS non vérifié (mode test AUDIT_INSECURE_TLS=1) » : avis du mode test de l'audit, pas un constat sur le site
-            lignes = [l for l in path.read_text(encoding="utf-8").splitlines() if not ("mode test" in l and "AUDIT_INSECURE_TLS" in l)]
+            lignes = [l for l in path.read_text(encoding="utf-8", errors="replace").splitlines() if not ("mode test" in l and "AUDIT_INSECURE_TLS" in l)]
             source_signals = []
             for line in lignes:
                 if "❌" in line:
@@ -137,7 +149,7 @@ def collecter(audit):
     path = d / "code/project-checks.md"
     if path.exists():
         majeurs = []  # lignes du tableau « Dépendances obsolètes » avec saut de version majeure : un seul signal agrégé
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             brute = line.strip()
             if brute.startswith("|") and "⚠️ oui" in brute:
                 majeurs.append(brute)

@@ -5,7 +5,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       chromium python3 curl openssl ca-certificates git bash fonts-liberation \
  && rm -rf /var/lib/apt/lists/* \
- && npm install -g lighthouse@12 \
+ && npm install -g --engine-strict lighthouse@13.5.0 \
  && npm cache clean --force
 
 ENV CHROME_PATH=/usr/bin/chromium \

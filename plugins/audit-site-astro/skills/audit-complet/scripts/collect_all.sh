@@ -7,7 +7,13 @@
 # Variables : MAX_PAGES (500), LH_PAGES (5), RUNS (1), BUILD=1 (build d'audit), PSI_API_KEY (option),
 #             MIN_FREE_MB (1200), SKIP_LIGHTHOUSE=1, SKIP_PDF=1 (pas de RAPPORT.pdf ; implicite avec SKIP_LIGHTHOUSE=1),
 #             CHROME_PATH (Chrome pour le PDF), AUDIT_INSECURE_TLS=1 (tests uniquement : certificat auto-signé),
-#             FORCE_PDF=1 (tests uniquement : imprime le PDF même avec SKIP_LIGHTHOUSE=1)
+#             FORCE_PDF=1 (tests uniquement : imprime le PDF même avec SKIP_LIGHTHOUSE=1),
+#             DELAI_ETAPE (secondes par étape, défaut 1800 ; crawl : 1800 + 3 × MAX_PAGES ; code : 900 ;
+#             lighthouse : 600 + 240 × LH_PAGES × RUNS, soit 1800 par défaut), DELAI_<ÉTAPE> (ex. DELAI_CODE=900,
+#             DELAI_RAPPORT_HTML=600 : prioritaire sur DELAI_ETAPE). 0 = pas de délai maximal pour l'étape (ou, avec DELAI_ETAPE=0, pour toutes).
+# Une étape qui dépasse son délai est arrêtée (elle et tous ses descendants : TERM, 5 s de grâce, puis KILL) et notée ❌ « délai dépassé ».
+# Ctrl-C arrête l'étape en cours et ses processus enfants (Chrome, node, curl), puis la collecte (code 130).
+# Fin de COLLECTE.md : « Dernières lignes des étapes en échec ou en avertissement » (15 lignes par étape, clés/jetons masqués).
 # Un PDF impossible (Chrome absent, RAM insuffisante) est un avertissement ⚠️ et ne fait pas échouer la collecte.
 # Étape « corrections » : écrit <dossier d'audit>/CORRECTIONS/ (voir corrections.py ; CORRECTIONS/.garder = ne pas l'écraser, le nouveau
 # dossier est alors CORRECTIONS-<horodatage>/) et note son nom dans data/corrections-dossier.txt, que rapport_html.py et l'étape relisent.
@@ -27,6 +33,9 @@ mkdir -p "$D" "$AUDIT/rapports"
 LOG="$D/COLLECTE.md"
 FAILS=0
 curl() { if [ "${AUDIT_INSECURE_TLS:-}" = "1" ]; then command curl -k "$@"; else command curl "$@"; fi; }
+. "$DIR/etapes.sh"
+rm -f "$D/.erreurs-etapes.md" "$D"/.delai-*
+trap interrompre_collecte INT TERM   # Ctrl-C : arrête l'étape en cours et ses descendants (Chrome, node, curl)
 
 echo "# Collecte — $URL — $(date '+%Y-%m-%d %H:%M')" > "$LOG"
 echo >> "$LOG"
@@ -101,25 +110,29 @@ step() {  # $1 nom, $2 sortie principale ("@fonction" : nom de fonction qui l'af
   local t0; t0=$(date +%s)
   STEP_T0=$t0
   echo "▶ ${name}…"
-  "$@" > "$D/.log-${name}.txt" 2>&1
+  local delai; delai=$(delai_etape "$name")
+  avec_delai "$delai" "$@" > "$D/.log-${name}.txt" 2>&1
   local code=$?
   case "$out" in @*) out=$("${out#@}");; esac
   local st="✅"
   [ $code -ne 0 ] && st="⚠️ code $code (voir data/.log-${name}.txt)"
-  if [ -n "$out" ] && [ ! -e "$out" ]; then
+  if [ $code -eq 124 ]; then
+    st="❌ délai dépassé (${delai} s, voir data/.log-${name}.txt)"
+  elif [ -n "$out" ] && [ ! -e "$out" ]; then
     st="❌ sortie absente (voir data/.log-${name}.txt)"
   elif [ -n "$out" ] && [ -f "$out" ] && [ ! -s "$out" ]; then
     st="❌ sortie vide, 0 octet (disque plein ? voir data/.log-${name}.txt)"
   elif ! "$check"; then
     st="❌ résultat vide ou inexploitable (voir data/.log-${name}.txt)"
   fi
+  if [ "$st" = "✅" ]; then  # étape réussie mais incomplète (ex. module du crawl désactivé) : ⚠️ avec la raison
+    local avert; avert=$(avertissement_etape "$name")
+    [ -n "$avert" ] && st="⚠️ $avert"
+  fi
   case "$st" in ❌*) FAILS=$((FAILS + 1));; esac
   echo "| ${name} | $st | $(( $(date +%s) - t0 )) s | ${out#$AUDIT/} |" >> "$LOG"
   echo "  $st"
-  case "$st" in
-    ✅*) ;;
-    *) [ -s "$D/.log-${name}.txt" ] && tail -n 5 "$D/.log-${name}.txt" | sed 's/^/    │ /' ;;
-  esac
+  case "$st" in ✅*) ;; *) extrait_journal "$name";; esac   # remplace le « tail -n 5 » de v2.0.1 : un seul extrait, masqué
 }
 
 prevol || { echo; cat "$LOG"; exit 2; }
@@ -207,18 +220,20 @@ pdf_step() {  # cas particuliers de rapport_pdf.sh : Chrome absent (2) / RAM ins
   local out="$AUDIT/RAPPORT.pdf" t0 code st
   t0=$(date +%s)
   echo "▶ pdf…"
-  bash "$DIR/rapport_pdf.sh" "$AUDIT" > "$D/.log-pdf.txt" 2>&1
+  avec_delai "$(delai_etape pdf)" bash "$DIR/rapport_pdf.sh" "$AUDIT" > "$D/.log-pdf.txt" 2>&1
   code=$?
   case $code in
     0) if [ -s "$out" ] && head -c 5 "$out" | grep -q '%PDF-'; then st="✅"
        else st="❌ résultat vide ou inexploitable (voir data/.log-pdf.txt)"; fi;;
     2) st="⚠️ PDF non généré : Chrome introuvable (CHROME_PATH)";;
     3) st="⚠️ PDF non généré : RAM insuffisante";;
+    124) st="❌ impression PDF : délai dépassé ($(delai_etape pdf) s, voir data/.log-pdf.txt)";;
     *) st="❌ impression PDF échouée, code $code (voir data/.log-pdf.txt)";;
   esac
   case "$st" in ❌*) FAILS=$((FAILS + 1));; esac
   echo "| pdf | $st | $(( $(date +%s) - t0 )) s | RAPPORT.pdf |" >> "$LOG"
   echo "  $st"
+  case "$st" in ❌*) extrait_journal pdf;; esac
 }
 if [ "${SKIP_PDF:-0}" = "1" ] || { [ "${SKIP_LIGHTHOUSE:-0}" = "1" ] && [ "${FORCE_PDF:-0}" != "1" ]; }; then
   echo "| pdf | ⏭️ ignoré (SKIP_PDF=1 ou SKIP_LIGHTHOUSE=1) | | |" >> "$LOG"
@@ -234,7 +249,12 @@ case "$(basename "$AUDIT")" in
 esac
 echo >> "$LOG"
 echo "Dossier d'audit : \`$AUDIT\`" >> "$LOG"
+# Section finale de COLLECTE.md (dernière : le fichier se termine par elle). À l'écran les extraits ont déjà été affichés sous chaque
+# étape : le récapitulatif final ne la répète pas.
+if [ -s "$D/.erreurs-etapes.md" ]; then
+  { echo; echo "## Dernières lignes des étapes en échec ou en avertissement"; echo; cat "$D/.erreurs-etapes.md"; } >> "$LOG"
+fi
 echo
-cat "$LOG"
+sed '/^## Dernières lignes des étapes en échec ou en avertissement$/,$d' "$LOG"
 [ "$FAILS" -gt 0 ] && exit 1
 exit 0

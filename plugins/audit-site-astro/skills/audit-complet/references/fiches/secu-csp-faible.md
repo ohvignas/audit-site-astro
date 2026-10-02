@@ -7,6 +7,8 @@ effort: M
 declencheurs:
   - "http:\\| CSP \\| script-src 'unsafe-inline' sans nonce/hash"
   - "http:\\| CSP \\| contient 'unsafe-eval'"
+  - "http:\\| CSP \\| source trop large dans script-src"
+  - "http:\\| CSP \\| style-src 'unsafe-inline'"
 versions_astro: ">=6.0"
 sources:
   - https://docs.astro.build/en/reference/configuration-reference/#securitycspscriptdirective
@@ -79,7 +81,8 @@ bash scripts/http_checks.sh https://exemple.fr/ /tmp/verif-http && grep -E '^\| 
 
 ## Pièges et retour arrière
 
-- Le contrôle automatique de l'outil ne lit que l'**en-tête** HTTP : une CSP posée par balise meta (Astro) n'est pas analysée par `http_checks.sh` ; vérifiez-la avec la deuxième commande ci-dessus.
+- Le contrôle automatique analyse l'**en-tête** HTTP **et** la balise `<meta http-equiv="Content-Security-Policy">` de la page (Astro `security.csp`), puis cumule les politiques : un `'unsafe-inline'` n'est signalé que si aucune politique ne l'écarte par un nonce, une empreinte ou `'strict-dynamic'`. Les lignes `(en-tête)` / `(meta)` disent d'où vient le défaut.
+- Gravité retenue, calée sur MDN HTTP Observatory : `'unsafe-inline'` seul dans `script-src` = moyenne ; `'unsafe-inline'` dans `style-src`, `'unsafe-eval'` ou source trop large (`*`, `https:`) = basse ; `'unsafe-inline'` accompagné d'un nonce ou d'une empreinte = ℹ️ seulement, les navigateurs modernes l'ignorent (repli pour très anciens navigateurs), aucune correction à faire.
 - Le routeur `<ClientRouter />` d'Astro n'est pas compatible avec `security.csp` : retirez-le ou utilisez la View Transition native du navigateur.
 - Retour arrière : restaurer l'ancienne politique (Git) ; en cas de casse en production, repassez temporairement l'en-tête en `Report-Only`.
 
